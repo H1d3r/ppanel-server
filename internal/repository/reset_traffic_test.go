@@ -1,4 +1,4 @@
-package user
+package repository
 
 import (
 	"strings"
@@ -55,7 +55,7 @@ func TestMonthlyResetSubscribeQueryUsesStartTime(t *testing.T) {
 			}
 
 			var ids []int64
-			stmt := monthlyResetSubscribeQuery(db, []int64{1, 2}, now).Find(&ids).Statement
+			stmt := userMonthlyResetSubscribeQuery(db, []int64{1, 2}, now).Find(&ids).Statement
 			sql := stmt.SQL.String()
 			for _, want := range tt.want {
 				if !strings.Contains(sql, want) {
@@ -83,7 +83,7 @@ func TestYearlyResetDateConditionHandlesLeapFallback(t *testing.T) {
 		t.Fatalf("open gorm db: %v", err)
 	}
 
-	condition, args := yearlyResetDateCondition(db, time.Date(2025, 2, 28, 0, 30, 0, 0, time.Local))
+	condition, args := userYearlyResetDateCondition(db, time.Date(2025, 2, 28, 0, 30, 0, 0, time.Local))
 	if !strings.Contains(condition, "MONTH(start_time) = ?") || !strings.Contains(condition, "DAY(start_time) IN ?") {
 		t.Fatalf("unexpected condition: %s", condition)
 	}

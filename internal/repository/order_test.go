@@ -1,9 +1,10 @@
-package order
+package repository
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/perfect-panel/server/internal/model/order"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -81,8 +82,8 @@ func TestApplyOrderListFiltersSearchSQL(t *testing.T) {
 				t.Fatalf("open gorm db: %v", err)
 			}
 
-			var result []Details
-			query := applyOrderListFilters(db.Model(&Order{}), 2, 10, 20, "alice_100%@example.com")
+			var result []order.Details
+			query := applyOrderListFilters(db.Model(&order.Order{}), 2, 10, 20, "alice_100%@example.com")
 			stmt := query.Order(orderColumn(query, "id") + " desc").Find(&result).Statement
 			sql := stmt.SQL.String()
 
@@ -99,8 +100,8 @@ func TestApplyOrderListFiltersSearchSQL(t *testing.T) {
 			if got := orderTableName(db); got != tt.wantOrder {
 				t.Fatalf("orderTableName() = %q, want %q", got, tt.wantOrder)
 			}
-			if got := quoteTable(db, userAuthMethodsTable); got != tt.wantAuth {
-				t.Fatalf("quoteTable(userAuthMethodsTable) = %q, want %q", got, tt.wantAuth)
+			if got := orderQuoteTable(db, orderUserAuthMethodsTable); got != tt.wantAuth {
+				t.Fatalf("orderQuoteTable(orderUserAuthMethodsTable) = %q, want %q", got, tt.wantAuth)
 			}
 			if len(stmt.Vars) != 8 {
 				t.Fatalf("vars len = %d, want 8: %#v", len(stmt.Vars), stmt.Vars)
@@ -130,8 +131,8 @@ func TestApplyOrderListFiltersSkipsBlankSearch(t *testing.T) {
 		t.Fatalf("open gorm db: %v", err)
 	}
 
-	var result []Details
-	stmt := applyOrderListFilters(db.Model(&Order{}), 0, 0, 0, "   ").Find(&result).Statement
+	var result []order.Details
+	stmt := applyOrderListFilters(db.Model(&order.Order{}), 0, 0, 0, "   ").Find(&result).Statement
 	sql := stmt.SQL.String()
 	if strings.Contains(sql, "LIKE") || strings.Contains(sql, "user_auth_methods") {
 		t.Fatalf("blank search should not add search filters:\n%s", sql)

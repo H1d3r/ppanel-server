@@ -9,6 +9,12 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
+// TaskStore is the minimal task repository interface needed by the email worker.
+type TaskStore interface {
+	FindOne(ctx context.Context, id int64) (*task.Task, error)
+	Update(ctx context.Context, data *task.Task) error
+}
+
 var (
 	Manager *WorkerManager // 全局调度器实例
 	once    sync.Once      // 确保 Scheduler 只被初始化一次
@@ -16,14 +22,14 @@ var (
 )
 
 type WorkerManager struct {
-	tasks   task.Model                   // task repository
+	tasks   TaskStore // task repository
 	sender  Sender                       // 邮件发送器接口
 	mutex   sync.RWMutex                 // 读写互斥锁，确保线程安全
 	workers map[int64]*Worker            // 存储所有 Worker 实例
 	cancels map[int64]context.CancelFunc // 存储每个 Worker 的取消函数
 }
 
-func NewWorkerManager(tasks task.Model, sender Sender) *WorkerManager {
+func NewWorkerManager(tasks TaskStore, sender Sender) *WorkerManager {
 	if Manager != nil {
 		return Manager
 	}

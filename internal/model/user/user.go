@@ -3,8 +3,8 @@ package user
 import (
 	"time"
 
+	"github.com/perfect-panel/server/internal/model/subscribe"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type User struct {
@@ -36,44 +36,6 @@ type User struct {
 
 func (*User) TableName() string {
 	return "user"
-}
-
-func UserTableName(db *gorm.DB) string {
-	return quoteTable(db, "user")
-}
-
-func UserColumn(db *gorm.DB, column string) string {
-	return quoteColumn(db, "user", column)
-}
-
-func AuthMethodsTableName(db *gorm.DB) string {
-	return quoteTable(db, "user_auth_methods")
-}
-
-func AuthMethodsColumn(db *gorm.DB, column string) string {
-	return quoteColumn(db, "user_auth_methods", column)
-}
-
-func UserSubscribeTableName(db *gorm.DB) string {
-	return quoteTable(db, "user_subscribe")
-}
-
-func UserSubscribeColumn(db *gorm.DB, column string) string {
-	return quoteColumn(db, "user_subscribe", column)
-}
-
-func quoteTable(db *gorm.DB, table string) string {
-	if db != nil && db.Statement != nil {
-		return db.Statement.Quote(clause.Table{Name: table})
-	}
-	return table
-}
-
-func quoteColumn(db *gorm.DB, table, column string) string {
-	if db != nil && db.Statement != nil {
-		return db.Statement.Quote(clause.Column{Table: table, Name: column})
-	}
-	return table + "." + column
 }
 
 type Subscribe struct {
@@ -158,4 +120,76 @@ type Withdrawal struct {
 
 func (*Withdrawal) TableName() string {
 	return "user_withdrawal"
+}
+
+// SubscribeDetails is the joined view of a user subscription with its subscribe plan.
+type SubscribeDetails struct {
+	Id          int64                `gorm:"primarykey"`
+	UserId      int64                `gorm:"index:idx_user_id;not null;comment:User ID"`
+	User        *User                `gorm:"foreignKey:UserId;references:Id"`
+	OrderId     int64                `gorm:"index:idx_order_id;not null;comment:Order ID"`
+	SubscribeId int64                `gorm:"index:idx_subscribe_id;not null;comment:Subscription ID"`
+	Subscribe   *subscribe.Subscribe `gorm:"foreignKey:SubscribeId;references:Id"`
+	StartTime   time.Time            `gorm:"default:CURRENT_TIMESTAMP(3);not null;comment:Subscription Start Time"`
+	ExpireTime  time.Time            `gorm:"default:NULL;comment:Subscription Expire Time"`
+	FinishedAt  *time.Time           `gorm:"default:NULL;comment:Finished Time"`
+	Traffic     int64                `gorm:"default:0;comment:Traffic"`
+	Download    int64                `gorm:"default:0;comment:Download Traffic"`
+	Upload      int64                `gorm:"default:0;comment:Upload Traffic"`
+	Token       string               `gorm:"index:idx_token;unique;type:varchar(255);default:'';comment:Token"`
+	UUID        string               `gorm:"type:varchar(255);unique;index:idx_uuid;default:'';comment:UUID"`
+	Status      uint8                `gorm:"type:tinyint(1);default:0;comment:Subscription Status: 0: Pending 1: Active 2: Finished 3: Expired; 4: Cancelled"`
+	Note        string               `gorm:"type:varchar(500);default:'';comment:User note for subscription"`
+	CreatedAt   time.Time            `gorm:"<-:create;comment:Creation Time"`
+	UpdatedAt   time.Time            `gorm:"comment:Update Time"`
+}
+
+// SubscribeLogFilterParams filters user subscribe access logs.
+type SubscribeLogFilterParams struct {
+	IP              string
+	UserAgent       string
+	UserId          int64
+	Token           string
+	UserSubscribeId int64
+}
+
+// LoginLogFilterParams filters user login logs.
+type LoginLogFilterParams struct {
+	IP        string
+	UserId    int64
+	UserAgent string
+	Success   *bool
+}
+
+// UserFilterParams filters users in paginated queries.
+type UserFilterParams struct {
+	Search          string
+	UserId          *int64
+	SubscribeId     *int64
+	UserSubscribeId *int64
+	Order           string // Order by id, e.g., "desc"
+	Unscoped        bool   // Whether to include soft-deleted records
+}
+
+// EmailRecipientFilter filters email recipients.
+type EmailRecipientFilter struct {
+	Scope             int8
+	RegisterStartTime int64
+	RegisterEndTime   int64
+}
+
+// SubscribeFilter filters user subscriptions.
+type SubscribeFilter struct {
+	Subscribers []int64
+	IsActive    *bool
+	StartTime   int64
+	EndTime     int64
+}
+
+// UserStatisticsWithDate holds aggregated user statistics per day/month.
+type UserStatisticsWithDate struct {
+	Date              string
+	Register          int64
+	NewOrderUsers     int64
+	RenewalOrderUsers int64
 }

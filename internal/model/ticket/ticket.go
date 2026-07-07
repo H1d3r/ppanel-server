@@ -35,3 +35,15 @@ type Follow struct {
 func (Follow) TableName() string {
 	return "ticket_follow"
 }
+
+// Details 是工单详情视图（含 Follows 预加载），仅做数据类型保留在 model 层。
+type Details struct {
+	Id          int64     `gorm:"primaryKey"`
+	Title       string    `gorm:"type:varchar(255);not null;default:'';comment:Title"`
+	Description string    `gorm:"type:text;comment:Description"`
+	UserId      int64     `gorm:"type:bigint;not null;default:0;comment:UserId"`
+	Status      uint8     `gorm:"type:tinyint(1);not null;default:1;comment:Status"`
+	Follows     []Follow  `gorm:"foreignKey:TicketId;references:Id"`
+	CreatedAt   time.Time `gorm:"<-:create;comment:Create Time"`
+	UpdatedAt   time.Time `gorm:"comment:Update Time"`
+}

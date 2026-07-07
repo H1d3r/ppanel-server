@@ -36,3 +36,14 @@ type UserTrafficRanking struct {
 func (TrafficLog) TableName() string {
 	return "traffic_log"
 }
+
+// TrafficLogDetailsFilter traffic 明细查询过滤条件
+type TrafficLogDetailsFilter struct {
+	ServerId    int64
+	UserId      int64
+	SubscribeId int64
+	Start       time.Time
+	End         time.Time
+	Page        int
+	Size        int
+}

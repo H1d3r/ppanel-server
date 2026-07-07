@@ -20,6 +20,14 @@ func (Auth) TableName() string {
 	return "auth_method"
 }
 
+// Filter auth 列表查询过滤条件
+type Filter struct {
+	Show   *bool
+	Pinned *bool
+	Popup  *bool
+	Search string
+}
+
 type AppleAuthConfig struct {
 	TeamID       string `json:"team_id"`
 	KeyID        string `json:"key_id"`
