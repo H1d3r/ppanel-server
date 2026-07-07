@@ -19,3 +19,9 @@ type Ads struct {
 func (Ads) TableName() string {
 	return "ads"
 }
+
+// Filter ads 列表查询过滤条件
+type Filter struct {
+	Status *int
+	Search string
+}

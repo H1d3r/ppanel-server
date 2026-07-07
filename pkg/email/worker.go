@@ -18,13 +18,13 @@ type ErrorInfo struct {
 
 type Worker struct {
 	id     int64           // 任务ID
-	tasks  task.Model      // task repository
+	tasks  TaskStore // task repository
 	ctx    context.Context // 上下文
 	sender Sender          // 邮件发送器接口
 	status uint8           // 任务状态，0 表示未运行，1 表示运行中 2 表示已完成
 }
 
-func NewWorker(ctx context.Context, id int64, tasks task.Model, sender Sender) *Worker {
+func NewWorker(ctx context.Context, id int64, tasks TaskStore, sender Sender) *Worker {
 	return &Worker{
 		id:     id,
 		tasks:  tasks,

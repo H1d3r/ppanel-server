@@ -30,6 +30,15 @@ func (Task) TableName() string {
 	return "task"
 }
 
+// Filter task 列表查询过滤条件
+type Filter struct {
+	Type   Type
+	Page   int
+	Size   int
+	Status *uint8
+	Scope  *int8
+}
+
 type ScopeType int8
 
 const (

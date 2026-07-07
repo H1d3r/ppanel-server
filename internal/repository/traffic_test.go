@@ -1,10 +1,11 @@
-package traffic
+package repository
 
 import (
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/perfect-panel/server/internal/model/traffic"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -52,12 +53,12 @@ func TestTrafficAggregateSQL(t *testing.T) {
 				t.Fatalf("open gorm db: %v", err)
 			}
 
-			var result TotalTraffic
+			var result traffic.TotalTraffic
 			start := time.Date(2026, 5, 22, 0, 0, 0, 0, time.UTC)
 			end := start.Add(24 * time.Hour)
-			stmt := db.Model(&TrafficLog{}).
+			stmt := db.Model(&traffic.TrafficLog{}).
 				Select(totalTrafficSelect(db)).
-				Where(timeRangeCondition(db), start, end).
+				Where(trafficTimeRangeCondition(db), start, end).
 				Scan(&result).Statement
 			sql := stmt.SQL.String()
 
@@ -82,12 +83,12 @@ func TestTrafficRankingSQL(t *testing.T) {
 		t.Fatalf("open gorm db: %v", err)
 	}
 
-	var result []ServerTrafficRanking
+	var result []traffic.ServerTrafficRanking
 	start := time.Date(2026, 5, 22, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
-	stmt := db.Model(&TrafficLog{}).
+	stmt := db.Model(&traffic.TrafficLog{}).
 		Select(serverTrafficRankingSelect(db)).
-		Where(timeRangeCondition(db), start, end).
+		Where(trafficTimeRangeCondition(db), start, end).
 		Group(trafficColumn(db, "server_id")).
 		Order("total DESC").
 		Scan(&result).Statement

@@ -87,3 +87,26 @@ type Group struct {
 func (Group) TableName() string {
 	return "subscribe_group"
 }
+
+// FilterParams subscribe 列表过滤参数
+type FilterParams struct {
+	Page            int      // Page Number
+	Size            int      // Page Size
+	Ids             []int64  // Subscribe IDs
+	Node            []int64  // Node IDs
+	Tags            []string // Node Tags
+	Show            bool     // Show Portal Page
+	Sell            bool     // Sell
+	Language        string   // Language
+	DefaultLanguage bool     // Default Subscribe Language Data
+	Search          string   // Search Keywords
+}
+
+func (p *FilterParams) Normalize() {
+	if p.Page <= 0 {
+		p.Page = 1
+	}
+	if p.Size <= 0 {
+		p.Size = 10
+	}
+}

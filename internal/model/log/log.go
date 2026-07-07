@@ -58,6 +58,16 @@ func (t Type) Uint8() uint8 {
 	return uint8(t)
 }
 
+// FilterParams log 列表查询过滤条件
+type FilterParams struct {
+	Page     int
+	Size     int
+	Type     uint8
+	Data     string
+	Search   string
+	ObjectID int64
+}
+
 // SystemLog represents a log entry in the system.
 type SystemLog struct {
 	Id        int64     `gorm:"primaryKey;AUTO_INCREMENT"`

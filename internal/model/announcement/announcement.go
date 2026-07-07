@@ -16,3 +16,11 @@ type Announcement struct {
 func (Announcement) TableName() string {
 	return "announcement"
 }
+
+// Filter announcement 列表查询过滤条件
+type Filter struct {
+	Show   *bool
+	Pinned *bool
+	Popup  *bool
+	Search string
+}

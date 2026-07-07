@@ -1,9 +1,10 @@
-package user
+package repository
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/perfect-panel/server/internal/model/user"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -80,15 +81,15 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 				t.Fatalf("open gorm db: %v", err)
 			}
 
-			var result []User
-			filter := &UserFilterParams{
+			var result []user.User
+			filter := &user.UserFilterParams{
 				Search:          "alice_100%@example.com",
 				UserId:          ptr[int64](99),
 				UserSubscribeId: ptr[int64](10),
 				SubscribeId:     ptr[int64](20),
 				Order:           "DESC",
 			}
-			stmt := applyUserPageFilters(db.Model(&User{}), filter).Find(&result).Statement
+			stmt := applyUserPageFilters(db.Model(&user.User{}), filter).Find(&result).Statement
 			sql := stmt.SQL.String()
 
 			for _, want := range tt.wantSQL {
@@ -123,8 +124,8 @@ func TestApplyUserPageFiltersSkipsBlankSearch(t *testing.T) {
 		t.Fatalf("open gorm db: %v", err)
 	}
 
-	var result []User
-	stmt := applyUserPageFilters(db.Model(&User{}), &UserFilterParams{Search: "   "}).Find(&result).Statement
+	var result []user.User
+	stmt := applyUserPageFilters(db.Model(&user.User{}), &user.UserFilterParams{Search: "   "}).Find(&result).Statement
 	sql := stmt.SQL.String()
 	if strings.Contains(sql, "LIKE") || strings.Contains(sql, "user_auth_methods") {
 		t.Fatalf("blank search should not add search filters:\n%s", sql)
