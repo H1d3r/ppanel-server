@@ -43,9 +43,11 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *types.CommissionWithdr
 	}
 
 	// create withdrawal log
+	// Use negative amount to reflect the balance decrease, so that
+	// SumAmountByTypeAndObjectID produces the correct net total.
 	logInfo := log.Commission{
 		Type:      log.CommissionTypeConvertBalance,
-		Amount:    req.Amount,
+		Amount:    -req.Amount,
 		Timestamp: timeutil.Now().UnixMilli(),
 	}
 	b, err := logInfo.Marshal()

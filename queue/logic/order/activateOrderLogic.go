@@ -405,6 +405,9 @@ func (l *ActivateOrderLogic) handleCommission(ctx context.Context, userInfo *use
 
 	// Order commission calculation： (Order Amount - Order Fee) * Referral Percentage
 	amount := l.calculateCommission(orderInfo.Amount-orderInfo.FeeAmount, referralPercentage)
+	if amount <= 0 {
+		return
+	}
 
 	// Use transaction for commission updates
 	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
