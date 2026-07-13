@@ -65,6 +65,9 @@ func (l *CreateUserLogic) CreateUser(req *types.CreateUserRequest) error {
 		if err == nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.EmailExist), "email exist")
 		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find email auth method failed: %v", err.Error())
+		}
 		ams = append(ams, user.AuthMethods{
 			AuthType:       "email",
 			AuthIdentifier: req.Email,
