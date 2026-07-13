@@ -5,7 +5,7 @@ on:
     branches: ["develop", "main"]
     paths:
       - "internal/**"
-      - "pkg/hertzx/**"
+      - "pkg/httpx/**"
       - "scripts/perf/**"
       - "go.mod"
       - "go.sum"
