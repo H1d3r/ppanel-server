@@ -19,42 +19,6 @@ import (
 
 func TestDevice(t *testing.T) {
 	t.Skip("skip test")
-	/*	deviceManager := NewDeviceManager(10, 3)
-
-		deviceManager.OnDeviceOnline = func(userID int64, deviceID, session string) {
-			fmt.Printf("✅ 设备 %s (用户 %d) 上线\n", deviceID, userID)
-		}
-
-		deviceManager.OnDeviceOffline = func(userID int64, deviceID, session string) {
-			fmt.Printf("❌ 设备 %s (用户 %d) 下线\n", deviceID, userID)
-		}
-
-		deviceManager.OnDeviceKicked = func(userID int64, deviceID, session string, operator Operator) {
-			fmt.Printf("⚠️ 设备 %s (用户 %d) 被踢下线\n", deviceID, userID)
-		}
-		deviceManager.OnMessage = func(userID int64, deviceID, session string, message string) {
-			log.Printf("✅收到消息:  设备 %s (用户 %d) 内容: %s,sesion: %s\n", deviceID, userID, message, session)
-		}
-		engine := hertzx.Default()
-		engine.GET("/ws/:userid/:device_number", func(c *hertzx.Context) {
-			//根据Authorization获取session
-			authorization := c.GetHeader("Authorization")
-			userid, err := strconv.ParseInt(c.Param("userid"), 10, 64)
-			if err != nil {
-				t.Errorf("get user id err:%v", err)
-				return
-			}
-			deviceNumber := c.Param("device_number")
-			deviceManager.AddDevice(c, authorization, userid, deviceNumber, 3)
-			return
-		})
-		go func() {
-			err := http.ListenAndServe(":8081", engine)
-			if err != nil {
-				t.Fatalf("engine start failed: %v", err)
-			}
-		}()
-	*/
 	h := http.Header{}
 	h.Add("Authorization", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJTZXNzaW9uSWQiOiIwMTk0Y2ZiNy1hYjY0LTdjYjMtODUzYi03ZGU5YTAzNWRlZTgiLCJVc2VySWQiOjI5LCJleHAiOjE3MzkyNTY1MDgsImlhdCI6MTczODY1MTcwOH0.BGKT5-hongJPZrA_yAb6cf6go5iDR8T9uu1ZxUg8HDw")
 
