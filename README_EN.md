@@ -3,7 +3,7 @@
 <div align="center">
 
 [![License](https://img.shields.io/github/license/perfect-panel/server)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-blue)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-blue)](https://go.dev/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/perfect-panel/server)](https://goreportcard.com/report/github.com/perfect-panel/server)
 [![Docker](https://img.shields.io/badge/Docker-Available-blue)](Dockerfile)
 [![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/server/release.yml)](.github/workflows/release.yml)
@@ -49,7 +49,7 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
 
 ### Prerequisites
 
-- **Go**: 1.21 or higher
+- **Go**: 1.25 or higher
 - **Docker**: Optional, for containerized deployment
 - **Git**: For cloning the repository
 
@@ -66,18 +66,12 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
    go mod download
    ```
 
-3. **Generate code**:
-   ```bash
-   chmod +x script/generate.sh
-   ./script/generate.sh
-   ```
-
-4. **Build the project**:
+3. **Build the project**:
    ```bash
    make linux-amd64
    ```
 
-5. **Run the server**:
+4. **Run the server**:
    ```bash
    ./ppanel-server-linux-amd64 run --config etc/ppanel.yaml
    ```
@@ -120,11 +114,9 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
 
 ## 📖 API Documentation
 
-Explore the full API documentation:
+Partial legacy API documentation is available in the local `ppanel.json` file (Swagger 2.0 format), a manually maintained partial legacy snapshot that does not fully describe the current Hertz routes.
 
-- **Swagger**: [https://ppanel.dev/en-US/swagger/ppanel](https://ppanel.dev/swagger/ppanel)
-
-The documentation covers all endpoints, request/response formats, and authentication details.
+[ppanel.json](./ppanel.json)
 
 ## 🔗 Related Projects
 
@@ -146,11 +138,9 @@ Visit [ppanel.dev](https://ppanel.dev/) for more details.
 
 ```
 .
-├── apis/             # API definition files
 ├── cmd/              # Application entry point
 ├── doc/              # Documentation
 ├── etc/              # Configuration files (e.g., ppanel.yaml)
-├── generate/         # Code generation tools
 ├── initialize/       # System initialization
 ├── internal/         # Internal modules
 │   ├── config/       # Configuration parsing
@@ -163,27 +153,14 @@ Visit [ppanel.dev](https://ppanel.dev/) for more details.
 ├── pkg/              # Utility code
 ├── queue/            # Queue services
 ├── scheduler/        # Scheduled tasks
-├── script/           # Build scripts
+├── script/           # Installation scripts
+├── scripts/          # Performance and maintenance scripts
 ├── go.mod            # Go module definition
 ├── Makefile          # Build automation
 └── Dockerfile        # Docker configuration
 ```
 
 ## 💻 Development
-
-### Format API Files
-```bash
-goctl api format --dir apis/user.api
-```
-
-### Add a New API
-
-1. Create a new API file in `apis/`.
-2. Import it in `apis/ppanel.api`.
-3. Regenerate code:
-   ```bash
-   ./script/generate.sh
-   ```
 
 ### Build for Multiple Platforms
 
@@ -263,18 +240,6 @@ project's development! 🚀
       </td>
       <td style="padding: 15px; vertical-align: middle;">
         Comprehensive Go Swagger toolkit<br/>
-      </td>
-    </tr>
-    <tr>
-      <td align="center" style="padding: 15px; vertical-align: middle;">
-        <a href="https://go-zero.dev/" style="text-decoration: none;">
-          <img src="https://raw.githubusercontent.com/zeromicro/zero-doc/main/doc/images/go-zero.png" width="30" alt="Go-Zero" style="border-radius: 8px;" /><br/>
-          <strong>Go-Zero</strong><br/>
-          <img src="https://img.shields.io/github/stars/zeromicro/go-zero?style=social" alt="Go-Zero Stars" />
-        </a>
-      </td>
-      <td colspan="3" style="padding: 15px; vertical-align: middle;">
-        Go microservices framework (this project's API generator is built on Go-Zero)<br/>
       </td>
     </tr>
   </tbody>
