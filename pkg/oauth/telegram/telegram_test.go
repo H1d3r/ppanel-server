@@ -1,26 +1,46 @@
 package telegram
 
 import (
+	"context"
+	"html/template"
 	"net/http"
 	"testing"
 
-	"github.com/perfect-panel/server/pkg/hertzx"
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/app/server/render"
+	"github.com/cloudwego/hertz/pkg/common/utils"
 )
 
-func TestOAuth(t *testing.T) {
-	t.Skipf("Skip TestOAuth test")
-	router := hertzx.Default()
-	router.LoadHTMLGlob("./*")
-	router.GET("/telegram", func(c *hertzx.Context) {
-		c.HTML(http.StatusOK, "telegram.html", hertzx.H{
+func TestOAuth_rendersTelegramHTML_whenRouteIsRequested(t *testing.T) {
+	// Given
+	router := server.Default()
+	templates := template.Must(template.New("telegram.html").Parse("{{.title}}: {{.message}}"))
+	router.SetHTMLTemplate(templates)
+	router.GET("/telegram", func(_ context.Context, ctx *app.RequestContext) {
+		ctx.HTML(http.StatusOK, "telegram.html", utils.H{
 			"title":   "Hertz HTML Example",
 			"message": "Hello, Hertz!",
 		})
 	})
-	router.GET("/auth/telegram/callback", func(c *hertzx.Context) {
-
+	router.GET("/auth/telegram/callback", func(_ context.Context, ctx *app.RequestContext) {
+		ctx.String(http.StatusOK, "callback")
 	})
-	_ = router.RunTLS(":443", "server.crt", "server.key")
+	if err := router.Init(); err != nil {
+		t.Fatalf("initialize native Hertz router: %v", err)
+	}
+	request := router.NewContext()
+	request.HTMLRender = render.HTMLProduction{Template: templates}
+	request.Request.SetRequestURI("/telegram")
+	request.Request.Header.SetMethod(http.MethodGet)
+
+	// When
+	router.ServeHTTP(context.Background(), request)
+
+	// Then
+	if status := request.Response.StatusCode(); status != http.StatusOK {
+		t.Fatalf("expected HTML status %d, got %d", http.StatusOK, status)
+	}
 }
 
 func TestBase64(t *testing.T) {
