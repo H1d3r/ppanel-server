@@ -3,11 +3,16 @@ package apple
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"testing"
 
-	"github.com/perfect-panel/server/pkg/hertzx"
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/app/server/render"
+	"github.com/cloudwego/hertz/pkg/common/utils"
+	"github.com/perfect-panel/server/pkg/httpx"
 )
 
 const (
@@ -17,25 +22,53 @@ const (
 	ClientSecret = "test-client-secret"
 )
 
-func TestAppleLogin(t *testing.T) {
-	t.Skipf("Skip TestAppleLogin test")
-	router := hertzx.Default()
-	router.LoadHTMLGlob("./*")
-	router.GET("/apple", func(c *hertzx.Context) {
-		c.HTML(http.StatusOK, "apple.html", hertzx.H{
+func TestAppleRoutes_renderHTMLAndRejectInvalidCallback(t *testing.T) {
+	// Given
+	router := server.Default()
+	templates := template.Must(template.New("apple.html").Parse("{{.title}}: {{.message}}"))
+	router.SetHTMLTemplate(templates)
+	router.GET("/apple", func(_ context.Context, ctx *app.RequestContext) {
+		ctx.HTML(http.StatusOK, "apple.html", utils.H{
 			"title":   "Hertz HTML Example",
 			"message": "Hello, Hertz!",
 		})
 	})
-	router.POST("/auth/apple/callback", func(c *hertzx.Context) {
+	router.POST("/auth/apple/callback", func(_ context.Context, ctx *app.RequestContext) {
 		var req CallbackRequest
-		if err := c.ShouldBind(&req); err != nil {
-			c.JSON(http.StatusBadRequest, hertzx.H{"error": "Invalid request data"})
+		if err := httpx.ShouldBind(ctx, &req); err != nil {
+			ctx.JSON(http.StatusBadRequest, utils.H{"error": "Invalid request data"})
 			return
 		}
-		handleAppleCallBack(c, req)
+		handleAppleCallBack(context.Background(), req)
 	})
-	_ = router.RunTLS(":8443", "certificate.crt", "private.key")
+	if err := router.Init(); err != nil {
+		t.Fatalf("initialize native Hertz router: %v", err)
+	}
+
+	get := router.NewContext()
+	get.HTMLRender = render.HTMLProduction{Template: templates}
+	get.Request.SetRequestURI("/apple")
+	get.Request.Header.SetMethod(http.MethodGet)
+	post := router.NewContext()
+	post.Request.SetRequestURI("/auth/apple/callback")
+	post.Request.Header.SetMethod(http.MethodPost)
+	post.Request.Header.Set("Content-Type", "application/json")
+	post.Request.SetBodyString("{")
+
+	// When
+	router.ServeHTTP(context.Background(), get)
+	router.ServeHTTP(context.Background(), post)
+
+	// Then
+	if status := get.Response.StatusCode(); status != http.StatusOK {
+		t.Fatalf("expected HTML status %d, got %d", http.StatusOK, status)
+	}
+	if status := post.Response.StatusCode(); status != http.StatusBadRequest {
+		t.Fatalf("expected invalid callback status %d, got %d", http.StatusBadRequest, status)
+	}
+	if body := string(post.Response.Body()); body != `{"error":"Invalid request data"}` {
+		t.Fatalf("expected invalid callback JSON response, got %q", body)
+	}
 }
 
 func handleAppleCallBack(ctx context.Context, request CallbackRequest) {
