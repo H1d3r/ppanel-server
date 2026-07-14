@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
+	trafficEntity "github.com/perfect-panel/server/internal/model/entity/traffic"
 	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/cache"
@@ -76,6 +78,7 @@ type UserRepo interface {
 	DeleteSubscribe(ctx context.Context, token string, tx ...*gorm.DB) error
 	DeleteSubscribeById(ctx context.Context, id int64, tx ...*gorm.DB) error
 	UpdateUserSubscribeWithTraffic(ctx context.Context, id, download, upload int64, tx ...*gorm.DB) error
+	BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta, tx ...*gorm.DB) error
 	FindUsersSubscribeBySubscribeId(ctx context.Context, subscribeId int64) ([]*user.Subscribe, error)
 	FindUserSubscribesByStatus(ctx context.Context, status ...int64) ([]*user.Subscribe, error)
 	FindSubscribesByIds(ctx context.Context, ids []int64) ([]*user.Subscribe, error)
@@ -994,6 +997,80 @@ func (m *userRepo) UpdateUserSubscribeWithTraffic(ctx context.Context, id, downl
 			"upload":   gorm.Expr("upload + ?", upload),
 		}).Error
 	})
+}
+
+func (m *userRepo) BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta, tx ...*gorm.DB) error {
+	deltas = mergeSubscribeTrafficDeltas(deltas)
+	if len(deltas) == 0 {
+		return nil
+	}
+
+	ids := make([]int64, 0, len(deltas))
+	for _, delta := range deltas {
+		ids = append(ids, delta.SubscribeId)
+	}
+	subs, err := m.FindSubscribesByIds(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		_ = m.ClearSubscribeCache(ctx, subs...)
+	}()
+
+	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		downloadExpr, downloadArgs := userSubscribeTrafficIncrementExpr(conn, "download", deltas)
+		uploadExpr, uploadArgs := userSubscribeTrafficIncrementExpr(conn, "upload", deltas)
+		return conn.Model(&user.Subscribe{}).Where("id IN ?", ids).Updates(map[string]interface{}{
+			"download": gorm.Expr(downloadExpr, downloadArgs...),
+			"upload":   gorm.Expr(uploadExpr, uploadArgs...),
+		}).Error
+	})
+}
+
+func mergeSubscribeTrafficDeltas(deltas []trafficEntity.SubscribeTrafficDelta) []trafficEntity.SubscribeTrafficDelta {
+	if len(deltas) == 0 {
+		return nil
+	}
+	merged := make(map[int64]trafficEntity.SubscribeTrafficDelta, len(deltas))
+	for _, delta := range deltas {
+		if delta.SubscribeId <= 0 {
+			continue
+		}
+		current := merged[delta.SubscribeId]
+		current.SubscribeId = delta.SubscribeId
+		current.Download += delta.Download
+		current.Upload += delta.Upload
+		merged[delta.SubscribeId] = current
+	}
+	result := make([]trafficEntity.SubscribeTrafficDelta, 0, len(merged))
+	for _, delta := range merged {
+		result = append(result, delta)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].SubscribeId < result[j].SubscribeId
+	})
+	return result
+}
+
+func userSubscribeTrafficIncrementExpr(db *gorm.DB, column string, deltas []trafficEntity.SubscribeTrafficDelta) (string, []interface{}) {
+	idColumn := userSubscribeColumn(db, "id")
+	targetColumn := userSubscribeColumn(db, column)
+	parts := make([]string, 0, len(deltas))
+	args := make([]interface{}, 0, len(deltas)*2)
+	for _, delta := range deltas {
+		parts = append(parts, "WHEN ? THEN ?")
+		args = append(args, delta.SubscribeId)
+		if column == "download" {
+			args = append(args, delta.Download)
+		} else {
+			args = append(args, delta.Upload)
+		}
+	}
+	return fmt.Sprintf("%s + CASE %s %s ELSE 0 END", targetColumn, idColumn, strings.Join(parts, " ")), args
 }
 
 // FindOneSubscribeByToken  finds a record by token.

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/node"
@@ -13,6 +15,7 @@ import (
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // NodeRepo node/server 数据访问接口
@@ -21,6 +24,7 @@ type NodeRepo interface {
 	InsertServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error
 	FindOneServer(ctx context.Context, id int64) (*node.Server, error)
 	UpdateServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error
+	BatchUpdateServerLastReportedAt(ctx context.Context, reports map[int64]time.Time, tx ...*gorm.DB) error
 	DeleteServer(ctx context.Context, id int64, tx ...*gorm.DB) error
 	FindServerConfigOverride(ctx context.Context, serverId int64) (*node.ServerConfigOverride, error)
 	SaveServerConfigOverride(ctx context.Context, data *node.ServerConfigOverride, tx ...*gorm.DB) error
@@ -98,6 +102,51 @@ func (m *nodeRepo) UpdateServer(ctx context.Context, data *node.Server, tx ...*g
 		db = tx[0]
 	}
 	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
+}
+
+func (m *nodeRepo) BatchUpdateServerLastReportedAt(ctx context.Context, reports map[int64]time.Time, tx ...*gorm.DB) error {
+	if len(reports) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(reports))
+	for id := range reports {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+
+	db := m.DB
+	if len(tx) > 0 {
+		db = tx[0]
+	}
+	expr, args := serverLastReportedAtExpr(db, ids, reports)
+	return db.WithContext(ctx).Model(&node.Server{}).Where("id IN ?", ids).
+		Update("last_reported_at", gorm.Expr(expr, args...)).Error
+}
+
+func serverLastReportedAtExpr(db *gorm.DB, ids []int64, reports map[int64]time.Time) (string, []interface{}) {
+	idColumn := serverColumn(db, "id")
+	targetColumn := serverColumn(db, "last_reported_at")
+	parts := make([]string, 0, len(ids))
+	args := make([]interface{}, 0, len(ids)*2)
+	for _, id := range ids {
+		parts = append(parts, "WHEN ? THEN ?")
+		args = append(args, id, reports[id])
+	}
+	return fmt.Sprintf("CASE %s %s ELSE %s END", idColumn, strings.Join(parts, " "), targetColumn), args
+}
+
+func serverColumn(db *gorm.DB, column string) string {
+	if db != nil && db.Statement != nil {
+		return db.Statement.Quote(clause.Column{Table: (&node.Server{}).TableName(), Name: column})
+	}
+	return (&node.Server{}).TableName() + "." + column
 }
 
 func (m *nodeRepo) DeleteServer(ctx context.Context, id int64, tx ...*gorm.DB) error {

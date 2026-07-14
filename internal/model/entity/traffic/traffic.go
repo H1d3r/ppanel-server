@@ -18,6 +18,12 @@ type TotalTraffic struct {
 	Upload   int64
 }
 
+type SubscribeTrafficDelta struct {
+	SubscribeId int64
+	Download    int64
+	Upload      int64
+}
+
 type ServerTrafficRanking struct {
 	ServerId int64
 	Download int64

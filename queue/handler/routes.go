@@ -25,6 +25,8 @@ func RegisterHandlers(mux *asynq.ServeMux, serverCtx *svc.ServiceContext) {
 
 	// Forthwith traffic statistics
 	mux.Handle(types.ForthwithTrafficStatistics, traffic.NewTrafficStatisticsLogic(serverCtx))
+	// Flush aggregated traffic
+	mux.Handle(types.SchedulerFlushTraffic, traffic.NewFlushTrafficLogic(serverCtx))
 
 	// Schedule check subscription
 	mux.Handle(types.SchedulerCheckSubscription, subscription.NewCheckSubscriptionLogic(serverCtx))

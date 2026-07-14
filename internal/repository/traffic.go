@@ -15,6 +15,7 @@ import (
 // TrafficRepo traffic 数据访问接口
 type TrafficRepo interface {
 	Insert(ctx context.Context, data *traffic.TrafficLog) error
+	InsertBatch(ctx context.Context, data []*traffic.TrafficLog, batchSize int, tx ...*gorm.DB) error
 	FindOne(ctx context.Context, id int64) (*traffic.TrafficLog, error)
 	Update(ctx context.Context, data *traffic.TrafficLog) error
 	Delete(ctx context.Context, id int64) error
@@ -50,6 +51,20 @@ func newTrafficRepo(db *gorm.DB) TrafficRepo {
 
 func (m *trafficRepo) Insert(ctx context.Context, data *traffic.TrafficLog) error {
 	return m.Conn.WithContext(ctx).Create(&data).Error
+}
+
+func (m *trafficRepo) InsertBatch(ctx context.Context, data []*traffic.TrafficLog, batchSize int, tx ...*gorm.DB) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	db := m.Conn
+	if len(tx) > 0 {
+		db = tx[0]
+	}
+	return db.WithContext(ctx).CreateInBatches(data, batchSize).Error
 }
 
 func (m *trafficRepo) FindOne(ctx context.Context, id int64) (*traffic.TrafficLog, error) {
