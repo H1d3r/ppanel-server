@@ -44,6 +44,9 @@ func (l *GetUserListLogic) GetUserList(req *types.GetUserListRequest) (*types.Ge
 	for _, item := range list {
 		var u types.User
 		tool.DeepCopy(&u, item)
+		if item.DeletedAt.Valid {
+			u.DeletedAt = item.DeletedAt.Time.UnixMilli()
+		}
 
 		// 处理 AuthMethods
 		authMethods := make([]types.UserAuthMethod, len(u.AuthMethods)) // 直接创建目标 slice

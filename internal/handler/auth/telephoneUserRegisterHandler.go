@@ -19,7 +19,10 @@ import (
 func TelephoneUserRegisterHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req types.TelephoneRegisterRequest
-		_ = httpx.ShouldBind(c, &req)
+		if err := httpx.ShouldBind(c, &req); err != nil {
+			result.ParamErrorResult(c, err)
+			return
+		}
 		validateErr := svcCtx.Validate(&req)
 		if validateErr != nil {
 			result.ParamErrorResult(c, validateErr)

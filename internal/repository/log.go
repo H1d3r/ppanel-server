@@ -11,8 +11,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const maxLogPageSize = 100
-
 // LogRepo log 数据访问接口
 type LogRepo interface {
 	Insert(ctx context.Context, data *log.SystemLog) error
@@ -65,19 +63,11 @@ func (m *logRepo) FilterSystemLog(ctx context.Context, filter *log.FilterParams)
 	if filter == nil {
 		filter = &log.FilterParams{
 			Page: 1,
-			Size: 10,
+			Size: defaultPageSize,
 		}
 	}
 
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-	if filter.Size < 1 {
-		filter.Size = 10
-	}
-	if filter.Size > maxLogPageSize {
-		filter.Size = maxLogPageSize
-	}
+	filter.Page, filter.Size = normalizePage(filter.Page, filter.Size)
 
 	if filter.Type != 0 {
 		tx = tx.Where("type = ?", filter.Type)

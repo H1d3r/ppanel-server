@@ -195,6 +195,7 @@ func (m *trafficRepo) QueryUserTrafficRanking(ctx context.Context, start, end ti
 func (m *trafficRepo) QueryTrafficLogPageList(ctx context.Context, userId, subscribeId int64, page, size int) ([]*traffic.TrafficLog, int64, error) {
 	var list []*traffic.TrafficLog
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.Conn.WithContext(ctx).Model(&traffic.TrafficLog{}).Where("user_id = ? and subscribe_id= ?", userId, subscribeId).Count(&total).Limit(size).Offset((page - 1) * size).Find(&list).Error
 	return list, total, err
 }
@@ -203,12 +204,7 @@ func (m *trafficRepo) QueryTrafficLogDetails(ctx context.Context, filter *traffi
 	if filter == nil {
 		filter = &traffic.TrafficLogDetailsFilter{Page: 1, Size: 10}
 	}
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-	if filter.Size < 1 {
-		filter.Size = 10
-	}
+	filter.Page, filter.Size = normalizePage(filter.Page, filter.Size)
 
 	query := m.Conn.WithContext(ctx).Model(&traffic.TrafficLog{})
 	if filter.ServerId != 0 {

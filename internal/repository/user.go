@@ -256,6 +256,7 @@ func (m *userRepo) Transaction(ctx context.Context, fn func(db *gorm.DB) error) 
 func (m *userRepo) QueryPageList(ctx context.Context, page, size int, filter *user.UserFilterParams) ([]*user.User, int64, error) {
 	var list []*user.User
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = applyUserPageFilters(conn.Model(&user.User{}), filter)
 		if err := conn.Count(&total).Error; err != nil {
@@ -280,33 +281,8 @@ func applyUserPageFilters(conn *gorm.DB, filter *user.UserFilterParams) *gorm.DB
 			conn = conn.Where(userSearchCondition(conn), search, search)
 		}
 	}
-	if filter.UserSubscribeId != nil {
-		conn = conn.Where(
-			fmt.Sprintf(
-				"EXISTS (SELECT 1 FROM %s WHERE %s = %s AND %s = ? AND %s IN ?)",
-				userSubscribeTableName(conn),
-				userSubscribeColumn(conn, "user_id"),
-				userIdColumn,
-				userSubscribeColumn(conn, "id"),
-				userSubscribeColumn(conn, "status"),
-			),
-			*filter.UserSubscribeId,
-			[]int64{0, 1},
-		)
-	}
-	if filter.SubscribeId != nil {
-		conn = conn.Where(
-			fmt.Sprintf(
-				"EXISTS (SELECT 1 FROM %s WHERE %s = %s AND %s = ? AND %s IN ?)",
-				userSubscribeTableName(conn),
-				userSubscribeColumn(conn, "user_id"),
-				userIdColumn,
-				userSubscribeColumn(conn, "subscribe_id"),
-				userSubscribeColumn(conn, "status"),
-			),
-			*filter.SubscribeId,
-			[]int64{0, 1},
-		)
+	if filter.UserSubscribeId != nil || filter.SubscribeId != nil {
+		conn = userSubscribeExistsCondition(conn, userIdColumn, filter)
 	}
 	if filter.Order != "" {
 		switch strings.ToUpper(filter.Order) {
@@ -318,6 +294,31 @@ func applyUserPageFilters(conn *gorm.DB, filter *user.UserFilterParams) *gorm.DB
 		conn = conn.Unscoped()
 	}
 	return conn
+}
+
+func userSubscribeExistsCondition(conn *gorm.DB, userIdColumn string, filter *user.UserFilterParams) *gorm.DB {
+	conditions := []string{
+		fmt.Sprintf("%s = %s", userSubscribeColumn(conn, "user_id"), userIdColumn),
+	}
+	args := make([]interface{}, 0, 3)
+	if filter.UserSubscribeId != nil {
+		conditions = append(conditions, fmt.Sprintf("%s = ?", userSubscribeColumn(conn, "id")))
+		args = append(args, *filter.UserSubscribeId)
+	}
+	if filter.SubscribeId != nil {
+		conditions = append(conditions, fmt.Sprintf("%s = ?", userSubscribeColumn(conn, "subscribe_id")))
+		args = append(args, *filter.SubscribeId)
+	}
+	conditions = append(conditions, fmt.Sprintf("%s IN ?", userSubscribeColumn(conn, "status")))
+	args = append(args, []int64{0, 1})
+	return conn.Where(
+		fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM %s WHERE %s)",
+			userSubscribeTableName(conn),
+			strings.Join(conditions, " AND "),
+		),
+		args...,
+	)
 }
 
 func userSearchCondition(conn *gorm.DB) string {
@@ -1128,6 +1129,7 @@ func (m *userRepo) FindOneDeviceByIdentifier(ctx context.Context, id string) (*u
 func (m *userRepo) QueryDevicePageList(ctx context.Context, userId, subscribeId int64, page, size int) ([]*user.Device, int64, error) {
 	var list []*user.Device
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.Device{}).Where("user_id = ? and subscribe_id = ?", userId, subscribeId).Count(&total).Limit(size).Offset((page - 1) * size).Find(&list).Error
 	})
@@ -1233,6 +1235,7 @@ func (m *userRepo) CountAffiliates(ctx context.Context, refererId int64) (int64,
 func (m *userRepo) QueryAffiliateList(ctx context.Context, refererId int64, page, size int) ([]*user.User, int64, error) {
 	var list []*user.User
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.User{}).
 			Where("referer_id = ?", refererId).

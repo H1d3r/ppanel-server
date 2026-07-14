@@ -89,6 +89,7 @@ func (m *adsRepo) Delete(ctx context.Context, id int64) error {
 func (m *adsRepo) GetAdsListByPage(ctx context.Context, page, size int, filter ads.Filter) (int64, []*ads.Ads, error) {
 	var list []*ads.Ads
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&ads.Ads{})
 		if filter.Status != nil {

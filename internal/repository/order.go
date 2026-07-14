@@ -152,6 +152,7 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 func (m *orderRepo) QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error) {
 	var list []*order.Details
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&order.Order{})
 		conn = applyOrderListFilters(conn, status, user, subscribe, search)

@@ -138,6 +138,7 @@ func (m *paymentRepo) FindAvailableMethods(ctx context.Context) ([]*payment.Paym
 func (m *paymentRepo) FindListByPage(ctx context.Context, page, size int, req *payment.Filter) (int64, []*payment.Payment, error) {
 	var resp []*payment.Payment
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&payment.Payment{})
 		if req != nil {

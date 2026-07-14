@@ -139,6 +139,7 @@ func (m *ticketRepo) InsertTicketFollow(ctx context.Context, data *ticket.Follow
 func (m *ticketRepo) QueryTicketList(ctx context.Context, page, size int, userId int64, status *uint8, search string) (int64, []*ticket.Ticket, error) {
 	var data []*ticket.Ticket
 	var total int64
+	page, size = normalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		query := conn.Model(&ticket.Ticket{})
 		if userId > 0 {

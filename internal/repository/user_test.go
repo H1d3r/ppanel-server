@@ -61,9 +61,8 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 				`EXISTS (SELECT 1 FROM "user_subscribe"`,
 				`"user_subscribe"."user_id" = "user"."id"`,
 				`"user_subscribe"."id" = $4`,
-				`"user_subscribe"."subscribe_id" = $7`,
-				`"user_subscribe"."status" IN ($5,$6)`,
-				`"user_subscribe"."status" IN ($8,$9)`,
+				`"user_subscribe"."subscribe_id" = $5`,
+				`"user_subscribe"."status" IN ($6,$7)`,
 				`ORDER BY "user"."id" DESC`,
 			},
 			wantNoSQL:  []string{"LEFT JOIN", "GROUP BY"},
@@ -102,6 +101,13 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 					t.Fatalf("SQL should not contain %q:\n%s", unwanted, sql)
 				}
 			}
+			subscribeFrom := "FROM `user_subscribe`"
+			if tt.name == "postgres" {
+				subscribeFrom = `FROM "user_subscribe"`
+			}
+			if got := strings.Count(sql, subscribeFrom); got != 1 {
+				t.Fatalf("subscribe filters should use one user_subscribe EXISTS, got %d:\n%s", got, sql)
+			}
 			if got := stmt.Vars[1]; got != tt.wantSearch {
 				t.Fatalf("refer_code search pattern = %#v, want %#v", got, tt.wantSearch)
 			}
@@ -132,5 +138,37 @@ func TestApplyUserPageFiltersSkipsBlankSearch(t *testing.T) {
 	}
 	if len(stmt.Vars) != 0 {
 		t.Fatalf("vars len = %d, want 0: %#v", len(stmt.Vars), stmt.Vars)
+	}
+}
+
+func TestNormalizePage(t *testing.T) {
+	tests := []struct {
+		name     string
+		page     int
+		size     int
+		wantPage int
+		wantSize int
+	}{
+		{name: "zero values use safe defaults", page: 0, size: 0, wantPage: 1, wantSize: defaultPageSize},
+		{name: "negative values use safe defaults", page: -2, size: -10, wantPage: 1, wantSize: defaultPageSize},
+		{name: "large size is capped", page: 2, size: maxPageSize + 1, wantPage: 2, wantSize: maxPageSize},
+		{name: "valid values pass through", page: 3, size: 50, wantPage: 3, wantSize: 50},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPage, gotSize := normalizePage(tt.page, tt.size)
+			if gotPage != tt.wantPage || gotSize != tt.wantSize {
+				t.Fatalf("normalizePage(%d, %d) = (%d, %d), want (%d, %d)",
+					tt.page, tt.size, gotPage, gotSize, tt.wantPage, tt.wantSize)
+			}
+		})
+	}
+}
+
+func TestNormalizePageFloor(t *testing.T) {
+	gotPage, gotSize := normalizePageFloor(0, maxPageSize+1)
+	if gotPage != 1 || gotSize != maxPageSize+1 {
+		t.Fatalf("normalizePageFloor() = (%d, %d), want (1, %d)", gotPage, gotSize, maxPageSize+1)
 	}
 }

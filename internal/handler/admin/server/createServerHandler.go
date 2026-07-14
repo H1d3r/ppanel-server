@@ -15,7 +15,10 @@ import (
 func CreateServerHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req types.CreateServerRequest
-		_ = httpx.ShouldBind(ctx, &req)
+		if err := httpx.ShouldBind(ctx, &req); err != nil {
+			result.ParamErrorResult(ctx, err)
+			return
+		}
 		validateErr := svcCtx.Validate(&req)
 		if validateErr != nil {
 			result.ParamErrorResult(ctx, validateErr)
