@@ -1,4 +1,4 @@
-package handler
+package route
 
 import (
 	"context"
@@ -14,9 +14,9 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// RegisterPluginHandlers 注册固定插件入口，具体插件路由由 Manager 动态分发。
-func RegisterPluginHandlers(router *server.Hertz, svcCtx *svc.ServiceContext, mgr *plugin.Manager) {
-	handler := buildPluginDispatcher(svcCtx, mgr)
+// RegisterPluginDispatcherRoutes 注册插件动态分发入口，具体插件路由由 Manager 动态分发。
+func RegisterPluginDispatcherRoutes(router *server.Hertz, svcCtx *svc.ServiceContext, mgr *plugin.Manager) {
+	handler := buildPluginRouteDispatcher(svcCtx, mgr)
 	registerPluginRoute := func(path string) {
 		router.GET(path, handler)
 		router.POST(path, handler)
@@ -31,10 +31,10 @@ func RegisterPluginHandlers(router *server.Hertz, svcCtx *svc.ServiceContext, mg
 	logger.Info("registered plugin dispatcher")
 }
 
-func buildPluginDispatcher(svcCtx *svc.ServiceContext, mgr *plugin.Manager) app.HandlerFunc {
+func buildPluginRouteDispatcher(svcCtx *svc.ServiceContext, mgr *plugin.Manager) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		pluginName := c.Param("plugin")
-		pluginPath := normalizePluginDispatchPath(c.Param("path"))
+		pluginPath := normalizePluginRoutePath(c.Param("path"))
 
 		route, ok := mgr.FindRoute(pluginName, string(c.Method()), pluginPath)
 		if !ok {
@@ -75,7 +75,7 @@ func buildPluginDispatcher(svcCtx *svc.ServiceContext, mgr *plugin.Manager) app.
 	}
 }
 
-func normalizePluginDispatchPath(path string) string {
+func normalizePluginRoutePath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" || path == "*" {
 		return "/"

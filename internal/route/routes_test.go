@@ -1,4 +1,4 @@
-package handler
+package route
 
 import (
 	"bytes"
@@ -62,7 +62,12 @@ func normalizeRouteHandler(raw string) (string, error) {
 		return "", errors.New("unsupported Hertz closure name")
 	}
 
-	return matches[1] + "." + matches[2], nil
+	logicalHandler := matches[1] + "." + matches[2]
+	return strings.Replace(logicalHandler,
+		"github.com/perfect-panel/server/internal/route.",
+		"github.com/perfect-panel/server/internal/handler.",
+		1,
+	), nil
 }
 
 func TestRegisterHandlers_rejectsPluginRequestWithoutAuthorization(t *testing.T) {

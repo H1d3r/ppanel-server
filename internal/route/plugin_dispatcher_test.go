@@ -1,4 +1,4 @@
-package handler
+package route
 
 import (
 	"context"
@@ -33,8 +33,8 @@ func TestNormalizePluginDispatchPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := normalizePluginDispatchPath(tt.in); got != tt.want {
-				t.Fatalf("normalizePluginDispatchPath(%q) = %q, want %q", tt.in, got, tt.want)
+			if got := normalizePluginRoutePath(tt.in); got != tt.want {
+				t.Fatalf("normalizePluginRoutePath(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -44,7 +44,7 @@ func TestPluginDispatcher_returnsNotFound_whenRouteIsMissing(t *testing.T) {
 	// Given
 	manager := plugin.NewManager(&plugin.HostEnv{Config: appconfig.Config{}})
 	engine := server.Default()
-	RegisterPluginHandlers(engine, &svc.ServiceContext{}, manager)
+	RegisterPluginDispatcherRoutes(engine, &svc.ServiceContext{}, manager)
 
 	for _, method := range []string{
 		http.MethodGet,
