@@ -156,9 +156,10 @@ func (n *NodeConfig) Unmarshal(data []byte) error {
 }
 
 type NodeDNS struct {
-	Proto   string   `json:"proto"`
-	Address string   `json:"address"`
-	Domains []string `json:"domains"`
+	Proto      string   `json:"proto"`
+	Address    string   `json:"address"`
+	ServerName string   `json:"server_name,omitempty"`
+	Domains    []string `json:"domains"`
 }
 
 func (n *NodeDNS) Marshal() ([]byte, error) {
@@ -189,15 +190,27 @@ type NodeOutbound struct {
 	Password             string   `json:"password"`
 	UUID                 string   `json:"uuid,omitempty"`
 	Cipher               string   `json:"cipher,omitempty"`
+	Plugin               string   `json:"plugin,omitempty"`
+	PluginOptions        any      `json:"plugin_opts,omitempty"`
 	Security             string   `json:"security,omitempty"`
 	SNI                  string   `json:"sni,omitempty"`
+	ALPN                 []string `json:"alpn,omitempty"`
 	AllowInsecure        bool     `json:"allow_insecure,omitempty"`
 	Fingerprint          string   `json:"fingerprint,omitempty"`
 	Transport            string   `json:"transport,omitempty"`
 	Host                 string   `json:"host,omitempty"`
 	Path                 string   `json:"path,omitempty"`
 	ServiceName          string   `json:"service_name,omitempty"`
+	XHTTPMode            string   `json:"xhttp_mode,omitempty"`
+	XHTTPExtra           string   `json:"xhttp_extra,omitempty"`
 	Flow                 string   `json:"flow,omitempty"`
+	Encryption           string   `json:"encryption,omitempty"`
+	EncryptionMode       string   `json:"encryption_mode,omitempty"`
+	EncryptionRTT        string   `json:"encryption_rtt,omitempty"`
+	EncryptionTicket     string   `json:"encryption_ticket,omitempty"`
+	EncryptionPadding    string   `json:"encryption_client_padding,omitempty"`
+	EncryptionPassword   string   `json:"encryption_password,omitempty"`
+	Multiplex            string   `json:"multiplex,omitempty"`
 	UoT                  bool     `json:"uot,omitempty"`
 	UoTVersion           int      `json:"uot_version,omitempty"`
 	CongestionController string   `json:"congestion_controller,omitempty"`

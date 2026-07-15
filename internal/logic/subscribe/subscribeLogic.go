@@ -112,6 +112,7 @@ func (l *SubscribeLogic) Handler(req *dto.SubscribeRequest) (resp *dto.Subscribe
 		adapter.WithSubscribeName(subscribeInfo.Name),
 		adapter.WithOutputFormat(targetApp.OutputFormat),
 		adapter.WithUserInfo(adapter.User{
+			ID:           userSubscribe.Id,
 			Password:     userSubscribe.UUID,
 			ExpiredAt:    userSubscribe.ExpireTime,
 			Download:     userSubscribe.Download,

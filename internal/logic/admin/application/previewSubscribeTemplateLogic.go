@@ -52,6 +52,7 @@ func (l *PreviewSubscribeTemplateLogic) PreviewSubscribeTemplate(req *dto.Previe
 		adapter.WithSubscribeName("Test Subscribe"),
 		adapter.WithOutputFormat(data.OutputFormat),
 		adapter.WithUserInfo(adapter.User{
+			ID:           10000,
 			Password:     "test-password",
 			ExpiredAt:    timeutil.Now().AddDate(1, 0, 0),
 			Download:     0,

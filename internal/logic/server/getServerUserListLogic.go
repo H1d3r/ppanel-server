@@ -143,9 +143,10 @@ func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListReq
 		return nil, err
 	}
 	if len(subs) == 0 {
-		return &dto.GetServerUserListResponse{
+		resp = &dto.GetServerUserListResponse{
 			Users: []dto.ServerUser{placeholderServerUser(req.ServerId, req.Protocol, l.svcCtx.Config.Node.NodeSecret)},
-		}, nil
+		}
+		return l.storeUserListResponse(cacheKey, resp)
 	}
 	users := make([]dto.ServerUser, 0)
 	for _, sub := range subs {
@@ -171,11 +172,14 @@ func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListReq
 	resp = &dto.GetServerUserListResponse{
 		Users: users,
 	}
+	return l.storeUserListResponse(cacheKey, resp)
+}
+
+func (l *GetServerUserListLogic) storeUserListResponse(cacheKey string, resp *dto.GetServerUserListResponse) (*dto.GetServerUserListResponse, error) {
 	val, _ := json.Marshal(resp)
 	etag := tool.GenerateETag(val)
 	l.response.SetHeader("ETag", etag)
-	err = l.svcCtx.Redis.Set(l.ctx, cacheKey, string(val), node.ServerCacheTTL).Err()
-	if err != nil {
+	if err := l.svcCtx.Redis.Set(l.ctx, cacheKey, string(val), node.ServerCacheTTL).Err(); err != nil {
 		l.Errorw("[ServerUserListCacheKey] redis set error", logger.Field("error", err.Error()))
 	}
 	//  Check If-None-Match header

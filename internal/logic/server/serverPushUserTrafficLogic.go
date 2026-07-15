@@ -36,6 +36,7 @@ func (l *ServerPushUserTrafficLogic) ServerPushUserTraffic(req *dto.ServerPushUs
 
 	if err = trafficagg.New(l.svcCtx).AddReport(l.ctx, serverInfo, req.Protocol, dtoTrafficToAggregator(req.Traffic)); err != nil {
 		l.Errorw("[ServerPushUserTraffic] Aggregate traffic error", logger.Field("error", err.Error()))
+		return errors.Wrap(err, "aggregate traffic")
 	}
 	return nil
 }

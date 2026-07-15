@@ -11,21 +11,24 @@ import (
 )
 
 type Proxy struct {
-	Sort   int
-	Name   string
-	Server string
-	Port   uint16
-	Type   string
-	Tags   []string
+	Sort    int
+	Name    string
+	Server  string
+	Port    uint16
+	Type    string
+	Tags    []string
+	Version int
+	Mode    string
+	Network string
 
 	// Security Options
 	Security          string
 	SNI               string // Server Name Indication for TLS
+	ALPN              []string
 	AllowInsecure     bool   // Allow insecure connections (skip certificate verification)
 	Fingerprint       string // Client fingerprint for TLS connections
 	RealityServerAddr string // Reality server address
 	RealityServerPort int    // Reality server port
-	RealityPrivateKey string // Reality private key for authentication
 	RealityPublicKey  string // Reality public key for authentication
 	RealityShortId    string // Reality short ID for authentication
 	// Transport Options
@@ -34,10 +37,13 @@ type Proxy struct {
 	Path        string // For HTTP/HTTPS
 	ServiceName string // For gRPC
 	// Shadowsocks Options
-	Method     string
-	ServerKey  string // For Shadowsocks 2022
-	UoT        bool   // UDP over TCP
-	UoTVersion int    // UoT version (1 or 2)
+	Method              string
+	ServerKey           string // For Shadowsocks 2022
+	Plugin              string
+	PluginOptions       any
+	UoT                 bool // UDP over TCP
+	UoTVersion          int  // UoT version (1 or 2)
+	AcceptProxyProtocol bool
 
 	// Vmess/Vless/Trojan Options
 	Flow string // Flow for Vmess/Vless/Trojan
@@ -49,21 +55,28 @@ type Proxy struct {
 	DownMbps     int    // Download speed in Mbps
 
 	// Tuic Options
-	DisableSNI           bool   // Disable SNI
-	ReduceRtt            bool   // Reduce RTT
-	UDPRelayMode         string // UDP relay mode (e.g., "full", "partial")
-	CongestionController string // Congestion controller (e.g., "cubic", "bbr")
+	DisableSNI            bool // Disable SNI
+	ReduceRtt             bool // Reduce RTT
+	Heartbeat             int
+	UDPRelayMode          string // UDP relay mode (e.g., "full", "partial")
+	CongestionController  string // Congestion controller (e.g., "cubic", "bbr")
+	QUICCongestionControl string
 
 	// AnyTLS
 	PaddingScheme string
 
-	// Mieru
-	Multiplex string
+	// Protocol-independent multiplexing and Mieru options.
+	Multiplex           string
+	TrafficPattern      string
+	UserHintIsMandatory bool
 
-	// Obfs
-	//Obfs     string // obfs, 'none', 'http', 'tls'
-	//ObfsHost string // obfs host
-	//ObfsPath string // obfs path
+	// ShadowsocksR and compatible obfuscation options.
+	Obfs          string
+	SSRProtocol   string
+	ProtocolParam string
+	ObfsParam     string
+	ObfsHost      string
+	ObfsPath      string
 
 	// Vless
 	XhttpMode  string // xhttp mode
@@ -73,9 +86,6 @@ type Proxy struct {
 	Encryption              string // encryption，'none', 'mlkem768x25519plus'
 	EncryptionMode          string // encryption mode，'native', 'xorpub', 'random'
 	EncryptionRtt           string // encryption rtt，'0rtt', '1rtt'
-	EncryptionTicket        string // encryption ticket
-	EncryptionServerPadding string // encryption server padding
-	EncryptionPrivateKey    string // encryption private key
 	EncryptionClientPadding string // encryption client padding
 	EncryptionPassword      string // encryption password
 
@@ -90,6 +100,7 @@ type Proxy struct {
 }
 
 type User struct {
+	ID           int64
 	Password     string
 	ExpiredAt    time.Time
 	Download     int64
