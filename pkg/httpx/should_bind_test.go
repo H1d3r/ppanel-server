@@ -1,6 +1,8 @@
 package httpx
 
 import (
+	"io"
+	"net/http"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -32,6 +34,34 @@ func TestShouldBind_bindsJSON_whenContentTypeIsJSON(t *testing.T) {
 	}
 }
 
+func TestShouldBind_bindsQuery_whenJSONContentTypeHasEmptyBody(t *testing.T) {
+	// Given
+	requestContext := newRequestContext("/resources?name=query", "application/json", "")
+	requestContext.Request.Header.SetMethod(http.MethodGet)
+	var destination jsonDestination
+
+	// When
+	err := ShouldBind(requestContext, &destination)
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, jsonDestination{Name: "query"}, destination)
+}
+
+func TestShouldBind_rejectsEmptyJSONBody_whenMethodIsPost(t *testing.T) {
+	// Given
+	requestContext := newRequestContext("/resources?name=query", "application/json", "")
+	requestContext.Request.Header.SetMethod(http.MethodPost)
+	var destination jsonDestination
+
+	// When
+	err := ShouldBind(requestContext, &destination)
+
+	// Then
+	require.ErrorIs(t, err, io.EOF)
+	require.Empty(t, destination)
+}
+
 func TestShouldBind_bindsQueryBeforeBody_whenNonJSONBodyPresent(t *testing.T) {
 	// Given
 	requestContext := newRequestContext("/resources?query_only=query&name=query", "application/x-www-form-urlencoded", "name=body")
@@ -48,6 +78,7 @@ func TestShouldBind_bindsQueryBeforeBody_whenNonJSONBodyPresent(t *testing.T) {
 func TestShouldBind_bindsQuery_whenNonJSONBodyIsEmpty(t *testing.T) {
 	// Given
 	requestContext := newRequestContext("/resources?name=query", "application/x-www-form-urlencoded", "")
+	requestContext.Request.Header.SetMethod(http.MethodPost)
 	var destination formDestination
 
 	// When

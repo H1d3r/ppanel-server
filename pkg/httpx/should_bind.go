@@ -13,6 +13,12 @@ import (
 
 // ShouldBind preserves endpoint request-binding behavior for native Hertz contexts.
 func ShouldBind(ctx *app.RequestContext, destination any) error {
+	// Some clients set a default JSON content type even for bodyless GET
+	// requests. GET parameters belong to the query string, so do not attempt to
+	// decode a nonexistent JSON document in that specific compatibility case.
+	if ctx.Request.Header.IsGet() && len(ctx.Request.Body()) == 0 {
+		return bindValues(destination, queryValues(ctx))
+	}
 	if isJSONRequest(ctx) {
 		return ctx.BindJSON(destination)
 	}
