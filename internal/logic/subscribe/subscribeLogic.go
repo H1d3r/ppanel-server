@@ -142,8 +142,14 @@ func (l *SubscribeLogic) Handler(req *dto.SubscribeRequest) (resp *dto.Subscribe
 	headers := make(map[string]string)
 	for _, format := range formats {
 		if format == strings.ToLower(targetApp.OutputFormat) {
-			headers["Content-Disposition"] = fmt.Sprintf("attachment;filename*=UTF-8''%s.%s", url.QueryEscape(l.svc.Config.Site.SiteName), format)
+			headers["Content-Disposition"] = fmt.Sprintf("attachment;filename*=UTF-8''%s", url.PathEscape(l.svc.Config.Site.SiteName))
 			headers["Content-Type"] = "application/octet-stream; charset=UTF-8"
+			if l.svc.Config.Subscribe.ProfileUpdateInterval > 0 {
+				headers["profile-update-interval"] = fmt.Sprintf("%d", l.svc.Config.Subscribe.ProfileUpdateInterval)
+			}
+			if profileURL := strings.TrimSpace(l.svc.Config.Subscribe.ProfileWebPageURL); profileURL != "" {
+				headers["profile-web-page-url"] = profileURL
+			}
 		}
 	}
 

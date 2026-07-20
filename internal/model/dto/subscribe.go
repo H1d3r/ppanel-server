@@ -154,13 +154,15 @@ type Subscribe struct {
 }
 
 type SubscribeConfig struct {
-	SingleModel     bool   `json:"single_model"`
-	SubscribePath   string `json:"subscribe_path"`
-	SubscribeDomain string `json:"subscribe_domain"`
-	PanDomain       bool   `json:"pan_domain"`
-	UserAgentLimit  bool   `json:"user_agent_limit"`
-	UserAgentList   string `json:"user_agent_list"`
-	ShowTutorial    bool   `json:"show_tutorial"`
+	SingleModel           bool   `json:"single_model"`
+	SubscribePath         string `json:"subscribe_path"`
+	SubscribeDomain       string `json:"subscribe_domain"`
+	PanDomain             bool   `json:"pan_domain"`
+	UserAgentLimit        bool   `json:"user_agent_limit"`
+	UserAgentList         string `json:"user_agent_list"`
+	ShowTutorial          bool   `json:"show_tutorial"`
+	ProfileUpdateInterval int64  `json:"profile_update_interval"`
+	ProfileWebPageURL     string `json:"profile_web_page_url"`
 }
 
 type SubscribeGroup struct {

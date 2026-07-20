@@ -39,8 +39,19 @@ func (l *UpdateLogSettingLogic) UpdateLogSetting(req *dto.LogSetting) error {
 			// Get the field name
 			fieldName := t.Field(i).Name
 			// Get the field value to string
-			fieldValue := tool.ConvertValueToString(v.Field(i))
-			if err := systemStore.UpdateValueByCategoryKey(l.ctx, "log", fieldName, fieldValue); err != nil {
+			field := v.Field(i)
+			fieldValue := tool.ConvertValueToString(field)
+			fieldType := "string"
+			if field.Kind() == reflect.Ptr {
+				field = reflect.New(field.Type().Elem()).Elem()
+			}
+			switch field.Kind() {
+			case reflect.Bool:
+				fieldType = "bool"
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				fieldType = "int64"
+			}
+			if err := systemStore.UpdateValueByCategoryKey(l.ctx, "log", fieldName, fieldValue, fieldType); err != nil {
 				return err
 			}
 		}

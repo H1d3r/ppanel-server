@@ -39,7 +39,7 @@ type SystemRepo interface {
 	GetCurrencyConfig(ctx context.Context) ([]*system.System, error)
 	GetVerifyCodeConfig(ctx context.Context) ([]*system.System, error)
 	GetLogConfig(ctx context.Context) ([]*system.System, error)
-	UpdateValueByCategoryKey(ctx context.Context, category, key, value string) error
+	UpdateValueByCategoryKey(ctx context.Context, category, key, value string, valueType ...string) error
 	UpdateNodeMultiplierConfig(ctx context.Context, config string) error
 	FindNodeMultiplierConfig(ctx context.Context) (*system.System, error)
 }
@@ -229,11 +229,25 @@ func (m *systemRepo) GetCurrencyConfig(ctx context.Context) ([]*system.System, e
 	return configs, err
 }
 
-func (m *systemRepo) UpdateValueByCategoryKey(ctx context.Context, category, key, value string) error {
+func (m *systemRepo) UpdateValueByCategoryKey(ctx context.Context, category, key, value string, valueType ...string) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Model(&system.System{}).
+		result := conn.Model(&system.System{}).
 			Scopes(systemWhereCategoryKey(category, key)).
-			Update("value", value).Error
+			Update("value", value)
+		if result.Error != nil || result.RowsAffected > 0 {
+			return result.Error
+		}
+		fieldType := "string"
+		if len(valueType) > 0 && valueType[0] != "" {
+			fieldType = valueType[0]
+		}
+		return conn.Create(&system.System{
+			Category: category,
+			Key:      key,
+			Value:    value,
+			Type:     fieldType,
+			Desc:     key,
+		}).Error
 	})
 }
 

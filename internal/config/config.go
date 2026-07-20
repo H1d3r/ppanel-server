@@ -64,13 +64,15 @@ type Verify struct {
 }
 
 type SubscribeConfig struct {
-	SingleModel     bool   `yaml:"SingleModel" default:"false"`
-	SubscribePath   string `yaml:"SubscribePath" default:"/v1/subscribe/config"`
-	SubscribeDomain string `yaml:"SubscribeDomain" default:""`
-	PanDomain       bool   `yaml:"PanDomain" default:"false"`
-	UserAgentLimit  bool   `yaml:"UserAgentLimit" default:"false"`
-	UserAgentList   string `yaml:"UserAgentList" default:""`
-	ShowTutorial    bool   `yaml:"ShowTutorial" default:"true"`
+	SingleModel           bool   `yaml:"SingleModel" default:"false"`
+	SubscribePath         string `yaml:"SubscribePath" default:"/v1/subscribe/config"`
+	SubscribeDomain       string `yaml:"SubscribeDomain" default:""`
+	PanDomain             bool   `yaml:"PanDomain" default:"false"`
+	UserAgentLimit        bool   `yaml:"UserAgentLimit" default:"false"`
+	UserAgentList         string `yaml:"UserAgentList" default:""`
+	ShowTutorial          bool   `yaml:"ShowTutorial" default:"true"`
+	ProfileUpdateInterval int64  `yaml:"ProfileUpdateInterval" default:"0"`
+	ProfileWebPageURL     string `yaml:"ProfileWebPageURL" default:""`
 }
 
 type RegisterConfig struct {
