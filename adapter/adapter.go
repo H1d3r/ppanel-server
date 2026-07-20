@@ -99,6 +99,7 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 	var proxies []Proxy
 
 	for _, item := range servers {
+		itemProtocol := canonicalProtocolType(item.Protocol)
 		if item.Server == nil {
 			logger.Errorf("[Adapter] Server is nil for node ID: %d", item.Id)
 			continue
@@ -109,7 +110,9 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 			continue
 		}
 		for _, protocol := range protocols {
-			if protocol.Type == item.Protocol {
+			protocolType := canonicalProtocolType(protocol.Type)
+			if protocolType == itemProtocol {
+				protocol.Type = protocolType
 				plugin, pluginOptions := clientPluginConfig(protocol, item.Address)
 				proxies = append(
 					proxies,
@@ -118,7 +121,7 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 						Name:                    item.Name,
 						Server:                  item.Address,
 						Port:                    item.Port,
-						Type:                    item.Protocol,
+						Type:                    protocolType,
 						Tags:                    strings.Split(item.Tags, ","),
 						Version:                 protocol.Version,
 						Mode:                    protocol.Mode,
@@ -185,4 +188,12 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 	}
 
 	return proxies, nil
+}
+
+func canonicalProtocolType(raw string) string {
+	protocol, err := node.NormalizeProtocolForStorage(node.Protocol{Type: raw})
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+	return protocol.Type
 }

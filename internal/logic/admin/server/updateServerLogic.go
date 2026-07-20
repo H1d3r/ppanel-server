@@ -52,6 +52,12 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 		// update address
 		data.Address = req.Address
 	}
+	existingProtocols, err := data.UnmarshalProtocols()
+	if err != nil {
+		l.Errorf("[UpdateServer] Unmarshal Protocols Error: %v", err.Error())
+		return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols unmarshal error"), "protocols unmarshal error: %v", err)
+	}
+	existingKeys := protocolKeyLookup(existingProtocols)
 	protocols := make([]node.Protocol, 0)
 	for _, item := range req.Protocols {
 		if item.Type == "" {
@@ -59,6 +65,11 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 		}
 		var protocol node.Protocol
 		tool.DeepCopy(&protocol, item)
+		ensureGeneratedProtocolKey(&protocol, existingKeys)
+		protocol, err := node.NormalizeProtocolForStorage(protocol)
+		if err != nil {
+			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, err.Error()), "protocols normalize error: %v", err)
+		}
 
 		// VLESS Reality Key Generation
 		if protocol.Type == "vless" {

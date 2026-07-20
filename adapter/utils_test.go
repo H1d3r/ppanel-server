@@ -30,6 +30,70 @@ func TestAdapterProxy(t *testing.T) {
 	}
 }
 
+func TestAdapterProxyMatchesCanonicalProtocolAliases(t *testing.T) {
+	srv := &node.Server{
+		Id:      1,
+		Name:    "AliasServer",
+		Address: "example.com",
+	}
+	if err := srv.MarshalProtocols([]node.Protocol{
+		{
+			Type:        "shadowsocksr",
+			Port:        8389,
+			Enable:      true,
+			Cipher:      "aes-256-cfb",
+			ServerKey:   "server-password",
+			SSRProtocol: "auth_aes128_md5",
+			Obfs:        "tls1.2_ticket_auth",
+			ObfsParam:   "example.com",
+		},
+		{
+			Type:   "hysteria",
+			Port:   443,
+			Enable: true,
+			SNI:    "tls.example.com",
+		},
+	}); err != nil {
+		t.Fatalf("marshal protocols: %v", err)
+	}
+
+	enabled := true
+	proxies, err := NewAdapter(tpl).Proxies([]*node.Node{
+		{
+			Id:       1,
+			Name:     "SSR Alias",
+			Port:     8389,
+			Address:  "ssr.example.com",
+			ServerId: srv.Id,
+			Server:   srv,
+			Protocol: "ssr",
+			Enabled:  &enabled,
+		},
+		{
+			Id:       2,
+			Name:     "Hysteria Alias",
+			Port:     443,
+			Address:  "hy.example.com",
+			ServerId: srv.Id,
+			Server:   srv,
+			Protocol: "hysteria2",
+			Enabled:  &enabled,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to adapt servers: %v", err)
+	}
+	if len(proxies) != 2 {
+		t.Fatalf("proxies len = %d, want 2", len(proxies))
+	}
+	if proxies[0].Type != "shadowsocksr" || proxies[0].SSRProtocol != "auth_aes128_md5" || proxies[0].ServerKey != "server-password" {
+		t.Fatalf("first proxy = %#v, want canonical shadowsocksr fields", proxies[0])
+	}
+	if proxies[1].Type != "hysteria" || proxies[1].SNI != "tls.example.com" {
+		t.Fatalf("second proxy = %#v, want canonical hysteria fields", proxies[1])
+	}
+}
+
 func getServers() []*node.Node {
 	srv := &node.Server{
 		Id:      1,

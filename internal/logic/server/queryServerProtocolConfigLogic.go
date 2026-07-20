@@ -5,6 +5,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/logic/nodeconfig"
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/model/entity/node"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -40,6 +41,7 @@ func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.Quer
 		l.Errorf("[FilterServerList] UnmarshalProtocols Error: %s", err.Error())
 		return nil, err
 	}
+	dst = node.SanitizeProtocolsForNodeDistribution(dst)
 	tool.DeepCopy(&protocols, dst)
 
 	// only return enabled protocols for node distribution
@@ -57,7 +59,12 @@ func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.Quer
 		var filtered []dto.Protocol
 		protocolSet := make(map[string]struct{})
 		for _, p := range req.Protocols {
-			protocolSet[p] = struct{}{}
+			protocol, err := node.NormalizeProtocolForStorage(node.Protocol{Type: p})
+			if err != nil {
+				protocolSet[p] = struct{}{}
+				continue
+			}
+			protocolSet[protocol.Type] = struct{}{}
 		}
 		for _, p := range protocols {
 			if _, exists := protocolSet[p.Type]; exists {

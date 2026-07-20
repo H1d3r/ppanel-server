@@ -45,6 +45,11 @@ func (l *CreateServerLogic) CreateServer(req *dto.CreateServerRequest) error {
 		}
 		var protocol node.Protocol
 		tool.DeepCopy(&protocol, item)
+		ensureGeneratedProtocolKey(&protocol, nil)
+		protocol, err := node.NormalizeProtocolForStorage(protocol)
+		if err != nil {
+			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, err.Error()), "protocols normalize error: %v", err)
+		}
 
 		// VLESS Reality Key Generation
 		if protocol.Type == "vless" {
