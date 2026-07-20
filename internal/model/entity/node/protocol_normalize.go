@@ -76,6 +76,13 @@ func normalizeProtocolNoopFields(protocol *Protocol) {
 	if protocol.Security != "tls" {
 		clearCertificate(protocol)
 	}
+	if protocol.Security != "reality" {
+		clearReality(protocol)
+	}
+	if protocol.CertMode != "dns" {
+		protocol.CertDNSProvider = ""
+		protocol.CertDNSEnv = ""
+	}
 	if protocol.Encryption == "" {
 		clearEncryption(protocol)
 	}
@@ -387,9 +394,6 @@ func validateShadowsocksPlugin(protocol *Protocol) error {
 	}
 
 	if protocol.Plugin == "" {
-		if len(options.values) > 0 {
-			return fmt.Errorf("shadowsocks plugin_opts requires plugin")
-		}
 		protocol.PluginOptions = nil
 		clearShadowsocksTLS(protocol)
 		return nil

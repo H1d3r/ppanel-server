@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"strings"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/node"
@@ -58,55 +57,32 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 		return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols unmarshal error"), "protocols unmarshal error: %v", err)
 	}
 	existingKeys := protocolKeyLookup(existingProtocols)
+	existingServerKeys := serverKeyLookup(existingProtocols)
+	existingRealityKeys := realityProtocolKeyLookup(existingProtocols)
+	existingProtocolLookup := protocolLookup(existingProtocols)
 	protocols := make([]node.Protocol, 0)
-	for _, item := range req.Protocols {
+	for index, item := range req.Protocols {
 		if item.Type == "" {
 			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols type is empty"), "protocols type is empty")
 		}
 		var protocol node.Protocol
 		tool.DeepCopy(&protocol, item)
+		if existing, ok := existingProtocolLookup[normalizedProtocolType(item.Type)]; ok {
+			protocol, err = mergeMissingProtocolFields(protocol, existing, protocolFieldSetAt(req.ProtocolFieldSets, index))
+			if err != nil {
+				return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols merge error"), "protocols merge error: %v", err)
+			}
+		}
 		ensureGeneratedProtocolKey(&protocol, existingKeys)
+		ensureShadowsocks2022ServerKey(&protocol, existingServerKeys)
+		if err := ensureRealityProtocolKey(&protocol, existingRealityKeys); err != nil {
+			l.Errorf("[UpdateServer] Generate Reality Key Error: %v", err.Error())
+			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "generate reality key error: %v", err)
+		}
+		ensureRealityProtocolDefaults(&protocol)
 		protocol, err := node.NormalizeProtocolForStorage(protocol)
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, err.Error()), "protocols normalize error: %v", err)
-		}
-
-		// VLESS Reality Key Generation
-		if protocol.Type == "vless" {
-			if protocol.Security == "reality" {
-				if protocol.RealityPublicKey == "" {
-					public, private, err := tool.Curve25519Genkey(false, "")
-					if err != nil {
-						l.Errorf("[CreateServer] Generate Reality Key Error: %v", err.Error())
-						return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "generate reality key error: %v", err)
-					}
-					protocol.RealityPublicKey = public
-					protocol.RealityPrivateKey = private
-					protocol.RealityShortId = tool.GenerateShortID(private)
-				}
-				if protocol.RealityServerAddr == "" {
-					protocol.RealityServerAddr = protocol.SNI
-				}
-				if protocol.RealityServerPort == 0 {
-					protocol.RealityServerPort = 443
-				}
-			}
-
-		}
-		// ShadowSocks 2022 Key Generation
-		if protocol.Type == "shadowsocks" {
-			if strings.Contains(protocol.Cipher, "2022") {
-				var length int
-				switch protocol.Cipher {
-				case "2022-blake3-aes-128-gcm":
-					length = 16
-				default:
-					length = 32
-				}
-				if len(protocol.ServerKey) != length {
-					protocol.ServerKey = tool.GenerateCipher(protocol.ServerKey, length)
-				}
-			}
 		}
 		protocols = append(protocols, protocol)
 	}
