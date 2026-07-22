@@ -28,6 +28,8 @@ type SubscribeRepo interface {
 	Insert(ctx context.Context, data *subscribe.Subscribe, tx ...*gorm.DB) error
 	FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error)
 	Update(ctx context.Context, data *subscribe.Subscribe, tx ...*gorm.DB) error
+	ReserveInventory(ctx context.Context, id int64, tx ...*gorm.DB) (bool, error)
+	RestoreInventory(ctx context.Context, id int64, tx ...*gorm.DB) error
 	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
 	FilterList(ctx context.Context, params *subscribe.FilterParams) (int64, []*subscribe.Subscribe, error)
 	ClearCache(ctx context.Context, id ...int64) error
@@ -165,6 +167,53 @@ func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe, t
 		}
 		return db.Save(data).Error
 	}, cacheKeys...)
+}
+
+// ReserveInventory consumes one finite inventory unit with a conditional update.
+// A stale plan object must never decide whether stock is still available.
+func (m *subscribeRepo) ReserveInventory(ctx context.Context, id int64, tx ...*gorm.DB) (bool, error) {
+	data, err := m.FindOne(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if data.Inventory == -1 {
+		return true, nil
+	}
+	if data.Inventory <= 0 {
+		return false, nil
+	}
+	var reserved bool
+	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		result := conn.Model(&subscribe.Subscribe{}).
+			Where("id = ? AND inventory > 0", id).
+			UpdateColumn("inventory", gorm.Expr("inventory - 1"))
+		reserved = result.RowsAffected == 1
+		return result.Error
+	}, m.getCacheKeys(data)...)
+	return reserved, err
+}
+
+// RestoreInventory returns one previously reserved finite inventory unit. An
+// unlimited plan (inventory = -1) remains unlimited.
+func (m *subscribeRepo) RestoreInventory(ctx context.Context, id int64, tx ...*gorm.DB) error {
+	data, err := m.FindOne(ctx, id)
+	if err != nil {
+		return err
+	}
+	if data.Inventory == -1 {
+		return nil
+	}
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		return conn.Model(&subscribe.Subscribe{}).
+			Where("id = ? AND inventory >= 0", id).
+			UpdateColumn("inventory", gorm.Expr("inventory + 1")).Error
+	}, m.getCacheKeys(data)...)
 }
 
 func (m *subscribeRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error {

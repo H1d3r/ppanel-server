@@ -122,7 +122,7 @@ func (l *RenewalLogic) Renewal(req *dto.RenewalOrderRequest) (resp *dto.RenewalO
 			l.Errorw("[Renewal] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id), logger.Field("coupon", req.Coupon))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find coupon error: %v", err.Error())
 		}
-		if count >= couponInfo.UserLimit {
+		if couponInfo.UserLimit > 0 && count >= couponInfo.UserLimit {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon limit exceeded")
 		}
 		coupon = calculateCoupon(amount, couponInfo)
@@ -132,38 +132,10 @@ func (l *RenewalLogic) Renewal(req *dto.RenewalOrderRequest) (resp *dto.RenewalO
 		l.Errorw("[Renewal] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment error: %v", err.Error())
 	}
+	if err := ensurePaymentAvailable(payment); err != nil {
+		return nil, err
+	}
 	amount -= coupon
-
-	var deductionAmount int64
-	// Check user deduction amount
-	if u.GiftAmount > 0 {
-		if u.GiftAmount >= amount {
-			deductionAmount = amount
-			u.GiftAmount -= deductionAmount
-			amount = 0
-		} else {
-			deductionAmount = u.GiftAmount
-			amount -= u.GiftAmount
-			u.GiftAmount = 0
-		}
-	}
-
-	var feeAmount int64
-	// Calculate the handling fee
-	if amount > 0 {
-		feeAmount = calculateFee(amount, payment)
-	}
-
-	amount += feeAmount
-
-	// Final validation after adding fee
-	if amount > MaxOrderAmount {
-		l.Errorw("[Renewal] Final order amount exceeds maximum limit after fee",
-			logger.Field("amount", amount),
-			logger.Field("max", MaxOrderAmount),
-			logger.Field("user_id", u.Id))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "order amount exceeds maximum limit")
-	}
 
 	// create order
 	orderInfo := order.Order{
@@ -174,24 +146,49 @@ func (l *RenewalLogic) Renewal(req *dto.RenewalOrderRequest) (resp *dto.RenewalO
 		Quantity:       req.Quantity,
 		Price:          price,
 		Amount:         amount,
-		GiftAmount:     deductionAmount,
+		GiftAmount:     0,
 		Discount:       discountAmount,
 		Coupon:         req.Coupon,
 		CouponDiscount: coupon,
 		PaymentId:      payment.Id,
 		Method:         payment.Platform,
-		FeeAmount:      feeAmount,
+		FeeAmount:      0,
 		Status:         1,
 		SubscribeId:    userSubscribe.SubscribeId,
 		SubscribeToken: userSubscribe.Token,
 	}
 	// Database transaction
 	err = store.InTx(l.ctx, func(txStore repository.Store) error {
-		// update user deduction && Pre deduction ,Return after canceling the order
+		lockedUser, e := txStore.User().FindOneForUpdate(l.ctx, u.Id)
+		if e != nil {
+			return e
+		}
+		if lockedUser.GiftAmount > 0 && orderInfo.Amount > 0 {
+			orderInfo.GiftAmount = min(lockedUser.GiftAmount, orderInfo.Amount)
+			orderInfo.Amount -= orderInfo.GiftAmount
+		}
+		if orderInfo.Amount > 0 {
+			orderInfo.FeeAmount = calculateFee(orderInfo.Amount, payment)
+			orderInfo.Amount += orderInfo.FeeAmount
+		}
+		if orderInfo.Amount > MaxOrderAmount {
+			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "order amount exceeds maximum limit")
+		}
+		if orderInfo.Coupon != "" {
+			reserved, reserveErr := txStore.Coupon().ReserveUsage(l.ctx, orderInfo.Coupon, timeutil.Now().Unix())
+			if reserveErr != nil {
+				return reserveErr
+			}
+			if !reserved {
+				return errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used or expired")
+			}
+			orderInfo.CouponReserved = true
+		}
+
 		if orderInfo.GiftAmount > 0 {
-			// update user deduction && Pre deduction ,Return after canceling the order
-			if err := txStore.User().Update(l.ctx, u); err != nil {
-				l.Errorw("[Renewal] Database update error", logger.Field("error", err.Error()), logger.Field("user", u))
+			lockedUser.GiftAmount -= orderInfo.GiftAmount
+			if err := txStore.User().UpdateBalanceFields(l.ctx, lockedUser); err != nil {
+				l.Errorw("[Renewal] Database update error", logger.Field("error", err.Error()), logger.Field("user", lockedUser))
 				return err
 			}
 			// create deduction record
@@ -200,7 +197,7 @@ func (l *RenewalLogic) Renewal(req *dto.RenewalOrderRequest) (resp *dto.RenewalO
 				OrderNo:     orderInfo.OrderNo,
 				SubscribeId: 0,
 				Amount:      orderInfo.GiftAmount,
-				Balance:     u.GiftAmount,
+				Balance:     lockedUser.GiftAmount,
 				Remark:      "Renewal order deduction",
 				Timestamp:   timeutil.Now().UnixMilli(),
 			}
@@ -209,7 +206,7 @@ func (l *RenewalLogic) Renewal(req *dto.RenewalOrderRequest) (resp *dto.RenewalO
 			if err := txStore.Log().Insert(l.ctx, &log.SystemLog{
 				Type:     log.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: u.Id,
+				ObjectID: lockedUser.Id,
 				Content:  string(content),
 			}); err != nil {
 				l.Errorw("[Renewal] Database insert error", logger.Field("error", err.Error()), logger.Field("deductionLog", giftLog))

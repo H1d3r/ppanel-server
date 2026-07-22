@@ -40,6 +40,12 @@ func (m *Service) Start() {
 	if _, err := m.server.Register("@every 60s", reconcilePaidOrdersTask, asynq.MaxRetry(3)); err != nil {
 		logger.Errorf("register paid order reconciliation task failed: %s", err.Error())
 	}
+	// A one-shot close task can be lost before enqueue or exhaust retries. The
+	// pending-state reconciler is the durable backstop for stock/coupon holds.
+	reconcilePendingOrdersTask := asynq.NewTask(types.SchedulerReconcilePendingOrders, nil)
+	if _, err := m.server.Register("@every 60s", reconcilePendingOrdersTask, asynq.MaxRetry(3)); err != nil {
+		logger.Errorf("register pending order reconciliation task failed: %s", err.Error())
+	}
 	//// schedule total server data task: every 5 minutes
 	//totalServerDataTask := asynq.NewTask(types.SchedulerTotalServerData, nil)
 	//if _, err := m.server.Register("@every 180s", totalServerDataTask); err != nil {

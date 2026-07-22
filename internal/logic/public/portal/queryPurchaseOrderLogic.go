@@ -2,11 +2,13 @@ package portal
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
+	"github.com/perfect-panel/server/internal/model/entity/user"
 
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -47,10 +49,13 @@ func (l *QueryPurchaseOrderLogic) QueryPurchaseOrder(req *dto.QueryPurchaseOrder
 	if err != nil {
 		return nil, wrapDatabaseError(err)
 	}
+	if err := l.authorizePurchaseOrder(orderInfo, req); err != nil {
+		return nil, err
+	}
 	// Handle temporary orders if applicable
 	var token string
 	if orderInfo.Status == 2 || orderInfo.Status == 5 {
-		if token, err = l.handleTemporaryOrder(orderInfo, req); err != nil {
+		if token, err = l.handleTemporaryOrder(orderInfo); err != nil {
 			return nil, err
 		}
 	}
@@ -77,49 +82,50 @@ func (l *QueryPurchaseOrderLogic) QueryPurchaseOrder(req *dto.QueryPurchaseOrder
 	}, nil
 }
 
-// handleTemporaryOrder processes temporary order-related operations
-func (l *QueryPurchaseOrderLogic) handleTemporaryOrder(orderInfo *order.Order, req *dto.QueryPurchaseOrderRequest) (string, error) {
+// authorizePurchaseOrder accepts either the authenticated owner of a completed
+// guest order or the unguessable checkout capability issued when that order was
+// created.  An email/identifier is not authentication and must never be used to
+// mint a session token.
+func (l *QueryPurchaseOrderLogic) authorizePurchaseOrder(orderInfo *order.Order, req *dto.QueryPurchaseOrderRequest) error {
+	if orderInfo.UserId != 0 {
+		if currentUser, ok := l.ctx.Value(constant.CtxKeyUser).(*user.User); ok && currentUser.Id == orderInfo.UserId {
+			return nil
+		}
+	}
+	if req.CheckoutToken == "" {
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is required")
+	}
+	if orderInfo.GuestCheckoutTokenHash != "" {
+		if subtle.ConstantTimeCompare([]byte(orderInfo.GuestCheckoutTokenHash), []byte(constant.CheckoutTokenHash(req.CheckoutToken))) != 1 {
+			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+		}
+		return nil
+	}
+	// Compatibility for orders created before guest details were made durable.
 	cacheKey := fmt.Sprintf(constant.TempOrderCacheKey, orderInfo.OrderNo)
 	cacheValue, err := l.svcCtx.Redis.Get(l.ctx, cacheKey).Result()
 	if err != nil {
-		l.Errorw("Get TempOrderCacheKey Error", logger.Field("cacheKey", cacheKey), logger.Field("error", err.Error()))
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Get TempOrderCacheKey Error: %v", err.Error())
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
 	}
-
 	var tempOrder constant.TemporaryOrderInfo
 	if err := json.Unmarshal([]byte(cacheValue), &tempOrder); err != nil {
-		l.Errorw("JSON Unmarshal Error", logger.Field("error", err.Error()), logger.Field("cacheValue", cacheValue))
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "JSON Unmarshal Error: %v", err.Error())
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
 	}
-	if tempOrder.OrderNo != orderInfo.OrderNo {
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Order number mismatch")
+	if tempOrder.OrderNo != orderInfo.OrderNo || tempOrder.CheckoutToken == "" ||
+		subtle.ConstantTimeCompare([]byte(tempOrder.CheckoutToken), []byte(req.CheckoutToken)) != 1 {
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
 	}
+	return nil
+}
 
-	// Validate user and email
-	if err = l.validateUserAndEmail(orderInfo, req.AuthType, req.Identifier); err != nil {
-		return "", err
+// handleTemporaryOrder processes temporary order-related operations
+func (l *QueryPurchaseOrderLogic) handleTemporaryOrder(orderInfo *order.Order) (string, error) {
+	if orderInfo.UserId == 0 {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "guest account is not ready")
 	}
 
 	// Generate session token
 	return l.generateSessionToken(orderInfo.UserId)
-}
-
-// validateUserAndEmail ensures the user and email are correct
-func (l *QueryPurchaseOrderLogic) validateUserAndEmail(orderInfo *order.Order, platform, openid string) error {
-	userInfo, err := l.svcCtx.Store.User().FindOne(l.ctx, orderInfo.UserId)
-	if err != nil {
-		return wrapDatabaseError(err)
-	}
-
-	authMethod, err := l.svcCtx.Store.User().FindUserAuthMethodByOpenID(l.ctx, platform, openid)
-	if err != nil {
-		return wrapDatabaseError(err)
-	}
-	if authMethod.UserId != userInfo.Id {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Email verification failed")
-	}
-
-	return nil
 }
 
 // generateSessionToken creates a session token and stores it in Redis

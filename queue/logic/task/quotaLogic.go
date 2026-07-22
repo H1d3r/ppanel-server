@@ -284,7 +284,7 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 		return nil
 	}
 
-	userInfo, err := store.User().FindOne(ctx, sub.UserId)
+	userInfo, err := store.User().FindOneForUpdate(ctx, sub.UserId)
 	if err != nil {
 		*errors = append(*errors, ErrorInfo{
 			UserSubscribeId: sub.Id,
@@ -314,24 +314,12 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 
 	if giftAmount > 0 {
 		userInfo.GiftAmount += giftAmount
-		// 使用Update而不是Save，更精确地更新单个字段
-		if err := store.User().Update(ctx, userInfo); err != nil {
-			*errors = append(*errors, ErrorInfo{
-				UserSubscribeId: sub.Id,
-				Error:           "update user gift amount error: " + err.Error(),
-			})
-			return nil
+		if err := store.User().UpdateBalanceFields(ctx, userInfo); err != nil {
+			return fmt.Errorf("update user gift amount: %w", err)
 		}
 
 		if err := l.createGiftLog(ctx, store, sub.Id, userInfo.Id, giftAmount, userInfo.GiftAmount, now); err != nil {
-			*errors = append(*errors, ErrorInfo{
-				UserSubscribeId: sub.Id,
-				Error:           "create gift log error: " + err.Error(),
-			})
-			// 回滚用户金额更新
-			userInfo.GiftAmount -= giftAmount
-			_ = store.User().Update(ctx, userInfo)
-			return nil
+			return fmt.Errorf("create gift log: %w", err)
 		}
 	}
 

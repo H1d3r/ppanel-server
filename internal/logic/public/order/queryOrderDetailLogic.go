@@ -4,7 +4,9 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/svc"
+	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -27,10 +29,17 @@ func NewQueryOrderDetailLogic(ctx context.Context, svcCtx *svc.ServiceContext) *
 }
 
 func (l *QueryOrderDetailLogic) QueryOrderDetail(req *dto.QueryOrderDetailRequest) (resp *dto.OrderDetail, err error) {
+	currentUser, ok := l.ctx.Value(constant.CtxKeyUser).(*user.User)
+	if !ok || currentUser == nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+	}
 	orderInfo, err := l.svcCtx.Store.Order().FindOneDetailsByOrderNo(l.ctx, req.OrderNo)
 	if err != nil {
 		l.Errorw("[QueryOrderDetail] Database query error", logger.Field("error", err.Error()), logger.Field("order_no", req.OrderNo))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find order error: %v", err.Error())
+	}
+	if orderInfo.UserId != currentUser.Id {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
 	}
 	resp = &dto.OrderDetail{}
 	tool.DeepCopy(resp, orderInfo)

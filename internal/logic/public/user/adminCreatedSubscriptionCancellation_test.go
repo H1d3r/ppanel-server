@@ -28,6 +28,10 @@ func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribe(_ context.Context, _
 	return r.subscribe, nil
 }
 
+func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribeForUpdate(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
+	return r.subscribe, nil
+}
+
 func (r *adminCreatedSubscriptionUserRepo) FindOneUserSubscribe(_ context.Context, _ int64) (*usermodel.SubscribeDetails, error) {
 	r.findOneUserSubscribeCalls++
 	return &usermodel.SubscribeDetails{OrderId: r.subscribe.OrderId}, nil

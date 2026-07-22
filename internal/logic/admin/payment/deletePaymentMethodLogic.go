@@ -26,6 +26,13 @@ func NewDeletePaymentMethodLogic(ctx context.Context, svcCtx *svc.ServiceContext
 }
 
 func (l *DeletePaymentMethodLogic) DeletePaymentMethod(req *dto.DeletePaymentMethodRequest) error {
+	pending, err := l.svcCtx.Store.Order().CountPendingByPaymentID(l.ctx, req.Id)
+	if err != nil {
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count pending payment orders: %v", err)
+	}
+	if pending > 0 {
+		return errors.Wrapf(xerr.NewErrCodeMsg(409, "PAYMENT_METHOD_HAS_PENDING_ORDERS"), "payment method has %d pending orders", pending)
+	}
 	if err := l.svcCtx.Store.Payment().Delete(l.ctx, req.Id); err != nil {
 		l.Errorw("delete payment method error", logger.Field("id", req.Id), logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseDeletedError), "delete payment method error: %s", err.Error())

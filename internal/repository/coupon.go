@@ -26,6 +26,8 @@ type CouponRepo interface {
 	Update(ctx context.Context, data *coupon.Coupon) error
 	Delete(ctx context.Context, id int64) error
 	UpdateCount(ctx context.Context, code string) error
+	ReserveUsage(ctx context.Context, code string, now int64, tx ...*gorm.DB) (bool, error)
+	ReleaseUsage(ctx context.Context, code string, tx ...*gorm.DB) error
 	QueryCouponListByPage(ctx context.Context, page, size int, subscribe int64, search string) (total int64, list []*coupon.Coupon, err error)
 	BatchDelete(ctx context.Context, ids []int64) error
 }
@@ -160,4 +162,48 @@ func (m *couponRepo) UpdateCount(ctx context.Context, code string) error {
 	}
 	data.UsedCount++
 	return m.Update(ctx, data)
+}
+
+// ReserveUsage atomically reserves one coupon use for a pending order.  A
+// reservation is made at order creation (rather than after payment) so a
+// limited coupon cannot be oversold by concurrent checkouts.
+func (m *couponRepo) ReserveUsage(ctx context.Context, code string, now int64, tx ...*gorm.DB) (bool, error) {
+	data, err := m.FindOneByCode(ctx, code)
+	if err != nil {
+		return false, err
+	}
+	var reserved bool
+	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		result := conn.Model(&coupon.Coupon{}).
+			Where("code = ? AND enable = ? AND start_time <= ? AND expire_time >= ? AND (count = 0 OR used_count < count)", code, true, now, now).
+			UpdateColumn("used_count", gorm.Expr("used_count + 1"))
+		reserved = result.RowsAffected == 1
+		return result.Error
+	}, m.getCacheKeys(data)...)
+	return reserved, err
+}
+
+// ReleaseUsage returns a reservation when its pending order is closed. The
+// conditional expression makes repeated close processing harmless.
+func (m *couponRepo) ReleaseUsage(ctx context.Context, code string, tx ...*gorm.DB) error {
+	data, err := m.FindOneByCode(ctx, code)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// A deleted coupon must not prevent closing and refunding an already
+			// pending order. There is no remaining counter to release.
+			return nil
+		}
+		return err
+	}
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		return conn.Model(&coupon.Coupon{}).
+			Where("code = ?", code).
+			UpdateColumn("used_count", gorm.Expr("CASE WHEN used_count > 0 THEN used_count - 1 ELSE 0 END")).Error
+	}, m.getCacheKeys(data)...)
 }

@@ -62,11 +62,12 @@ type ActivateOrderLogic struct {
 // transaction because they are retryable side effects rather than settlement
 // state.
 type activationResult struct {
-	order      *order.Order
-	user       *user.User
-	subscribe  *subscribe.Subscribe
-	userSub    *user.Subscribe
-	notifyType string
+	order               *order.Order
+	user                *user.User
+	subscribe           *subscribe.Subscribe
+	userSub             *user.Subscribe
+	commissionRecipient *user.User
+	notifyType          string
 }
 
 // NewActivateOrderLogic creates a new instance of ActivateOrderLogic
@@ -106,7 +107,13 @@ func (l *ActivateOrderLogic) ProcessTask(ctx context.Context, task *asynq.Task) 
 		if err != nil {
 			return err
 		}
-		if orderInfo.Coupon != "" {
+		if orderInfo.Type == OrderTypeSubscribe || orderInfo.Type == OrderTypeRenewal {
+			result.commissionRecipient, err = l.handleCommissionTx(ctx, store, result.user, orderInfo)
+			if err != nil {
+				return err
+			}
+		}
+		if orderInfo.Coupon != "" && !orderInfo.CouponReserved {
 			if err := store.Coupon().UpdateCount(ctx, orderInfo.Coupon); err != nil {
 				return err
 			}
@@ -152,16 +159,26 @@ func (l *ActivateOrderLogic) activateNewPurchaseTx(ctx context.Context, store re
 		err      error
 	)
 	if orderInfo.UserId != 0 {
-		userInfo, err = store.User().FindOne(ctx, orderInfo.UserId)
+		// Serialise quota checks and subscription creation for a single user.
+		userInfo, err = store.User().FindOneForUpdate(ctx, orderInfo.UserId)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		tempOrder, err := l.getTempOrderInfo(ctx, orderInfo.OrderNo)
+		tempOrder, err := l.getGuestOrderInfo(ctx, orderInfo)
 		if err != nil {
 			return nil, err
 		}
-		userInfo = &user.User{Password: tool.EncodePassWord(tempOrder.Password), Algo: "default"}
+		passwordHash := tempOrder.PasswordHash
+		if passwordHash == "" {
+			// Compatibility for an already-created guest checkout from an older
+			// release. New records only retain PasswordHash in Redis.
+			passwordHash = tool.EncodePassWord(tempOrder.Password)
+		}
+		if passwordHash == "" {
+			return nil, fmt.Errorf("guest order password hash is missing")
+		}
+		userInfo = &user.User{Password: passwordHash, Algo: "default"}
 		if err := store.User().Insert(ctx, userInfo); err != nil {
 			return nil, err
 		}
@@ -236,7 +253,7 @@ func (l *ActivateOrderLogic) activateRenewalTx(ctx context.Context, store reposi
 	if err != nil {
 		return nil, err
 	}
-	userSub, err := store.User().FindOneSubscribeByToken(ctx, orderInfo.SubscribeToken)
+	userSub, err := store.User().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +298,7 @@ func (l *ActivateOrderLogic) activateResetTrafficTx(ctx context.Context, store r
 	if err != nil {
 		return nil, err
 	}
-	userSub, err := store.User().FindOneSubscribeByToken(ctx, orderInfo.SubscribeToken)
+	userSub, err := store.User().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +342,7 @@ func (l *ActivateOrderLogic) activateRechargeTx(ctx context.Context, store repos
 		return nil, err
 	}
 	userInfo.Balance += orderInfo.Price
-	if err := store.User().Update(ctx, userInfo); err != nil {
+	if err := store.User().UpdateBalanceFields(ctx, userInfo); err != nil {
 		return nil, err
 	}
 	balanceLog := &log.Balance{
@@ -364,8 +381,10 @@ func (l *ActivateOrderLogic) afterActivationCommit(ctx context.Context, result *
 		if result.subscribe != nil {
 			l.clearServerCache(ctx, result.subscribe)
 		}
-		if result.order.Type == OrderTypeSubscribe || result.order.Type == OrderTypeRenewal {
-			go l.handleCommission(context.Background(), result.user, result.order)
+		if result.commissionRecipient != nil {
+			if err := l.svc.Store.User().UpdateUserCache(ctx, result.commissionRecipient); err != nil {
+				logger.WithContext(ctx).Error("Update referer cache failed", logger.Field("error", err.Error()))
+			}
 		}
 		if result.subscribe != nil {
 			l.sendNotifications(ctx, result.order, result.user, result.subscribe, result.userSub, result.notifyType)
@@ -516,7 +535,7 @@ func (l *ActivateOrderLogic) getExistingUser(ctx context.Context, userId int64) 
 // createGuestUser creates a new user account for guest orders using temporary order information
 // stored in Redis cache
 func (l *ActivateOrderLogic) createGuestUser(ctx context.Context, orderInfo *order.Order) (*user.User, error) {
-	tempOrder, err := l.getTempOrderInfo(ctx, orderInfo.OrderNo)
+	tempOrder, err := l.getGuestOrderInfo(ctx, orderInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -582,12 +601,24 @@ func (l *ActivateOrderLogic) getTempOrderInfo(ctx context.Context, orderNo strin
 		logger.WithContext(ctx).Error("Unmarshal temp order cache failed",
 			logger.Field("error", err.Error()),
 			logger.Field("cache_key", cacheKey),
-			logger.Field("data", data),
 		)
 		return nil, err
 	}
 
 	return &tempOrder, nil
+}
+
+func (l *ActivateOrderLogic) getGuestOrderInfo(ctx context.Context, orderInfo *order.Order) (*constant.TemporaryOrderInfo, error) {
+	if orderInfo.GuestAuthType != "" && orderInfo.GuestIdentifier != "" && orderInfo.GuestPasswordHash != "" {
+		return &constant.TemporaryOrderInfo{
+			OrderNo:      orderInfo.OrderNo,
+			Identifier:   orderInfo.GuestIdentifier,
+			AuthType:     orderInfo.GuestAuthType,
+			PasswordHash: orderInfo.GuestPasswordHash,
+			InviteCode:   orderInfo.GuestInviteCode,
+		}, nil
+	}
+	return l.getTempOrderInfo(ctx, orderInfo.OrderNo)
 }
 
 // handleReferrer establishes referrer relationship if an invite code is provided
@@ -669,78 +700,79 @@ func (l *ActivateOrderLogic) createUserSubscription(ctx context.Context, orderIn
 	return userSub, nil
 }
 
-// handleCommission processes referral commission for the referrer if applicable.
-// This runs asynchronously to avoid blocking the main order processing flow.
+// handleCommission is retained for legacy direct callers. The queue activation
+// flow uses handleCommissionTx so its order transition, balance and audit log
+// commit atomically.
 func (l *ActivateOrderLogic) handleCommission(ctx context.Context, userInfo *user.User, orderInfo *order.Order) {
-	if !l.shouldProcessCommission(userInfo, orderInfo.IsNew) {
-		return
-	}
-
-	referer, err := l.svc.Store.User().FindOne(ctx, userInfo.RefererId)
-	if err != nil {
-		logger.WithContext(ctx).Error("Find referer failed",
-			logger.Field("error", err.Error()),
-			logger.Field("referer_id", userInfo.RefererId),
-		)
-		return
-	}
-
-	var referralPercentage uint8
-	if referer.ReferralPercentage != 0 {
-		referralPercentage = referer.ReferralPercentage
-	} else {
-		referralPercentage = uint8(l.svc.Config.Invite.ReferralPercentage)
-	}
-
-	// Order commission calculation： (Order Amount - Order Fee) * Referral Percentage
-	amount := l.calculateCommission(orderInfo.Amount-orderInfo.FeeAmount, referralPercentage)
-	if amount <= 0 {
-		return
-	}
-
-	// Use transaction for commission updates
-	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
-		referer.Commission += amount
-		if err = store.User().Update(ctx, referer); err != nil {
-			return err
-		}
-
-		var commissionType uint16
-		switch orderInfo.Type {
-		case OrderTypeSubscribe:
-			commissionType = log.CommissionTypePurchase
-		case OrderTypeRenewal:
-			commissionType = log.CommissionTypeRenewal
-		}
-
-		commissionLog := &log.Commission{
-			Type:      commissionType,
-			Amount:    amount,
-			OrderNo:   orderInfo.OrderNo,
-			Timestamp: orderInfo.CreatedAt.UnixMilli(),
-		}
-
-		content, _ := commissionLog.Marshal()
-		return store.Log().Insert(ctx, &log.SystemLog{
-			Type:     log.TypeCommission.Uint8(),
-			Date:     timeutil.Now().Format("2006-01-02"),
-			ObjectID: referer.Id,
-			Content:  string(content),
-		})
+	var recipient *user.User
+	err := l.svc.Store.InTx(ctx, func(store repository.Store) error {
+		var txErr error
+		recipient, txErr = l.handleCommissionTx(ctx, store, userInfo, orderInfo)
+		return txErr
 	})
-
 	if err != nil {
 		logger.WithContext(ctx).Error("Update referer commission failed", logger.Field("error", err.Error()))
 		return
 	}
-
-	// Update cache
-	if err = l.svc.Store.User().UpdateUserCache(ctx, referer); err != nil {
-		logger.WithContext(ctx).Error("Update referer cache failed",
-			logger.Field("error", err.Error()),
-			logger.Field("user_id", referer.Id),
-		)
+	if recipient != nil {
+		if err = l.svc.Store.User().UpdateUserCache(ctx, recipient); err != nil {
+			logger.WithContext(ctx).Error("Update referer cache failed",
+				logger.Field("error", err.Error()),
+				logger.Field("user_id", recipient.Id),
+			)
+		}
 	}
+}
+
+func (l *ActivateOrderLogic) handleCommissionTx(ctx context.Context, store repository.Store, userInfo *user.User, orderInfo *order.Order) (*user.User, error) {
+	if userInfo == nil || userInfo.RefererId == 0 || (orderInfo.Type != OrderTypeSubscribe && orderInfo.Type != OrderTypeRenewal) {
+		return nil, nil
+	}
+	referer, err := store.User().FindOneForUpdate(ctx, userInfo.RefererId)
+	if err != nil {
+		return nil, err
+	}
+	percentage := referer.ReferralPercentage
+	if percentage != 0 {
+		if referer.OnlyFirstPurchase != nil && *referer.OnlyFirstPurchase && !orderInfo.IsNew {
+			return nil, nil
+		}
+	} else {
+		if l.svc.Config.Invite.ReferralPercentage == 0 || (l.svc.Config.Invite.OnlyFirstPurchase && !orderInfo.IsNew) {
+			return nil, nil
+		}
+		percentage = uint8(l.svc.Config.Invite.ReferralPercentage)
+	}
+	amount := l.calculateCommission(orderInfo.Amount-orderInfo.FeeAmount, percentage)
+	if amount <= 0 {
+		return nil, nil
+	}
+	referer.Commission += amount
+	if err := store.User().UpdateCommission(ctx, referer); err != nil {
+		return nil, err
+	}
+	commissionType := log.CommissionTypePurchase
+	if orderInfo.Type == OrderTypeRenewal {
+		commissionType = log.CommissionTypeRenewal
+	}
+	content, err := (&log.Commission{
+		Type:      commissionType,
+		Amount:    amount,
+		OrderNo:   orderInfo.OrderNo,
+		Timestamp: orderInfo.CreatedAt.UnixMilli(),
+	}).Marshal()
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Log().Insert(ctx, &log.SystemLog{
+		Type:     log.TypeCommission.Uint8(),
+		Date:     timeutil.Now().Format(time.DateOnly),
+		ObjectID: referer.Id,
+		Content:  string(content),
+	}); err != nil {
+		return nil, err
+	}
+	return referer, nil
 }
 
 // shouldProcessCommission determines if commission should be processed based on

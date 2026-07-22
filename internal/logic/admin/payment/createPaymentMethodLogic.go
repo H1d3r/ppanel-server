@@ -39,7 +39,13 @@ func (l *CreatePaymentMethodLogic) CreatePaymentMethod(req *dto.CreatePaymentMet
 		l.Errorw("unsupported payment platform", logger.Field("mark", req.Platform))
 		return nil, errors.Wrapf(xerr.NewErrCodeMsg(400, "UNSUPPORTED_PAYMENT_PLATFORM"), "unsupported payment platform: %s", req.Platform)
 	}
+	if err := validatePaymentFee(req.FeeMode, req.FeePercent, req.FeeAmount); err != nil {
+		return nil, err
+	}
 	config := parsePaymentPlatformConfig(l.ctx, payment.ParsePlatform(req.Platform), req.Config)
+	if config == "" {
+		return nil, errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_PAYMENT_CONFIG"), "invalid payment config")
+	}
 	var paymentMethod = &paymentModel.Payment{
 		Name:        req.Name,
 		Platform:    req.Platform,

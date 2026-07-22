@@ -39,10 +39,28 @@ func (l *UpdatePaymentMethodLogic) UpdatePaymentMethod(req *dto.UpdatePaymentMet
 		l.Errorw("find payment method error", logger.Field("id", req.Id), logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment method error: %s", err.Error())
 	}
+	if method.Platform != req.Platform {
+		return nil, errors.Wrapf(xerr.NewErrCodeMsg(400, "PAYMENT_PLATFORM_IMMUTABLE"), "payment platform cannot be changed")
+	}
+	if err := validatePaymentFee(req.FeeMode, req.FeePercent, req.FeeAmount); err != nil {
+		return nil, err
+	}
 	if req.Sort == 0 {
 		req.Sort = method.Sort
 	}
 	config := parsePaymentPlatformConfig(l.ctx, payment.ParsePlatform(req.Platform), req.Config)
+	if config == "" {
+		return nil, errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_PAYMENT_CONFIG"), "invalid payment config")
+	}
+	if method.Config != config || method.Domain != req.Domain {
+		pending, err := l.svcCtx.Store.Order().CountPendingByPaymentID(l.ctx, method.Id)
+		if err != nil {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count pending payment orders: %v", err)
+		}
+		if pending > 0 {
+			return nil, errors.Wrapf(xerr.NewErrCodeMsg(409, "PAYMENT_METHOD_HAS_PENDING_ORDERS"), "payment method has %d pending orders", pending)
+		}
+	}
 	tool.DeepCopy(method, req)
 	method.Config = config
 	if err := paymentStore.Update(l.ctx, method); err != nil {

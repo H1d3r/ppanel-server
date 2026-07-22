@@ -83,6 +83,17 @@ func (r *closeSubscribeRepo) Update(_ context.Context, value *subscribeEntity.Su
 	return nil
 }
 
+func (r *closeSubscribeRepo) RestoreInventory(_ context.Context, id int64, _ ...*gorm.DB) error {
+	if r.sub == nil || r.sub.Id != id {
+		return gorm.ErrRecordNotFound
+	}
+	if r.sub.Inventory != -1 {
+		r.sub.Inventory++
+	}
+	r.updateCalls++
+	return nil
+}
+
 type closeUserRepo struct {
 	repository.UserRepo
 	user        *userEntity.User
@@ -97,9 +108,20 @@ func (r *closeUserRepo) FindOne(_ context.Context, id int64) (*userEntity.User, 
 	return &copy, nil
 }
 
+func (r *closeUserRepo) FindOneForUpdate(ctx context.Context, id int64) (*userEntity.User, error) {
+	return r.FindOne(ctx, id)
+}
+
 func (r *closeUserRepo) Update(_ context.Context, value *userEntity.User, _ ...*gorm.DB) error {
 	r.updateCalls++
 	r.user = value
+	return nil
+}
+
+func (r *closeUserRepo) UpdateBalanceFields(_ context.Context, value *userEntity.User, _ ...*gorm.DB) error {
+	r.updateCalls++
+	r.user.Balance = value.Balance
+	r.user.GiftAmount = value.GiftAmount
 	return nil
 }
 

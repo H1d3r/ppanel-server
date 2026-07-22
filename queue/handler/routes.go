@@ -24,6 +24,9 @@ func RegisterHandlers(mux *asynq.ServeMux, serverCtx *svc.ServiceContext) {
 	mux.Handle(types.ForthwithActivateOrder, orderLogic.NewActivateOrderLogic(serverCtx))
 	// Recover paid orders whose activation enqueue was interrupted.
 	mux.Handle(types.SchedulerReconcilePaidOrders, orderLogic.NewReconcilePaidOrdersLogic(serverCtx))
+	// Close stale pending orders even when their one-shot deferred task was
+	// lost during a Redis outage or exhausted its retries.
+	mux.Handle(types.SchedulerReconcilePendingOrders, orderLogic.NewReconcilePendingOrdersLogic(serverCtx))
 
 	// Forthwith traffic statistics
 	mux.Handle(types.ForthwithTrafficStatistics, traffic.NewTrafficStatisticsLogic(serverCtx))

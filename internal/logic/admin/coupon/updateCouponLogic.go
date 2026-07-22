@@ -2,7 +2,6 @@ package coupon
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/coupon"
@@ -29,12 +28,29 @@ func NewUpdateCouponLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Upda
 }
 
 func (l *UpdateCouponLogic) UpdateCoupon(req *dto.UpdateCouponRequest) error {
-	fmt.Printf("req Subscribe: %v\n", req.Subscribe)
+	input := &dto.CreateCouponRequest{
+		Name: req.Name, Code: req.Code, Count: req.Count, Type: req.Type,
+		Discount: req.Discount, StartTime: req.StartTime, ExpireTime: req.ExpireTime,
+		UserLimit: req.UserLimit, Subscribe: req.Subscribe, UsedCount: req.UsedCount, Enable: req.Enable,
+	}
+	if err := validateCouponInput(input); err != nil {
+		return err
+	}
+	existing, err := l.svcCtx.Store.Coupon().FindOne(l.ctx, req.Id)
+	if err != nil {
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find coupon error: %v", err)
+	}
+	if req.UsedCount < existing.UsedCount {
+		return errors.Wrapf(xerr.NewErrCodeMsg(400, "COUPON_USED_COUNT_IMMUTABLE"), "used count cannot be reduced")
+	}
 	couponInfo := &coupon.Coupon{}
 	// update coupon
 	tool.DeepCopy(couponInfo, req)
 	couponInfo.Subscribe = tool.Int64SliceToString(req.Subscribe)
-	err := l.svcCtx.Store.Coupon().Update(l.ctx, couponInfo)
+	if couponInfo.Enable == nil {
+		couponInfo.Enable = existing.Enable
+	}
+	err = l.svcCtx.Store.Coupon().Update(l.ctx, couponInfo)
 	if err != nil {
 		l.Errorw("[UpdateCoupon] Database Error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update coupon error: %v", err.Error())

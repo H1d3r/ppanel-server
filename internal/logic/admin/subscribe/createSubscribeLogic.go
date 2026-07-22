@@ -29,6 +29,9 @@ func NewCreateSubscribeLogic(ctx context.Context, svcCtx *svc.ServiceContext) *C
 }
 
 func (l *CreateSubscribeLogic) CreateSubscribe(req *dto.CreateSubscribeRequest) error {
+	if err := validateSubscribeInput(req.UnitTime, req.UnitPrice, req.Replacement, req.Inventory, req.Traffic, req.SpeedLimit, req.DeviceLimit, req.Quota, req.DeductionRatio, req.ResetCycle, req.Discount); err != nil {
+		return err
+	}
 	discount := ""
 	if len(req.Discount) > 0 {
 		val, _ := json.Marshal(req.Discount)

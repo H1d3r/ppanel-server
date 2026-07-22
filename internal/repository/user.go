@@ -43,6 +43,7 @@ type UserRepo interface {
 	FindOneByReferCode(ctx context.Context, referCode string) (*user.User, error)
 	Update(ctx context.Context, data *user.User, tx ...*gorm.DB) error
 	UpdateBalanceFields(ctx context.Context, data *user.User, tx ...*gorm.DB) error
+	UpdateCommission(ctx context.Context, data *user.User, tx ...*gorm.DB) error
 	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
 	BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm.DB) error
 	QueryPageList(ctx context.Context, page, size int, filter *user.UserFilterParams) ([]*user.User, int64, error)
@@ -75,8 +76,10 @@ type UserRepo interface {
 	// subscribe
 	InsertSubscribe(ctx context.Context, data *user.Subscribe, tx ...*gorm.DB) error
 	FindOneSubscribe(ctx context.Context, id int64) (*user.Subscribe, error)
+	FindOneSubscribeForUpdate(ctx context.Context, id int64) (*user.Subscribe, error)
 	FindOneSubscribeByOrderId(ctx context.Context, orderId int64) (*user.Subscribe, error)
 	FindOneSubscribeByToken(ctx context.Context, token string) (*user.Subscribe, error)
+	FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*user.Subscribe, error)
 	UpdateSubscribe(ctx context.Context, data *user.Subscribe, tx ...*gorm.DB) error
 	DeleteSubscribe(ctx context.Context, token string, tx ...*gorm.DB) error
 	DeleteSubscribeById(ctx context.Context, id int64, tx ...*gorm.DB) error
@@ -247,6 +250,20 @@ func (m *userRepo) UpdateBalanceFields(ctx context.Context, data *user.User, tx 
 				"balance":     data.Balance,
 				"gift_amount": data.GiftAmount,
 			}).Error
+	}, m.getCacheKeys(data)...)
+}
+
+// UpdateCommission deliberately updates only the commission balance. Financial
+// writers often hold a row lock, but a full Save here could still overwrite an
+// unrelated profile change made by another request.
+func (m *userRepo) UpdateCommission(ctx context.Context, data *user.User, tx ...*gorm.DB) error {
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		return conn.Model(&user.User{}).
+			Where("id = ?", data.Id).
+			Update("commission", data.Commission).Error
 	}, m.getCacheKeys(data)...)
 }
 
@@ -913,6 +930,17 @@ func (m *userRepo) FindOneSubscribe(ctx context.Context, id int64) (*user.Subscr
 	return &data, err
 }
 
+func (m *userRepo) FindOneSubscribeForUpdate(ctx context.Context, id int64) (*user.Subscribe, error) {
+	var data user.Subscribe
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Model(&user.Subscribe{}).
+			Where("id = ?", id).
+			First(v).Error
+	})
+	return &data, err
+}
+
 func (m *userRepo) FindUsersSubscribeBySubscribeId(ctx context.Context, subscribeId int64) ([]*user.Subscribe, error) {
 	var data []*user.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
@@ -1156,6 +1184,17 @@ func (m *userRepo) FindOneSubscribeByToken(ctx context.Context, token string) (*
 	key := fmt.Sprintf("%s%s", cacheUserSubscribeTokenPrefix, token)
 	err := m.QueryCtx(ctx, &data, key, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.Subscribe{}).Where("token = ?", token).First(&data).Error
+	})
+	return &data, err
+}
+
+func (m *userRepo) FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*user.Subscribe, error) {
+	var data user.Subscribe
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Model(&user.Subscribe{}).
+			Where("token = ?", token).
+			First(v).Error
 	})
 	return &data, err
 }

@@ -58,29 +58,14 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 		return nil, errors.New("subscribe not found")
 	}
 	amount := userSubscribe.Subscribe.Replacement
-	var deductionAmount int64
-	// Check user deduction amount
-	if u.GiftAmount > 0 {
-		if u.GiftAmount >= amount {
-			deductionAmount = amount
-			u.GiftAmount -= amount
-			amount = 0
-		} else {
-			deductionAmount = u.GiftAmount
-			amount -= u.GiftAmount
-			u.GiftAmount = 0
-		}
-	}
 	// find payment method
 	payment, err := store.Payment().FindOne(l.ctx, req.Payment)
 	if err != nil {
 		l.Errorw("[ResetTraffic] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
 		return nil, errors.Wrapf(err, "find payment error: %v", err.Error())
 	}
-	var feeAmount int64
-	// Calculate the handling fee
-	if amount > 0 {
-		feeAmount = calculateFee(amount, payment)
+	if err := ensurePaymentAvailable(payment); err != nil {
+		return nil, err
 	}
 	// create order
 	orderInfo := order.Order{
@@ -90,9 +75,9 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 		OrderNo:        tool.GenerateTradeNo(),
 		Type:           3,
 		Price:          userSubscribe.Subscribe.Replacement,
-		Amount:         amount + feeAmount,
-		GiftAmount:     deductionAmount,
-		FeeAmount:      feeAmount,
+		Amount:         amount,
+		GiftAmount:     0,
+		FeeAmount:      0,
 		PaymentId:      payment.Id,
 		Method:         payment.Platform,
 		Status:         1,
@@ -101,11 +86,26 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 	}
 	// Database transaction
 	err = store.InTx(l.ctx, func(txStore repository.Store) error {
-		// update user deduction && Pre deduction ,Return after canceling the order
+		lockedUser, e := txStore.User().FindOneForUpdate(l.ctx, u.Id)
+		if e != nil {
+			return e
+		}
+		if lockedUser.GiftAmount > 0 && orderInfo.Amount > 0 {
+			orderInfo.GiftAmount = min(lockedUser.GiftAmount, orderInfo.Amount)
+			orderInfo.Amount -= orderInfo.GiftAmount
+		}
+		if orderInfo.Amount > 0 {
+			orderInfo.FeeAmount = calculateFee(orderInfo.Amount, payment)
+			orderInfo.Amount += orderInfo.FeeAmount
+		}
+		if orderInfo.Amount > MaxOrderAmount {
+			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "order amount exceeds maximum limit")
+		}
+
 		if orderInfo.GiftAmount > 0 {
-			// update user deduction && Pre deduction ,Return after canceling the order
-			if err := txStore.User().Update(l.ctx, u); err != nil {
-				l.Errorw("[ResetTraffic] Database update error", logger.Field("error", err.Error()), logger.Field("user", u))
+			lockedUser.GiftAmount -= orderInfo.GiftAmount
+			if err := txStore.User().UpdateBalanceFields(l.ctx, lockedUser); err != nil {
+				l.Errorw("[ResetTraffic] Database update error", logger.Field("error", err.Error()), logger.Field("user", lockedUser))
 				return err
 			}
 			// create deduction record
@@ -114,7 +114,7 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 				OrderNo:     orderInfo.OrderNo,
 				SubscribeId: 0,
 				Amount:      orderInfo.GiftAmount,
-				Balance:     u.GiftAmount,
+				Balance:     lockedUser.GiftAmount,
 				Remark:      "Renewal order deduction",
 				Timestamp:   timeutil.Now().UnixMilli(),
 			}
@@ -123,7 +123,7 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 			if err = txStore.Log().Insert(l.ctx, &log.SystemLog{
 				Type:     log.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: u.Id,
+				ObjectID: lockedUser.Id,
 				Content:  string(content),
 			}); err != nil {
 				l.Errorw("[ResetTraffic] Database insert error", logger.Field("error", err.Error()), logger.Field("deductionLog", content))

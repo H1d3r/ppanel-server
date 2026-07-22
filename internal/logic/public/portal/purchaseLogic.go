@@ -3,9 +3,6 @@ package portal
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"time"
-
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/repository"
@@ -18,6 +15,7 @@ import (
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
 	queue "github.com/perfect-panel/server/queue/types"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/pkg/errors"
@@ -95,12 +93,6 @@ func (l *PurchaseLogic) Purchase(req *dto.PortalPurchaseRequest) (resp *dto.Port
 		if couponInfo.Count != 0 && couponInfo.Count <= couponInfo.UsedCount {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used")
 		}
-		// Check expiration time
-		expireTime := time.Unix(couponInfo.ExpireTime, 0)
-		if timeutil.Now().After(expireTime) {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponExpired), "coupon expired")
-		}
-
 		couponSub := tool.StringToInt64Slice(couponInfo.Subscribe)
 		if len(couponSub) > 0 && !tool.Contains(couponSub, req.SubscribeId) {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponNotApplicable), "coupon not match")
@@ -116,6 +108,9 @@ func (l *PurchaseLogic) Purchase(req *dto.PortalPurchaseRequest) (resp *dto.Port
 		l.Logger.Error("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "find payment method error: %v", err.Error())
 	}
+	if err := ensurePaymentAvailable(paymentConfig); err != nil {
+		return nil, err
+	}
 
 	if payment.ParsePlatform(paymentConfig.Platform) == payment.Balance {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance error")
@@ -130,48 +125,45 @@ func (l *PurchaseLogic) Purchase(req *dto.PortalPurchaseRequest) (resp *dto.Port
 	// create order
 	checkoutToken := random.KeyNew(32, 1)
 	orderInfo := &order.Order{
-		OrderNo:        tool.GenerateTradeNo(),
-		Type:           1,
-		Quantity:       req.Quantity,
-		Price:          price,
-		Amount:         amount,
-		Discount:       discountAmount,
-		GiftAmount:     0,
-		Coupon:         req.Coupon,
-		CouponDiscount: couponAmount,
-		PaymentId:      req.Payment,
-		Method:         paymentConfig.Platform,
-		FeeAmount:      feeAmount,
-		Status:         1,
-		IsNew:          true,
-		SubscribeId:    req.SubscribeId,
+		OrderNo:                tool.GenerateTradeNo(),
+		Type:                   1,
+		Quantity:               req.Quantity,
+		Price:                  price,
+		Amount:                 amount,
+		Discount:               discountAmount,
+		GiftAmount:             0,
+		Coupon:                 req.Coupon,
+		CouponDiscount:         couponAmount,
+		PaymentId:              req.Payment,
+		Method:                 paymentConfig.Platform,
+		FeeAmount:              feeAmount,
+		Status:                 1,
+		IsNew:                  true,
+		SubscribeId:            req.SubscribeId,
+		GuestAuthType:          req.AuthType,
+		GuestIdentifier:        req.Identifier,
+		GuestPasswordHash:      tool.EncodePassWord(req.Password),
+		GuestInviteCode:        req.InviteCode,
+		GuestCheckoutTokenHash: constant.CheckoutTokenHash(checkoutToken),
 	}
 	// save order
 	err = l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
-		// save guest order and user information
-		tempOrder := constant.TemporaryOrderInfo{
-			OrderNo:       orderInfo.OrderNo,
-			CheckoutToken: checkoutToken,
-			Identifier:    req.Identifier,
-			AuthType:      req.AuthType,
-			Password:      req.Password,
-			InviteCode:    req.InviteCode,
-		}
-		content, _ := tempOrder.Marshal()
-
-		if _, err = l.svcCtx.Redis.Set(l.ctx, fmt.Sprintf(constant.TempOrderCacheKey, orderInfo.OrderNo), string(content), 24*time.Hour).Result(); err != nil {
-			l.Errorw("[Purchase] Redis set error", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
-			return err
-		}
-		l.Infow("[Purchase] Guest order", logger.Field("order_no", orderInfo.OrderNo), logger.Field("identifier", req.Identifier))
-
-		// Decrease subscribe plan stock
-		if sub.Inventory != -1 {
-			sub.Inventory--
-			if e := store.Subscribe().Update(l.ctx, sub); e != nil {
-				l.Errorw("[Purchase] Database update error", logger.Field("error", e.Error()), logger.Field("subscribe_id", sub.Id))
-				return e
+		if orderInfo.Coupon != "" {
+			reserved, reserveErr := store.Coupon().ReserveUsage(l.ctx, orderInfo.Coupon, timeutil.Now().Unix())
+			if reserveErr != nil {
+				return reserveErr
 			}
+			if !reserved {
+				return errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used or expired")
+			}
+			orderInfo.CouponReserved = true
+		}
+		reservedInventory, reserveErr := store.Subscribe().ReserveInventory(l.ctx, sub.Id)
+		if reserveErr != nil {
+			return reserveErr
+		}
+		if !reservedInventory {
+			return errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
 		}
 
 		// save guest order

@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	DeferCloseOrder              = "defer:order:close"
-	ForthwithActivateOrder       = "forthwith:order:activate"
-	SchedulerReconcilePaidOrders = "scheduler:order:reconcile-paid"
+	DeferCloseOrder                 = "defer:order:close"
+	ForthwithActivateOrder          = "forthwith:order:activate"
+	SchedulerReconcilePaidOrders    = "scheduler:order:reconcile-paid"
+	SchedulerReconcilePendingOrders = "scheduler:order:reconcile-pending"
 )
 
 type (

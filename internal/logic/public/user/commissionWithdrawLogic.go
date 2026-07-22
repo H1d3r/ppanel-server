@@ -37,32 +37,39 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 
-	if u.Commission < req.Amount {
-		logger.Errorf("User %d has insufficient commission balance: %.2f, requested: %.2f", u.Id, float64(u.Commission)/100, float64(req.Amount)/100)
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserCommissionNotEnough), "User %d has insufficient commission balance", u.Id)
+	if req.Amount <= 0 {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "withdraw amount must be positive")
 	}
 
-	// create withdrawal log
-	// Use negative amount to reflect the balance decrease, so that
-	// SumAmountByTypeAndObjectID produces the correct net total.
-	logInfo := log.Commission{
-		Type:      log.CommissionTypeConvertBalance,
-		Amount:    -req.Amount,
-		Timestamp: timeutil.Now().UnixMilli(),
-	}
-	b, err := logInfo.Marshal()
-
-	if err != nil {
-		l.Errorf("Failed to marshal commission log for user %d: %v", u.Id, err)
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Failed to marshal commission log for user %d: %v", u.Id, err)
-	}
-
+	var updatedUser *user.User
 	err = l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
-		updatedUser := *u
-		updatedUser.Commission -= req.Amount
-		if err = store.User().Update(l.ctx, &updatedUser); err != nil {
+		// Do not rely on the user object placed in the request context: it can
+		// be stale while another withdrawal or commission credit is committed.
+		// The row lock serializes the balance check and debit.
+		lockedUser, txErr := store.User().FindOneForUpdate(l.ctx, u.Id)
+		if txErr != nil {
+			return txErr
+		}
+		if lockedUser.Commission < req.Amount {
+			return errors.Wrapf(xerr.NewErrCode(xerr.UserCommissionNotEnough), "User %d has insufficient commission balance", u.Id)
+		}
+		lockedUser.Commission -= req.Amount
+		if err = store.User().UpdateCommission(l.ctx, lockedUser); err != nil {
 			l.Errorf("Failed to update user %d commission balance: %v", u.Id, err)
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Failed to update user %d commission balance: %v", u.Id, err)
+		}
+		updatedUser = lockedUser
+
+		// Use negative amount to reflect the balance decrease, so that
+		// SumAmountByTypeAndObjectID produces the correct net total.
+		logInfo := log.Commission{
+			Type:      log.CommissionTypeConvertBalance,
+			Amount:    -req.Amount,
+			Timestamp: timeutil.Now().UnixMilli(),
+		}
+		b, marshalErr := logInfo.Marshal()
+		if marshalErr != nil {
+			return marshalErr
 		}
 
 		if err = store.Log().Insert(l.ctx, &log.SystemLog{
@@ -90,6 +97,11 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 	})
 	if err != nil {
 		return nil, err
+	}
+	if updatedUser != nil {
+		if cacheErr := l.svcCtx.Store.User().ClearUserCache(l.ctx, updatedUser); cacheErr != nil {
+			l.Errorf("Failed to clear commission cache for user %d: %v", u.Id, cacheErr)
+		}
 	}
 
 	return &dto.WithdrawalLog{

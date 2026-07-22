@@ -78,6 +78,9 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		l.Logger.Error("[PurchaseCheckout] Database query error", logger.Field("error", err.Error()), logger.Field("payment", orderInfo.Method))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment method error: %v", err.Error())
 	}
+	if err := ensurePaymentAvailable(paymentConfig); err != nil {
+		return nil, err
+	}
 	// Route to appropriate payment handler based on payment platform
 	switch paymentPlatform.ParsePlatform(orderInfo.Method) {
 	case paymentPlatform.EPay:
@@ -160,6 +163,14 @@ func (l *PurchaseCheckoutLogic) authorizeCheckout(orderInfo *order.Order, req *d
 	if req.CheckoutToken == "" {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is required")
 	}
+	if orderInfo.GuestCheckoutTokenHash != "" {
+		if subtle.ConstantTimeCompare([]byte(orderInfo.GuestCheckoutTokenHash), []byte(constant.CheckoutTokenHash(req.CheckoutToken))) != 1 {
+			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+		}
+		return nil
+	}
+	// Compatibility for guest orders created before checkout capabilities were
+	// persisted on the order itself.
 	cacheKey := fmt.Sprintf(constant.TempOrderCacheKey, orderInfo.OrderNo)
 	value, err := l.svcCtx.Redis.Get(l.ctx, cacheKey).Result()
 	if err != nil {
@@ -279,6 +290,30 @@ func (l *PurchaseCheckoutLogic) stripePayment(config string, info *order.Order, 
 			UserId: info.UserId,
 			Email:  identifier,
 		})
+		if err == nil {
+			claimed, claimErr := l.svcCtx.Store.Order().SetPaymentTradeNoIfEmpty(l.ctx, info.OrderNo, result.TradeNo)
+			if claimErr != nil {
+				_ = client.CancelPaymentIntent(result.TradeNo)
+				return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "claim Stripe payment intent: %v", claimErr)
+			}
+			if !claimed {
+				// Another concurrent checkout won the order's one intent. Cancel
+				// ours and expose the winner's client secret instead.
+				if cancelErr := client.CancelPaymentIntent(result.TradeNo); cancelErr != nil {
+					return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "cancel duplicate Stripe payment intent: %v", cancelErr)
+				}
+				latest, latestErr := l.svcCtx.Store.Order().FindOneByOrderNo(l.ctx, info.OrderNo)
+				if latestErr != nil || latest.Status != 1 || latest.TradeNo == "" {
+					if latestErr != nil {
+						return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "reload Stripe payment intent: %v", latestErr)
+					}
+					return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order no longer has a pending Stripe payment intent")
+				}
+				result, err = client.GetPaymentSheet(stripeOrder, latest.TradeNo)
+			} else {
+				info.TradeNo = result.TradeNo
+			}
+		}
 	}
 	if err != nil {
 		l.Errorw("[PurchaseCheckout] create or retrieve Stripe payment sheet error", logger.Field("error", err.Error()))
@@ -292,17 +327,6 @@ func (l *PurchaseCheckoutLogic) stripePayment(config string, info *order.Order, 
 		Method:         stripeConfig.Payment,
 	}
 
-	// Save the generated trade number once.  Repeated checkout requests reuse
-	// the stored transaction above and therefore cannot invalidate an earlier
-	// client secret.
-	if info.TradeNo == "" {
-		info.TradeNo = result.TradeNo
-		err = l.svcCtx.Store.Order().Update(l.ctx, info)
-		if err != nil {
-			l.Errorw("[PurchaseCheckout] Update order error", logger.Field("error", err.Error()))
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Update error: %s", err.Error())
-		}
-	}
 	return stripePayment, nil
 }
 
@@ -388,9 +412,11 @@ func (l *PurchaseCheckoutLogic) queryExchangeRate(to string, src int64) (amount 
 		return amount, nil
 	}
 
-	// Skip conversion if no exchange rate API key configured
+	// A gateway must never be sent a value merely relabelled as another
+	// currency. Without a configured conversion source, reject non-CNY
+	// checkout instead of silently charging the system-currency amount.
 	if l.svcCtx.Config.Currency.AccessKey == "" {
-		return amount, nil
+		return 0, errors.New("exchange rate is not configured")
 	}
 
 	// Convert currency if system currency differs from target currency

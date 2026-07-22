@@ -62,6 +62,9 @@ func (l *RechargeLogic) Recharge(req *dto.RechargeOrderRequest) (resp *dto.Recha
 		l.Errorw("[Recharge] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
 		return nil, errors.Wrapf(err, "find payment error: %v", err.Error())
 	}
+	if err := ensurePaymentAvailable(payment); err != nil {
+		return nil, err
+	}
 	// Calculate the handling fee
 	feeAmount := calculateFee(req.Amount, payment)
 	totalAmount := req.Amount + feeAmount

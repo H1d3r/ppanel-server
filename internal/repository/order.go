@@ -29,10 +29,11 @@ type OrderRepo interface {
 	FindOneByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error)
 	Update(ctx context.Context, data *order.Order, tx ...*gorm.DB) error
 	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
-	UpdateOrderStatus(ctx context.Context, orderNo string, status uint8, tx ...*gorm.DB) error
 	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8, tx ...*gorm.DB) (bool, error)
 	UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string, tx ...*gorm.DB) (bool, error)
+	SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string, tx ...*gorm.DB) (bool, error)
 	MarkOrderPaid(ctx context.Context, orderNo, tradeNo string, tx ...*gorm.DB) (bool, error)
+	CountPendingByPaymentID(ctx context.Context, paymentID int64) (int64, error)
 	QueryOrdersByStatusAfterID(ctx context.Context, status uint8, afterID int64, limit int) ([]*order.Order, error)
 	CountUserCouponUsage(ctx context.Context, userID int64, coupon string) (int64, error)
 	QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error)
@@ -158,7 +159,9 @@ func (m *orderRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error 
 func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coupon string) (int64, error) {
 	var count int64
 	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&order.Order{}).Where("user_id = ? AND coupon = ?", userID, coupon).Count(&count).Error
+		return conn.Model(&order.Order{}).
+			Where("user_id = ? AND coupon = ? AND status IN ?", userID, coupon, []uint8{1, 2, 5}).
+			Count(&count).Error
 	})
 	return count, err
 }
@@ -219,20 +222,6 @@ func orderListSearchCondition(conn *gorm.DB) string {
 	)
 }
 
-// UpdateOrderStatus Update order status
-func (m *orderRepo) UpdateOrderStatus(ctx context.Context, orderNo string, status uint8, tx ...*gorm.DB) error {
-	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
-	if err != nil {
-		return err
-	}
-	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
-		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).Update("status", status).Error
-	}, m.getCacheKeys(orderInfo)...)
-}
-
 func (m *orderRepo) UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8, tx ...*gorm.DB) (bool, error) {
 	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
 	if err != nil {
@@ -253,7 +242,9 @@ func (m *orderRepo) UpdateOrderStatusFrom(ctx context.Context, orderNo string, f
 }
 
 // UpdatePaymentExpectation persists the exact amount and currency sent to a
-// payment gateway. Only a pending order may receive or refresh this snapshot.
+// payment gateway. A snapshot is immutable: only a pending order that has not
+// yet been sent to any gateway may set it. Repeated checkout requests must use
+// the exact same amount and currency that were originally bound to the order.
 func (m *orderRepo) UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string, tx ...*gorm.DB) (bool, error) {
 	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
 	if err != nil {
@@ -265,7 +256,7 @@ func (m *orderRepo) UpdatePaymentExpectation(ctx context.Context, orderNo string
 			conn = tx[0]
 		}
 		result := conn.Model(&order.Order{}).
-			Where("order_no = ? AND status = ?", orderNo, uint8(1)).
+			Where("order_no = ? AND status = ? AND payment_currency = ?", orderNo, uint8(1), "").
 			Updates(map[string]interface{}{
 				"payment_amount":   amount,
 				"payment_currency": currency,
@@ -284,6 +275,38 @@ func (m *orderRepo) UpdatePaymentExpectation(ctx context.Context, orderNo string
 		return false, err
 	}
 	return latest.Status == 1 && latest.PaymentAmount == amount && latest.PaymentCurrency == currency, nil
+}
+
+// SetPaymentTradeNoIfEmpty atomically claims the sole provider-side payment
+// intent for a pending order. It prevents concurrent first Stripe checkouts
+// from exposing two independently chargeable client secrets.
+func (m *orderRepo) SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string, tx ...*gorm.DB) (bool, error) {
+	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
+	if err != nil {
+		return false, err
+	}
+	var updated bool
+	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		result := conn.Model(&order.Order{}).
+			Where("order_no = ? AND status = ? AND (trade_no IS NULL OR trade_no = '')", orderNo, uint8(1)).
+			Update("trade_no", tradeNo)
+		updated = result.RowsAffected == 1
+		return result.Error
+	}, m.getCacheKeys(orderInfo)...)
+	return updated, err
+}
+
+func (m *orderRepo) CountPendingByPaymentID(ctx context.Context, paymentID int64) (int64, error) {
+	var count int64
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, value interface{}) error {
+		return conn.Model(&order.Order{}).
+			Where("payment_id = ? AND status = ?", paymentID, uint8(1)).
+			Count(&count).Error
+	})
+	return count, err
 }
 
 // MarkOrderPaid performs the only valid callback-driven state transition. The

@@ -117,6 +117,9 @@ func (l *PreCreateOrderLogic) PreCreateOrder(req *dto.PurchaseOrderRequest) (res
 			l.Errorw("[PreCreateOrder] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment method error: %v", err.Error())
 		}
+		if err := ensurePaymentAvailable(payment); err != nil {
+			return nil, err
+		}
 		// Calculate the handling fee
 		if amount > 0 {
 			feeAmount = calculateFee(amount, payment)

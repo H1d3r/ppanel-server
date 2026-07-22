@@ -1,5 +1,10 @@
 package constant
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
 import "encoding/json"
 
 // Used for type cloning conversion
@@ -36,13 +41,25 @@ func (v VerifyType) String() string {
 // eg: temp_order:order_no
 const TempOrderCacheKey = "temp_order:%s"
 
+// CheckoutTokenHash returns the durable representation of the guest checkout
+// capability. Only the caller receives the original high-entropy token.
+func CheckoutTokenHash(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
+
 type TemporaryOrderInfo struct {
 	OrderNo       string `json:"order_no"`
 	CheckoutToken string `json:"checkout_token"`
 	Identifier    string `json:"identifier"`
 	AuthType      string `json:"auth_type"`
-	Password      string `json:"password"`
-	InviteCode    string `json:"invite_code,omitempty"`
+	// PasswordHash is the one-way encoded password needed to finish a guest
+	// account after payment.  Never place the plaintext password in Redis.
+	PasswordHash string `json:"password_hash,omitempty"`
+	// Password is retained only to finish orders created by older releases.
+	// New orders never populate it and it must never be logged.
+	Password   string `json:"password,omitempty"`
+	InviteCode string `json:"invite_code,omitempty"`
 }
 
 func (t *TemporaryOrderInfo) Unmarshal(data []byte) error {

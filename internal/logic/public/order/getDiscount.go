@@ -6,7 +6,7 @@ func getDiscount(discounts []dto.SubscribeDiscount, inputMonths int64) float64 {
 	var finalDiscount float64 = 100
 
 	for _, discount := range discounts {
-		if inputMonths >= discount.Quantity && discount.Discount < finalDiscount {
+		if discount.Quantity > 0 && discount.Discount >= 0 && discount.Discount <= 100 && inputMonths >= discount.Quantity && discount.Discount < finalDiscount {
 			finalDiscount = discount.Discount
 		}
 	}

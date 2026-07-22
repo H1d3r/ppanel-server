@@ -29,6 +29,9 @@ func NewCreateOrderLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Creat
 
 func (l *CreateOrderLogic) CreateOrder(req *dto.CreateOrderRequest) error {
 	store := l.svcCtx.Store
+	if req.Status != 0 && req.Status != 1 {
+		return errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_INITIAL_ORDER_STATUS"), "admin-created orders must start pending")
+	}
 	paymentMethod, err := store.Payment().FindOne(l.ctx, req.PaymentId)
 	if err != nil {
 		l.Logger.Error("[CreateOrder] PaymentMethod Not Found", logger.Field("error", err.Error()))
@@ -46,10 +49,10 @@ func (l *CreateOrderLogic) CreateOrder(req *dto.CreateOrderRequest) error {
 		Coupon:         req.Coupon,
 		CouponDiscount: req.CouponDiscount,
 		PaymentId:      req.PaymentId,
-		Method:         paymentMethod.Token,
+		Method:         paymentMethod.Platform,
 		FeeAmount:      req.FeeAmount,
 		TradeNo:        req.TradeNo,
-		Status:         req.Status,
+		Status:         1,
 		SubscribeId:    req.SubscribeId,
 	})
 	if err != nil {

@@ -69,6 +69,12 @@ func (r *activationUserRepo) Update(_ context.Context, data *userEntity.User, _ 
 	return nil
 }
 
+func (r *activationUserRepo) UpdateBalanceFields(_ context.Context, data *userEntity.User, _ ...*gorm.DB) error {
+	r.user.Balance = data.Balance
+	r.user.GiftAmount = data.GiftAmount
+	return nil
+}
+
 func (r *activationUserRepo) UpdateUserCache(_ context.Context, _ *userEntity.User) error {
 	r.updateCacheCalls++
 	return nil

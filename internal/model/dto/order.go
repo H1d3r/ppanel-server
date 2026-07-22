@@ -102,12 +102,12 @@ type OrdersStatistics struct {
 }
 
 type PortalPurchaseRequest struct {
-	AuthType       string `json:"auth_type"`
-	Identifier     string `json:"identifier"`
-	Password       string `json:"password,omitempty"`
-	Payment        int64  `json:"payment"`
-	SubscribeId    int64  `json:"subscribe_id"`
-	Quantity       int64  `json:"quantity"`
+	AuthType       string `json:"auth_type" validate:"required"`
+	Identifier     string `json:"identifier" validate:"required"`
+	Password       string `json:"password" validate:"required,min=8,max=128"`
+	Payment        int64  `json:"payment" validate:"required,gt=0"`
+	SubscribeId    int64  `json:"subscribe_id" validate:"required,gt=0"`
+	Quantity       int64  `json:"quantity" validate:"required,gt=0,lte=1000"`
 	Coupon         string `json:"coupon,omitempty"`
 	InviteCode     string `json:"invite_code,omitempty"`
 	TurnstileToken string `json:"turnstile_token,omitempty"`
@@ -129,9 +129,9 @@ type PreOrderResponse struct {
 }
 
 type PrePurchaseOrderRequest struct {
-	Payment     int64  `json:"payment,omitempty"`
-	SubscribeId int64  `json:"subscribe_id"`
-	Quantity    int64  `json:"quantity"`
+	Payment     int64  `json:"payment,omitempty" validate:"omitempty,gt=0"`
+	SubscribeId int64  `json:"subscribe_id" validate:"required,gt=0"`
+	Quantity    int64  `json:"quantity" validate:"required,gt=0,lte=1000"`
 	Coupon      string `json:"coupon,omitempty"`
 }
 
@@ -174,9 +174,8 @@ type QueryOrderListResponse struct {
 }
 
 type QueryPurchaseOrderRequest struct {
-	AuthType   string `form:"auth_type"`
-	Identifier string `form:"identifier"`
-	OrderNo    string `form:"order_no"`
+	OrderNo       string `form:"order_no" validate:"required"`
+	CheckoutToken string `form:"checkout_token"`
 }
 
 type QueryPurchaseOrderResponse struct {

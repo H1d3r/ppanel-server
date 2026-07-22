@@ -5,7 +5,7 @@ type BatchDeleteUserRequest struct {
 }
 
 type CommissionWithdrawRequest struct {
-	Amount  int64  `json:"amount"`
+	Amount  int64  `json:"amount" validate:"required,gt=0,lte=2000000000"`
 	Content string `json:"content"`
 }
 
