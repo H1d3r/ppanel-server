@@ -40,8 +40,8 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 
 	isDemo := strings.ToLower(os.Getenv("PPANEL_MODE")) == "demo"
 
-	if req.Avatar != "" && !tool.IsValidImageSize(req.Avatar, 1024) {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Invalid Image Size")
+	if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
+		return err
 	}
 
 	if userInfo.Balance != req.Balance {
@@ -144,6 +144,22 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 	if err != nil {
 		l.Errorw("[UpdateUserBasicInfoLogic] Update User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update User Error")
+	}
+
+	return nil
+}
+
+// validateAvatarUpdate permits retaining or clearing an existing avatar. A new
+// avatar must be a Base64 image no larger than 1024 KiB; OAuth providers may
+// persist remote HTTPS avatar URLs, which must remain usable during unrelated
+// profile updates.
+func validateAvatarUpdate(currentAvatar, requestedAvatar string) error {
+	if requestedAvatar == "" || requestedAvatar == currentAvatar {
+		return nil
+	}
+
+	if !tool.IsValidImageSize(requestedAvatar, 1024) {
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "Invalid avatar")
 	}
 
 	return nil
