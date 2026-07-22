@@ -10,7 +10,7 @@
 
 **PPanel 是一个纯净、专业、完美的开源代理面板工具，旨在成为您学习和实际使用的理想选择。**
 
-[中文](README.md) | [English](README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
+[中文](README.md) | [English](doc/README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
 
 </div>
 
@@ -188,7 +188,7 @@ make linux-arm64  # 构建特定平台
 
 ## 🤝 贡献
 
-欢迎各种贡献，包括功能开发、错误修复和文档改进。请查看[贡献指南](CONTRIBUTING_ZH.md)了解详情。
+欢迎各种贡献，包括功能开发、错误修复和文档改进。请查看[贡献指南](doc/CONTRIBUTING_ZH.md)了解详情。
 
 ## ✨ 特别感谢
 

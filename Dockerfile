@@ -21,7 +21,7 @@ COPY . .
 
 # Build the binary with version and build time
 RUN BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S") && \
-    go build -ldflags="-s -w -X 'github.com/perfect-panel/server/pkg/constant.Version=${VERSION}' -X 'github.com/perfect-panel/server/pkg/constant.BuildTime=${BUILD_TIME}'" -o /app/ppanel ppanel.go
+    go build -ldflags="-s -w -X 'github.com/perfect-panel/server/pkg/constant.Version=${VERSION}' -X 'github.com/perfect-panel/server/pkg/constant.BuildTime=${BUILD_TIME}'" -o /app/ppanel main.go
 
 # Final minimal image
 FROM scratch

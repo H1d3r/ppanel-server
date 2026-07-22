@@ -13,7 +13,7 @@ generate() {
 
   go run "github.com/swaggo/swag/cmd/swag@${SWAG_VERSION}" init \
     --quiet \
-    --generalInfo ppanel.go \
+    --generalInfo main.go \
     --parseInternal \
     --output "${output_dir}" \
     --outputTypes json \
