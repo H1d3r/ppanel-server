@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Delete announcement
+// DeleteAnnouncementHandler documents Delete announcement.
+//
+// @Summary Delete announcement
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.DeleteAnnouncementRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/announcement/ [delete]
 func DeleteAnnouncementHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.DeleteAnnouncementRequest

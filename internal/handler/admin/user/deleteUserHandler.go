@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Delete user
+// DeleteUserHandler documents Delete user.
+//
+// @Summary Delete user
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.GetDetailRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/user/ [delete]
 func DeleteUserHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetDetailRequest

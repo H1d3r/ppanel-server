@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get auth method list
+// GetAuthMethodListHandler documents Get auth method list.
+//
+// @Summary Get auth method list
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetAuthMethodListResponse}
+// @Router /v1/admin/auth-method/list [get]
 func GetAuthMethodListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

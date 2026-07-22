@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// GetPaymentMethodListHandler Get Payment Method List
+// GetPaymentMethodListHandler documents Get Payment Method List.
+//
+// @Summary Get Payment Method List
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetPaymentMethodListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetPaymentMethodListResponse}
+// @Router /v1/admin/payment/list [get]
 func GetPaymentMethodListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetPaymentMethodListRequest

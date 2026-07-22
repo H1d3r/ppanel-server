@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Set Node Multiplier
+// SetNodeMultiplierHandler documents Set Node Multiplier.
+//
+// @Summary Set Node Multiplier
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.SetNodeMultiplierRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/system/set_node_multiplier [post]
 func SetNodeMultiplierHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.SetNodeMultiplierRequest

@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Commission Withdraw
+// CommissionWithdrawHandler documents Commission Withdraw.
+//
+// @Summary Commission Withdraw
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.CommissionWithdrawRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.WithdrawalLog}
+// @Router /v1/public/user/commission_withdraw [post]
 func CommissionWithdrawHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.CommissionWithdrawRequest

@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get batch send email task list
+// GetBatchSendEmailTaskListHandler documents Get batch send email task list.
+//
+// @Summary Get batch send email task list
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetBatchSendEmailTaskListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetBatchSendEmailTaskListResponse}
+// @Router /v1/admin/marketing/email/batch/list [get]
 func GetBatchSendEmailTaskListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetBatchSendEmailTaskListRequest

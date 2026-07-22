@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Device List
+// GetDeviceListHandler documents Get Device List.
+//
+// @Summary Get Device List
+// @Tags user
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetDeviceListResponse}
+// @Router /v1/public/user/devices [get]
 func GetDeviceListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

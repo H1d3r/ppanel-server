@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Subscribe Log
+// GetSubscribeLogHandler documents Get Subscribe Log.
+//
+// @Summary Get Subscribe Log
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetSubscribeLogRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetSubscribeLogResponse}
+// @Router /v1/public/user/subscribe_log [get]
 func GetSubscribeLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetSubscribeLogRequest

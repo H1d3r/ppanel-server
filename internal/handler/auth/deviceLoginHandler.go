@@ -10,7 +10,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Device Login
+// DeviceLoginHandler documents Device Login.
+//
+// @Summary Device Login
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.DeviceLoginRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.LoginResponse}
+// @Router /v1/auth/login/device [post]
 func DeviceLoginHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.DeviceLoginRequest

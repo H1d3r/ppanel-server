@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter traffic log details
+// FilterTrafficLogDetailsHandler documents Filter traffic log details.
+//
+// @Summary Filter traffic log details
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterTrafficLogDetailsRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterTrafficLogDetailsResponse}
+// @Router /v1/admin/log/traffic/details [get]
 func FilterTrafficLogDetailsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterTrafficLogDetailsRequest

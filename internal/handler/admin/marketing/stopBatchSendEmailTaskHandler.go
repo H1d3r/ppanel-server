@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// StopBatchSendEmailTaskHandler Stop a batch send email task
+// StopBatchSendEmailTaskHandler documents Stop a batch send email task.
+//
+// @Summary Stop a batch send email task
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.StopBatchSendEmailTaskRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/marketing/email/batch/stop [post]
 func StopBatchSendEmailTaskHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.StopBatchSendEmailTaskRequest

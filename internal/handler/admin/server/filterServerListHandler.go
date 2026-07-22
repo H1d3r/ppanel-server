@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// FilterServerListHandler Filter Server List
+// FilterServerListHandler documents Filter Server List.
+//
+// @Summary Filter Server List
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterServerListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterServerListResponse}
+// @Router /v1/admin/server/list [get]
 func FilterServerListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.FilterServerListRequest

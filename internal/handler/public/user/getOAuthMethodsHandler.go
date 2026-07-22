@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get OAuth Methods
+// GetOAuthMethodsHandler documents Get OAuth Methods.
+//
+// @Summary Get OAuth Methods
+// @Tags user
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetOAuthMethodsResponse}
+// @Router /v1/public/user/oauth_methods [get]
 func GetOAuthMethodsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

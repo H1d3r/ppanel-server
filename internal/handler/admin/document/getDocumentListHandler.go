@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get document list
+// GetDocumentListHandler documents Get document list.
+//
+// @Summary Get document list
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetDocumentListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetDocumentListResponse}
+// @Router /v1/admin/document/list [get]
 func GetDocumentListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetDocumentListRequest

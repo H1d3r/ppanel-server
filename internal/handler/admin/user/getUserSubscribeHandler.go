@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get user subcribe
+// GetUserSubscribeHandler documents Get user subcribe.
+//
+// @Summary Get user subcribe
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetUserSubscribeListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetUserSubscribeListResponse}
+// @Router /v1/admin/user/subscribe [get]
 func GetUserSubscribeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetUserSubscribeListRequest

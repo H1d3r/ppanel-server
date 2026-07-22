@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Create Payment Method
+// CreatePaymentMethodHandler documents Create Payment Method.
+//
+// @Summary Create Payment Method
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.CreatePaymentMethodRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PaymentConfig}
+// @Router /v1/admin/payment/ [post]
 func CreatePaymentMethodHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.CreatePaymentMethodRequest

@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter balance log
+// FilterBalanceLogHandler documents Filter balance log.
+//
+// @Summary Filter balance log
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterBalanceLogRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterBalanceLogResponse}
+// @Router /v1/admin/log/balance/list [get]
 func FilterBalanceLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterBalanceLogRequest

@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// GetModuleConfigHandler Get Module Config
+// GetModuleConfigHandler documents Get Module Config.
+//
+// @Summary Get Module Config
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.ModuleConfig}
+// @Router /v1/admin/system/module [get]
 func GetModuleConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

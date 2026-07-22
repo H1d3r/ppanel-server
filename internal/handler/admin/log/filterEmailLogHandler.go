@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter email log
+// FilterEmailLogHandler documents Filter email log.
+//
+// @Summary Filter email log
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterLogParams false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterEmailLogResponse}
+// @Router /v1/admin/log/email/list [get]
 func FilterEmailLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterLogParams

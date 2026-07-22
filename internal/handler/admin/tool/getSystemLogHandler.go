@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get System Log
+// GetSystemLogHandler documents Get System Log.
+//
+// @Summary Get System Log
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.LogResponse}
+// @Router /v1/admin/tool/log [get]
 func GetSystemLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

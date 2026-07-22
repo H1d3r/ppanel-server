@@ -10,7 +10,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Check user is exist
+// CheckUserHandler documents Check user is exist.
+//
+// @Summary Check user is exist
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request query dto.CheckUserRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.CheckUserResponse}
+// @Router /v1/auth/check [get]
 func CheckUserHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.CheckUserRequest

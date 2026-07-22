@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Toggle Node Status
+// ToggleNodeStatusHandler documents Toggle Node Status.
+//
+// @Summary Toggle Node Status
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.ToggleNodeStatusRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/server/node/status/toggle [post]
 func ToggleNodeStatusHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.ToggleNodeStatusRequest

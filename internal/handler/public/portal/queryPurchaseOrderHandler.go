@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query Purchase Order
+// QueryPurchaseOrderHandler documents Query Purchase Order.
+//
+// @Summary Query Purchase Order
+// @Tags user
+// @Accept json
+// @Produce json
+// @Param request query dto.QueryPurchaseOrderRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryPurchaseOrderResponse}
+// @Router /v1/public/portal/order/status [get]
 func QueryPurchaseOrderHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.QueryPurchaseOrderRequest

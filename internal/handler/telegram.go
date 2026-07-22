@@ -17,6 +17,16 @@ func RegisterTelegramHandlers(router *server.Hertz, serverCtx *svc.ServiceContex
 	router.POST("/v1/telegram/webhook", TelegramHandler(serverCtx))
 }
 
+// TelegramHandler documents Telegram.
+//
+// @Summary Telegram
+// @Tags common
+// @Accept json
+// @Produce json
+// @Security TelegramSecret
+// @Param request body object true "Telegram Bot API update"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/telegram/webhook [post]
 func TelegramHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		// auth secret

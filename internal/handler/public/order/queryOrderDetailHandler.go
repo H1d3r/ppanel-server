@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get order
+// QueryOrderDetailHandler documents Get order.
+//
+// @Summary Get order
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.QueryOrderDetailRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.OrderDetail}
+// @Router /v1/public/order/detail [get]
 func QueryOrderDetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.QueryOrderDetailRequest

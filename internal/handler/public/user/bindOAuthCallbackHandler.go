@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Bind OAuth Callback
+// BindOAuthCallbackHandler documents Bind OAuth Callback.
+//
+// @Summary Bind OAuth Callback
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.BindOAuthCallbackRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/public/user/bind_oauth/callback [post]
 func BindOAuthCallbackHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.BindOAuthCallbackRequest

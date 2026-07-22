@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get user subcribe reset traffic logs
+// GetUserSubscribeResetTrafficLogsHandler documents Get user subcribe reset traffic logs.
+//
+// @Summary Get user subcribe reset traffic logs
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetUserSubscribeResetTrafficLogsRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetUserSubscribeResetTrafficLogsResponse}
+// @Router /v1/admin/user/subscribe/reset/logs [get]
 func GetUserSubscribeResetTrafficLogsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetUserSubscribeResetTrafficLogsRequest

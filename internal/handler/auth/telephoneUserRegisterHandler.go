@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// User Telephone register
+// TelephoneUserRegisterHandler documents User Telephone register.
+//
+// @Summary User Telephone register
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.TelephoneRegisterRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.LoginResponse}
+// @Router /v1/auth/register/telephone [post]
 func TelephoneUserRegisterHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.TelephoneRegisterRequest

@@ -15,7 +15,15 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Reset password
+// ResetPasswordHandler documents Reset password.
+//
+// @Summary Reset password
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.ResetPasswordRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.LoginResponse}
+// @Router /v1/auth/reset [post]
 func ResetPasswordHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.ResetPasswordRequest

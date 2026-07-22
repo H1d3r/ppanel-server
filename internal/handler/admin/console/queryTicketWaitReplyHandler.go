@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query ticket wait reply
+// QueryTicketWaitReplyHandler documents Query ticket wait reply.
+//
+// @Summary Query ticket wait reply
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.TicketWaitRelpyResponse}
+// @Router /v1/admin/console/ticket [get]
 func QueryTicketWaitReplyHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

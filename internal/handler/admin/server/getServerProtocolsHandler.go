@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Server Protocols
+// GetServerProtocolsHandler documents Get Server Protocols.
+//
+// @Summary Get Server Protocols
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetServerProtocolsRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetServerProtocolsResponse}
+// @Router /v1/admin/server/protocols [get]
 func GetServerProtocolsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetServerProtocolsRequest

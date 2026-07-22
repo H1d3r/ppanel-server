@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter commission log
+// FilterCommissionLogHandler documents Filter commission log.
+//
+// @Summary Filter commission log
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterCommissionLogRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterCommissionLogResponse}
+// @Router /v1/admin/log/commission/list [get]
 func FilterCommissionLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterCommissionLogRequest

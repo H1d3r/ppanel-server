@@ -21,7 +21,22 @@ const maxStripePayloadSize = 65_536
 
 var errStripePayloadTooLarge = errors.New("http: request body too large")
 
-// PaymentNotifyHandler Payment Notify
+// PaymentNotifyHandler documents Payment Notify.
+//
+// @Summary Payment Notify
+// @Tags common
+// @Accept json,x-www-form-urlencoded
+// @Produce json
+// @Param platform path string true "platform"
+// @Param token path string true "token"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/notify/{platform}/{token} [delete]
+// @Router /v1/notify/{platform}/{token} [get]
+// @Router /v1/notify/{platform}/{token} [head]
+// @Router /v1/notify/{platform}/{token} [options]
+// @Router /v1/notify/{platform}/{token} [patch]
+// @Router /v1/notify/{platform}/{token} [post]
+// @Router /v1/notify/{platform}/{token} [put]
 func PaymentNotifyHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		platform, ok := c.Value(constant.CtxKeyPlatform).(string)

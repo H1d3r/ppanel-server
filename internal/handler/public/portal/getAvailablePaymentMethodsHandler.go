@@ -9,7 +9,13 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get available payment methods
+// GetAvailablePaymentMethodsHandler documents Get available payment methods.
+//
+// @Summary Get available payment methods
+// @Tags user
+// @Produce json
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetAvailablePaymentMethodsResponse}
+// @Router /v1/public/portal/payment-method [get]
 func GetAvailablePaymentMethodsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

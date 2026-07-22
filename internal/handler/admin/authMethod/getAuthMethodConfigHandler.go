@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get auth method config
+// GetAuthMethodConfigHandler documents Get auth method config.
+//
+// @Summary Get auth method config
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetAuthMethodConfigRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.AuthMethodConfig}
+// @Router /v1/admin/auth-method/config [get]
 func GetAuthMethodConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetAuthMethodConfigRequest

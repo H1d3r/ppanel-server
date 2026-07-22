@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get subscribe config
+// GetSubscribeConfigHandler documents Get subscribe config.
+//
+// @Summary Get subscribe config
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.SubscribeConfig}
+// @Router /v1/admin/system/subscribe_config [get]
 func GetSubscribeConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

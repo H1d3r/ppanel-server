@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get order list
+// GetOrderListHandler documents Get order list.
+//
+// @Summary Get order list
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetOrderListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetOrderListResponse}
+// @Router /v1/admin/order/list [get]
 func GetOrderListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetOrderListRequest

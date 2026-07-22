@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get user auth method
+// GetUserAuthMethodHandler documents Get user auth method.
+//
+// @Summary Get user auth method
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetUserAuthMethodRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetUserAuthMethodResponse}
+// @Router /v1/admin/user/auth_method [get]
 func GetUserAuthMethodHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetUserAuthMethodRequest

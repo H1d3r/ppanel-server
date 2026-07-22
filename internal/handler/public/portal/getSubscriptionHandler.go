@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Subscription
+// GetSubscriptionHandler documents Get Subscription.
+//
+// @Summary Get Subscription
+// @Tags user
+// @Accept json
+// @Produce json
+// @Param request query dto.GetSubscriptionRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetSubscriptionResponse}
+// @Router /v1/public/portal/subscribe [get]
 func GetSubscriptionHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetSubscriptionRequest

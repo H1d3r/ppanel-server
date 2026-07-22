@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get user detail
+// GetUserDetailHandler documents Get user detail.
+//
+// @Summary Get user detail
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetDetailRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.User}
+// @Router /v1/admin/user/detail [get]
 func GetUserDetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetDetailRequest

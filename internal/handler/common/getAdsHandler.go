@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Ads
+// GetAdsHandler documents Get Ads.
+//
+// @Summary Get Ads
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request query dto.GetAdsRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetAdsResponse}
+// @Router /v1/common/ads [get]
 func GetAdsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetAdsRequest

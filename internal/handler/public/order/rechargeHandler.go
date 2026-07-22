@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Recharge
+// RechargeHandler documents Recharge.
+//
+// @Summary Recharge
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.RechargeOrderRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.RechargeOrderResponse}
+// @Router /v1/public/order/recharge [post]
 func RechargeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.RechargeOrderRequest

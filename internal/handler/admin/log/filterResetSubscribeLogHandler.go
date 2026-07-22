@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter reset subscribe log
+// FilterResetSubscribeLogHandler documents Filter reset subscribe log.
+//
+// @Summary Filter reset subscribe log
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterResetSubscribeLogRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterResetSubscribeLogResponse}
+// @Router /v1/admin/log/subscribe/reset/list [get]
 func FilterResetSubscribeLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterResetSubscribeLogRequest

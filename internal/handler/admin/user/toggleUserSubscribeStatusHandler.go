@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Stop user subscribe
+// ToggleUserSubscribeStatusHandler documents Stop user subscribe.
+//
+// @Summary Stop user subscribe
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.ToggleUserSubscribeStatusRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/user/subscribe/toggle [post]
 func ToggleUserSubscribeStatusHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.ToggleUserSubscribeStatusRequest

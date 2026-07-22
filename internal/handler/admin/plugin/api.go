@@ -13,18 +13,18 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-type apiResponse struct {
+type APIResponse struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
-type pluginListResponse struct {
+type PluginListResponse struct {
 	List  []runtimeplugin.PluginInfo `json:"list"`
 	Total int                        `json:"total"`
 }
 
-type pluginActionResponse struct {
+type PluginActionResponse struct {
 	Name    string `json:"name"`
 	Action  string `json:"action"`
 	Status  string `json:"status"`
@@ -32,7 +32,7 @@ type pluginActionResponse struct {
 }
 
 func writeOK(ctx *app.RequestContext, data interface{}) {
-	ctx.JSON(consts.StatusOK, apiResponse{
+	ctx.JSON(consts.StatusOK, APIResponse{
 		Code:    http.StatusOK,
 		Message: "success",
 		Data:    data,
@@ -40,7 +40,7 @@ func writeOK(ctx *app.RequestContext, data interface{}) {
 }
 
 func writeError(ctx *app.RequestContext, code int, message string) {
-	ctx.JSON(consts.StatusOK, apiResponse{
+	ctx.JSON(consts.StatusOK, APIResponse{
 		Code:    code,
 		Message: message,
 	})
@@ -64,7 +64,18 @@ func pluginName(ctx *app.RequestContext) (string, bool) {
 	return name, true
 }
 
-// InstalledUploadHandler 上传并安装插件 zip 包 POST /v1/admin/plugins/upload
+// InstalledUploadHandler uploads and installs a plugin archive.
+//
+// @Summary Upload and install a plugin archive
+// @Tags admin
+// @Accept mpfd
+// @Produce json
+// @Security BearerAuth
+// @Param file formData file true "Plugin zip archive"
+// @Param replace formData bool false "Replace an existing plugin"
+// @Param enable formData bool false "Enable after installation"
+// @Success 200 {object} APIResponse{data=runtimeplugin.PluginInstallResult}
+// @Router /v1/admin/plugins/upload [post]
 func InstalledUploadHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -96,7 +107,19 @@ func InstalledUploadHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledListHandler 获取已安装插件列表 GET /v1/admin/plugins
+// InstalledListHandler lists installed plugins.
+//
+// @Summary List installed plugins
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param q query string false "Search by name, description, or author"
+// @Param status query string false "Filter by plugin status"
+// @Param page query int false "Page number"
+// @Param size query int false "Page size" maximum(100)
+// @Success 200 {object} APIResponse{data=PluginListResponse}
+// @Router /v1/admin/plugins [get]
+// @Router /v1/admin/plugins/ [get]
 func InstalledListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -133,14 +156,21 @@ func InstalledListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			end = total
 		}
 
-		writeOK(ctx, pluginListResponse{
+		writeOK(ctx, PluginListResponse{
 			List:  filtered[start:end],
 			Total: total,
 		})
 	}
 }
 
-// InstalledReloadAllHandler 重新扫描并加载所有插件 POST /v1/admin/plugins/reload-all
+// InstalledReloadAllHandler rescans and reloads installed plugins.
+//
+// @Summary Reload all installed plugins
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} APIResponse{data=PluginListResponse}
+// @Router /v1/admin/plugins/reload-all [post]
 func InstalledReloadAllHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -148,14 +178,22 @@ func InstalledReloadAllHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 		plugins := mgr.ReloadAllPlugins(c)
-		writeOK(ctx, pluginListResponse{
+		writeOK(ctx, PluginListResponse{
 			List:  plugins,
 			Total: len(plugins),
 		})
 	}
 }
 
-// InstalledDetailHandler 获取插件详情 GET /v1/admin/plugins/:name
+// InstalledDetailHandler returns installed plugin details.
+//
+// @Summary Get installed plugin details
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=runtimeplugin.PluginInfo}
+// @Router /v1/admin/plugins/{name} [get]
 func InstalledDetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -175,7 +213,15 @@ func InstalledDetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledValidateHandler 校验插件目录和 WASM POST /v1/admin/plugins/:name/validate
+// InstalledValidateHandler validates an installed plugin.
+//
+// @Summary Validate an installed plugin
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=runtimeplugin.PluginValidation}
+// @Router /v1/admin/plugins/{name}/validate [post]
 func InstalledValidateHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -190,7 +236,15 @@ func InstalledValidateHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledManifestHandler 获取插件清单 GET /v1/admin/plugins/:name/manifest
+// InstalledManifestHandler returns an installed plugin manifest.
+//
+// @Summary Get an installed plugin manifest
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=runtimeplugin.PluginManifest}
+// @Router /v1/admin/plugins/{name}/manifest [get]
 func InstalledManifestHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -210,7 +264,15 @@ func InstalledManifestHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledRoutesHandler 获取插件运行时路由 GET /v1/admin/plugins/:name/routes
+// InstalledRoutesHandler lists runtime routes for a plugin.
+//
+// @Summary List plugin runtime routes
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=[]runtimeplugin.RouteRegistration}
+// @Router /v1/admin/plugins/{name}/routes [get]
 func InstalledRoutesHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -225,7 +287,15 @@ func InstalledRoutesHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledMiddlewareHandler 获取插件运行时中间件 GET /v1/admin/plugins/:name/middlewares
+// InstalledMiddlewareHandler lists runtime middleware for a plugin.
+//
+// @Summary List plugin runtime middleware
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=[]runtimeplugin.MiddlewareRegistration}
+// @Router /v1/admin/plugins/{name}/middlewares [get]
 func InstalledMiddlewareHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -240,7 +310,15 @@ func InstalledMiddlewareHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledEventsHandler 获取插件事件订阅 GET /v1/admin/plugins/:name/events
+// InstalledEventsHandler lists event subscriptions for a plugin.
+//
+// @Summary List plugin event subscriptions
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=[]runtimeplugin.EventSubscription}
+// @Router /v1/admin/plugins/{name}/events [get]
 func InstalledEventsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -255,7 +333,15 @@ func InstalledEventsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledHealthHandler 获取插件健康状态 GET /v1/admin/plugins/:name/health
+// InstalledHealthHandler returns plugin runtime health.
+//
+// @Summary Get plugin runtime health
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=runtimeplugin.PluginHealth}
+// @Router /v1/admin/plugins/{name}/health [get]
 func InstalledHealthHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -275,7 +361,18 @@ func InstalledHealthHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
-// InstalledActionHandler 执行插件生命周期动作。
+// InstalledActionHandler executes a plugin lifecycle action.
+//
+// @Summary Execute a plugin lifecycle action
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "name"
+// @Success 200 {object} APIResponse{data=PluginActionResponse}
+// @Router /v1/admin/plugins/{name}/disable [post]
+// @Router /v1/admin/plugins/{name}/enable [post]
+// @Router /v1/admin/plugins/{name}/reload [post]
+// @Router /v1/admin/plugins/{name}/restart [post]
 func InstalledActionHandler(svcCtx *svc.ServiceContext, action string) app.HandlerFunc {
 	return func(_ context.Context, ctx *app.RequestContext) {
 		mgr, ok := pluginManager(svcCtx, ctx)
@@ -308,7 +405,7 @@ func InstalledActionHandler(svcCtx *svc.ServiceContext, action string) app.Handl
 		if info, exists := mgr.GetInstalledPluginInfo(name); exists {
 			status = string(info.Status)
 		}
-		writeOK(ctx, pluginActionResponse{
+		writeOK(ctx, PluginActionResponse{
 			Name:    name,
 			Action:  action,
 			Status:  status,

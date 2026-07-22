@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get invite config
+// GetInviteConfigHandler documents Get invite config.
+//
+// @Summary Get invite config
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.InviteConfig}
+// @Router /v1/admin/system/invite_config [get]
 func GetInviteConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

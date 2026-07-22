@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query User Info
+// QueryUserInfoHandler documents returns the current user profile..
+//
+// @Summary returns the current user profile.
+// @Tags user
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.User}
+// @Router /v1/public/user/info [get]
 func QueryUserInfoHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

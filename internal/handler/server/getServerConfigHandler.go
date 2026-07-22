@@ -12,7 +12,16 @@ import (
 	"github.com/pkg/errors"
 )
 
-// GetServerConfigHandler Get server config
+// GetServerConfigHandler documents Get server config.
+//
+// @Summary Get server config
+// @Tags node
+// @Accept json
+// @Produce json
+// @Security NodeSecret
+// @Param request query dto.GetServerConfigRequest false "Request parameters"
+// @Success 200 {object} dto.GetServerConfigResponse
+// @Router /v1/server/config [get]
 func GetServerConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		commonReq, err := serverCommonRequest(ctx)

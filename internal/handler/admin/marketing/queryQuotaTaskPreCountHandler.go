@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query quota task pre-count
+// QueryQuotaTaskPreCountHandler documents Query quota task pre-count.
+//
+// @Summary Query quota task pre-count
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.QueryQuotaTaskPreCountRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryQuotaTaskPreCountResponse}
+// @Router /v1/admin/marketing/quota/pre-count [post]
 func QueryQuotaTaskPreCountHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.QueryQuotaTaskPreCountRequest

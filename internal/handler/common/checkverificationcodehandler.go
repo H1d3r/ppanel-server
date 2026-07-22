@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Check verification code
+// CheckVerificationCodeHandler documents Check verification code.
+//
+// @Summary Check verification code
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.CheckVerificationCodeRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.CheckVerificationCodeRespone}
+// @Router /v1/common/check_verification_code [post]
 func CheckVerificationCodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.CheckVerificationCodeRequest

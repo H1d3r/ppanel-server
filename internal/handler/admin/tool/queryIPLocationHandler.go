@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// QueryIPLocationHandler Query IP Location
+// QueryIPLocationHandler documents Query IP Location.
+//
+// @Summary Query IP Location
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.QueryIPLocationRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryIPLocationResponse}
+// @Router /v1/admin/tool/ip/location [get]
 func QueryIPLocationHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.QueryIPLocationRequest

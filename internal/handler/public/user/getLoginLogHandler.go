@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Login Log
+// GetLoginLogHandler documents Get Login Log.
+//
+// @Summary Get Login Log
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetLoginLogRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetLoginLogResponse}
+// @Router /v1/public/user/login_log [get]
 func GetLoginLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetLoginLogRequest

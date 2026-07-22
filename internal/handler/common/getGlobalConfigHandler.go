@@ -9,7 +9,13 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get global config
+// GetGlobalConfigHandler documents Get global config.
+//
+// @Summary Get global config
+// @Tags common
+// @Produce json
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetGlobalConfigResponse}
+// @Router /v1/common/site/config [get]
 func GetGlobalConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		l := common.NewGetGlobalConfigLogic(ctx, svcCtx)

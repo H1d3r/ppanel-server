@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Update Privacy Policy Config
+// UpdatePrivacyPolicyConfigHandler documents Update Privacy Policy Config.
+//
+// @Summary Update Privacy Policy Config
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.PrivacyPolicyConfig true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/system/privacy [put]
 func UpdatePrivacyPolicyConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.PrivacyPolicyConfig

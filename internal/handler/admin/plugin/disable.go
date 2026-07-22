@@ -9,7 +9,16 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// DisableHandler 禁用插件 POST /v1/admin/plugin/disable
+// DisableHandler disables a plugin.
+//
+// @Summary Disable a plugin
+// @Tags admin
+// @Accept x-www-form-urlencoded
+// @Produce json
+// @Security BearerAuth
+// @Param name formData string true "Plugin name"
+// @Success 200 {object} map[string]string
+// @Router /v1/admin/plugin/disable [post]
 func DisableHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		name := string(ctx.FormValue("name"))

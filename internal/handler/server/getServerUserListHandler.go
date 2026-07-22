@@ -12,7 +12,16 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Get user list
+// GetServerUserListHandler documents Get user list.
+//
+// @Summary Get user list
+// @Tags node
+// @Accept json
+// @Produce json
+// @Security NodeSecret
+// @Param request query dto.GetServerUserListRequest false "Request parameters"
+// @Success 200 {object} dto.GetServerUserListResponse
+// @Router /v1/server/user [get]
 func GetServerUserListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		commonReq, err := serverCommonRequest(ctx)

@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query User Balance Log
+// QueryUserBalanceLogHandler documents Query User Balance Log.
+//
+// @Summary Query User Balance Log
+// @Tags user
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryUserBalanceLogListResponse}
+// @Router /v1/public/user/balance_log [get]
 func QueryUserBalanceLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

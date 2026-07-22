@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query announcement
+// QueryAnnouncementHandler documents Query announcement.
+//
+// @Summary Query announcement
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.QueryAnnouncementRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryAnnouncementResponse}
+// @Router /v1/public/announcement/list [get]
 func QueryAnnouncementHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.QueryAnnouncementRequest

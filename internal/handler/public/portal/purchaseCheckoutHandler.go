@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// PurchaseCheckoutHandler Purchase Checkout
+// PurchaseCheckoutHandler documents Purchase Checkout.
+//
+// @Summary Purchase Checkout
+// @Tags user
+// @Accept json
+// @Produce json
+// @Param request body dto.CheckoutOrderRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.CheckoutOrderResponse}
+// @Router /v1/public/portal/order/checkout [post]
 func PurchaseCheckoutHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.CheckoutOrderRequest

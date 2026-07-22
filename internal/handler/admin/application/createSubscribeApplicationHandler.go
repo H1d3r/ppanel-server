@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Create subscribe application
+// CreateSubscribeApplicationHandler documents Create subscribe application.
+//
+// @Summary Create subscribe application
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.CreateSubscribeApplicationRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.SubscribeApplication}
+// @Router /v1/admin/application/ [post]
 func CreateSubscribeApplicationHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.CreateSubscribeApplicationRequest

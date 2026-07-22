@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get ticket list
+// GetTicketListHandler documents Get ticket list.
+//
+// @Summary Get ticket list
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetTicketListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetTicketListResponse}
+// @Router /v1/admin/ticket/list [get]
 func GetTicketListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetTicketListRequest

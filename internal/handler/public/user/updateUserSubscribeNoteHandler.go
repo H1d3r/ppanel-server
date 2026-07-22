@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Update User Subscribe Note
+// UpdateUserSubscribeNoteHandler documents Update User Subscribe Note.
+//
+// @Summary Update User Subscribe Note
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.UpdateUserSubscribeNoteRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/public/user/subscribe_note [put]
 func UpdateUserSubscribeNoteHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.UpdateUserSubscribeNoteRequest

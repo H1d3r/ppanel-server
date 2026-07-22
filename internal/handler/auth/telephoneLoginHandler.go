@@ -15,7 +15,15 @@ import (
 	"github.com/pkg/errors"
 )
 
-// User Telephone login
+// TelephoneLoginHandler documents User Telephone login.
+//
+// @Summary User Telephone login
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.TelephoneLoginRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.LoginResponse}
+// @Router /v1/auth/login/telephone [post]
 func TelephoneLoginHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.TelephoneLoginRequest

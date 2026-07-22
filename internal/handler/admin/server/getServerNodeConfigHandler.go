@@ -11,6 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
+// GetServerNodeConfigHandler documents Get Server Node Config.
+//
+// @Summary Get Server Node Config
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetServerNodeConfigRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetServerNodeConfigResponse}
+// @Router /v1/admin/server/node_config [get]
 func GetServerNodeConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.GetServerNodeConfigRequest

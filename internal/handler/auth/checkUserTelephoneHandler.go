@@ -10,7 +10,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Check user telephone is exist
+// CheckUserTelephoneHandler documents Check user telephone is exist.
+//
+// @Summary Check user telephone is exist
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request query dto.TelephoneCheckUserRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.TelephoneCheckUserResponse}
+// @Router /v1/auth/check/telephone [get]
 func CheckUserTelephoneHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.TelephoneCheckUserRequest

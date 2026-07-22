@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get user subscribe node info
+// QueryUserSubscribeNodeListHandler documents Get user subscribe node info.
+//
+// @Summary Get user subscribe node info
+// @Tags user
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryUserSubscribeNodeListResponse}
+// @Router /v1/public/subscribe/node/list [get]
 func QueryUserSubscribeNodeListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

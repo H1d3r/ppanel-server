@@ -12,7 +12,17 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Apple Login Callback
+// AppleLoginCallbackHandler documents Apple Login Callback.
+//
+// @Summary Apple Login Callback
+// @Tags common
+// @Accept x-www-form-urlencoded
+// @Produce json
+// @Param code formData string true "Authorization code"
+// @Param id_token formData string false "Apple identity token"
+// @Param state formData string false "OAuth state"
+// @Success 302 {string} string "Redirect to the configured frontend"
+// @Router /v1/auth/oauth/callback/apple [post]
 func AppleLoginCallbackHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.AppleLoginCallbackRequest

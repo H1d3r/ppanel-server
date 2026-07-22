@@ -9,7 +9,16 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// EnableHandler 启用插件 POST /v1/admin/plugin/enable
+// EnableHandler enables a plugin.
+//
+// @Summary Enable a plugin
+// @Tags admin
+// @Accept x-www-form-urlencoded
+// @Produce json
+// @Security BearerAuth
+// @Param name formData string true "Plugin name"
+// @Success 200 {object} map[string]string
+// @Router /v1/admin/plugin/enable [post]
 func EnableHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		name := string(ctx.FormValue("name"))

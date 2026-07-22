@@ -9,8 +9,16 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// ReloadHandler 重载插件 POST /v1/admin/plugin/reload
-// 停止并重新加载指定插件
+// ReloadHandler reloads a plugin.
+//
+// @Summary Reload a plugin
+// @Tags admin
+// @Accept x-www-form-urlencoded
+// @Produce json
+// @Security BearerAuth
+// @Param name formData string true "Plugin name"
+// @Success 200 {object} map[string]string
+// @Router /v1/admin/plugin/reload [post]
 func ReloadHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		name := string(ctx.FormValue("name"))

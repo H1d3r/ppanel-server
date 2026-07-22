@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query revenue statistics
+// QueryRevenueStatisticsHandler documents Query revenue statistics.
+//
+// @Summary Query revenue statistics
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.RevenueStatisticsResponse}
+// @Router /v1/admin/console/revenue [get]
 func QueryRevenueStatisticsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

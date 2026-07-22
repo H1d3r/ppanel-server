@@ -15,7 +15,15 @@ import (
 	"github.com/pkg/errors"
 )
 
-// User login
+// UserLoginHandler documents User login.
+//
+// @Summary User login
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.UserLoginRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.LoginResponse}
+// @Router /v1/auth/login [post]
 func UserLoginHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.UserLoginRequest

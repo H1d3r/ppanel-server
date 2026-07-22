@@ -9,7 +9,16 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// Push online users
+// PushOnlineUsersHandler documents Push online users.
+//
+// @Summary Push online users
+// @Tags node
+// @Accept json
+// @Produce json
+// @Security NodeSecret
+// @Param request body dto.OnlineUsersRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/server/online [post]
 func PushOnlineUsersHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.OnlineUsersRequest{}

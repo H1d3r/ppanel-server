@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// kick offline user device
+// KickOfflineByUserDeviceHandler documents kick offline user device.
+//
+// @Summary kick offline user device
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.KickOfflineRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/user/device/kick_offline [put]
 func KickOfflineByUserDeviceHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.KickOfflineRequest

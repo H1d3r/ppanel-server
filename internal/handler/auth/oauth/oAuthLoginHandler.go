@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// OAuth login
+// OAuthLoginHandler documents OAuth login.
+//
+// @Summary OAuth login
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.OAthLoginRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.OAuthLoginResponse}
+// @Router /v1/auth/oauth/login [post]
 func OAuthLoginHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.OAthLoginRequest

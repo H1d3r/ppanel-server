@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Delete subscribe group
+// DeleteSubscribeGroupHandler documents Delete subscribe group.
+//
+// @Summary Delete subscribe group
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.DeleteSubscribeGroupRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/subscribe/group [delete]
 func DeleteSubscribeGroupHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.DeleteSubscribeGroupRequest

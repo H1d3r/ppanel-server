@@ -1,0 +1,83 @@
+name: Generate and sync Swagger
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "ppanel.json"
+      - "script/generate-swagger.sh"
+      - ".github/workflows/swagger.yaml"
+  push:
+    branches: [master]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "ppanel.json"
+      - "script/generate-swagger.sh"
+      - ".github/workflows/swagger.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swagger-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate-and-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout backend
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate Swagger documents
+        run: ./script/generate-swagger.sh
+
+      - name: Verify generated document is committed
+        run: git diff --exit-code -- ppanel.json
+
+      - name: Verify Swagger covers Hertz routes
+        run: go test ./internal/route -run '^TestSwagger' -count=1
+
+      - name: Checkout documentation repository
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/checkout@v4
+        with:
+          repository: perfect-panel/ppanel-docs
+          token: ${{ secrets.GH_TOKEN }}
+          path: ppanel-docs
+
+      - name: Copy Swagger documents
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        run: |
+          mkdir -p ppanel-docs/public/swagger
+          cp build/swagger/ppanel.json ppanel-docs/public/swagger/ppanel.json
+          cp build/swagger/admin.json ppanel-docs/public/swagger/admin.json
+          cp build/swagger/user.json ppanel-docs/public/swagger/user.json
+          cp build/swagger/common.json ppanel-docs/public/swagger/common.json
+          cp build/swagger/node.json ppanel-docs/public/swagger/node.json
+
+      - name: Commit documentation changes
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        working-directory: ppanel-docs
+        run: |
+          git add public/swagger
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: update Swagger files"
+          git push

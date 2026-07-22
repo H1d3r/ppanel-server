@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Pre create order
+// PreCreateOrderHandler documents Pre create order.
+//
+// @Summary Pre create order
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.PurchaseOrderRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PreOrderResponse}
+// @Router /v1/public/order/pre [post]
 func PreCreateOrderHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.PurchaseOrderRequest

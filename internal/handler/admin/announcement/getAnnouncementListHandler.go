@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get announcement list
+// GetAnnouncementListHandler documents Get announcement list.
+//
+// @Summary Get announcement list
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetAnnouncementListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetAnnouncementListResponse}
+// @Router /v1/admin/announcement/list [get]
 func GetAnnouncementListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetAnnouncementListRequest

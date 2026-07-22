@@ -14,7 +14,16 @@ import (
 	"github.com/perfect-panel/server/pkg/tool"
 )
 
-// QueryServerProtocolConfigHandler Get Server Protocol Config
+// QueryServerProtocolConfigHandler documents Get Server Protocol Config.
+//
+// @Summary Get Server Protocol Config
+// @Tags node
+// @Produce json
+// @Security NodeSecret
+// @Param server_id path int true "Server ID"
+// @Param protocols query []string false "Protocols to include" collectionFormat(multi)
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryServerConfigResponse}
+// @Router /v2/server/{server_id} [get]
 func QueryServerProtocolConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		serverID, err := strconv.ParseInt(ctx.Param("server_id"), 10, 64)

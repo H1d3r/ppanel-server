@@ -9,7 +9,13 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Privacy Policy
+// GetPrivacyPolicyHandler documents Get Privacy Policy.
+//
+// @Summary Get Privacy Policy
+// @Tags common
+// @Produce json
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PrivacyPolicyConfig}
+// @Router /v1/common/site/privacy [get]
 func GetPrivacyPolicyHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

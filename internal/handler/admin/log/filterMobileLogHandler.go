@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter mobile log
+// FilterMobileLogHandler documents Filter mobile log.
+//
+// @Summary Filter mobile log
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterLogParams false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterMobileLogResponse}
+// @Router /v1/admin/log/mobile/list [get]
 func FilterMobileLogHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterLogParams

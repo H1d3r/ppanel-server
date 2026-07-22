@@ -9,7 +9,13 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get stat
+// GetStatHandler documents Get stat.
+//
+// @Summary Get stat
+// @Tags common
+// @Produce json
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetStatResponse}
+// @Router /v1/common/site/stat [get]
 func GetStatHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

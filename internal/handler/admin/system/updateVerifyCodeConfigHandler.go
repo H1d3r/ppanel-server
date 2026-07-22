@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Update Verify Code Config
+// UpdateVerifyCodeConfigHandler documents Update Verify Code Config.
+//
+// @Summary Update Verify Code Config
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.VerifyCodeConfig true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/system/verify_code_config [put]
 func UpdateVerifyCodeConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.VerifyCodeConfig

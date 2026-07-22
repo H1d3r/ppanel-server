@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Pre Unsubscribe
+// PreUnsubscribeHandler documents Pre Unsubscribe.
+//
+// @Summary Pre Unsubscribe
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.PreUnsubscribeRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PreUnsubscribeResponse}
+// @Router /v1/public/user/unsubscribe/pre [post]
 func PreUnsubscribeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.PreUnsubscribeRequest

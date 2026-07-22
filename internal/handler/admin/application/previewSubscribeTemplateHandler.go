@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Preview Template
+// PreviewSubscribeTemplateHandler documents Preview Template.
+//
+// @Summary Preview Template
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.PreviewSubscribeTemplateRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PreviewSubscribeTemplateResponse}
+// @Router /v1/admin/application/preview [get]
 func PreviewSubscribeTemplateHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.PreviewSubscribeTemplateRequest

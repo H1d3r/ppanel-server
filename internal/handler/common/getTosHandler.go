@@ -9,7 +9,13 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get Tos Content
+// GetTosHandler documents Get Tos Content.
+//
+// @Summary Get Tos Content
+// @Tags common
+// @Produce json
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetTosResponse}
+// @Router /v1/common/site/tos [get]
 func GetTosHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

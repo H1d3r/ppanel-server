@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Renewal Subscription
+// RenewalHandler documents Renewal Subscription.
+//
+// @Summary Renewal Subscription
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.RenewalOrderRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.RenewalOrderResponse}
+// @Router /v1/public/order/renewal [post]
 func RenewalHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.RenewalOrderRequest

@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Delete subscribe application
+// DeleteSubscribeApplicationHandler documents Delete subscribe application.
+//
+// @Summary Delete subscribe application
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.DeleteSubscribeApplicationRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/application/subscribe_application [delete]
 func DeleteSubscribeApplicationHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.DeleteSubscribeApplicationRequest

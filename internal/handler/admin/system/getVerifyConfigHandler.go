@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get verify config
+// GetVerifyConfigHandler documents Get verify config.
+//
+// @Summary Get verify config
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.VerifyConfig}
+// @Router /v1/admin/system/verify_config [get]
 func GetVerifyConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

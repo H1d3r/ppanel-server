@@ -9,7 +9,15 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// DetailHandler 获取插件详情 GET /v1/admin/plugin/detail?name=xxx
+// DetailHandler returns loaded plugin details.
+//
+// @Summary Get loaded plugin details
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param name query string true "Plugin name"
+// @Success 200 {object} plugin.PluginInfo
+// @Router /v1/admin/plugin/detail [get]
 func DetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		name := ctx.Query("name")

@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Filter Node List
+// FilterNodeListHandler documents Filter Node List.
+//
+// @Summary Filter Node List
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.FilterNodeListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.FilterNodeListResponse}
+// @Router /v1/admin/server/node/list [get]
 func FilterNodeListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.FilterNodeListRequest

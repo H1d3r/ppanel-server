@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Batch delete coupon
+// BatchDeleteCouponHandler documents Batch delete coupon.
+//
+// @Summary Batch delete coupon
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.BatchDeleteCouponRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/coupon/batch [delete]
 func BatchDeleteCouponHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.BatchDeleteCouponRequest

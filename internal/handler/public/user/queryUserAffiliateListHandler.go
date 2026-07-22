@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Query User Affiliate List
+// QueryUserAffiliateListHandler documents Query User Affiliate List.
+//
+// @Summary Query User Affiliate List
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.QueryUserAffiliateListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.QueryUserAffiliateListResponse}
+// @Router /v1/public/user/affiliate/list [get]
 func QueryUserAffiliateListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.QueryUserAffiliateListRequest

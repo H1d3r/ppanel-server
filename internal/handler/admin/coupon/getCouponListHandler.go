@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get coupon list
+// GetCouponListHandler documents Get coupon list.
+//
+// @Summary Get coupon list
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.GetCouponListRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.GetCouponListResponse}
+// @Router /v1/admin/coupon/list [get]
 func GetCouponListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.GetCouponListRequest

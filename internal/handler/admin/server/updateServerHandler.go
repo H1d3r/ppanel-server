@@ -13,7 +13,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Update Server
+// UpdateServerHandler documents Update Server.
+//
+// @Summary Update Server
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body dto.UpdateServerRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/admin/server/update [post]
 func UpdateServerHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.UpdateServerRequest

@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// GetVersionHandler Get Version
+// GetVersionHandler documents Get Version.
+//
+// @Summary Get Version
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.VersionResponse}
+// @Router /v1/admin/tool/version [get]
 func GetVersionHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

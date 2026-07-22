@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// PreView Node Multiplier
+// PreViewNodeMultiplierHandler documents PreView Node Multiplier.
+//
+// @Summary PreView Node Multiplier
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PreViewNodeMultiplierResponse}
+// @Router /v1/admin/system/node_multiplier/preview [get]
 func PreViewNodeMultiplierHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

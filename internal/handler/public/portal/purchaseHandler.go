@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Purchase subscription
+// PurchaseHandler documents Purchase subscription.
+//
+// @Summary Purchase subscription
+// @Tags user
+// @Accept json
+// @Produce json
+// @Param request body dto.PortalPurchaseRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PortalPurchaseResponse}
+// @Router /v1/public/portal/purchase [post]
 func PurchaseHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.PortalPurchaseRequest

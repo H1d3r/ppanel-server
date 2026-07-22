@@ -114,9 +114,18 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
 
 ## 📖 API Documentation
 
-Partial legacy API documentation is available in the local `ppanel.json` file (Swagger 2.0 format), a manually maintained partial legacy snapshot that does not fully describe the current Hertz routes.
+API documentation is generated from Swaggo annotations on the handlers and checked against the routes actually registered by Hertz. The root `ppanel.json` is the complete Swagger 2.0 document:
 
 [ppanel.json](./ppanel.json)
+
+After changing a route, request DTO, or response DTO, run:
+
+```bash
+./script/generate-swagger.sh
+go test ./internal/route -run '^TestSwagger' -count=1
+```
+
+GitHub Actions on `master` generates the full document plus the `admin.json`, `user.json`, `common.json`, and `node.json` scopes, then syncs them to `public/swagger` in `perfect-panel/ppanel-docs`. The existing `GH_TOKEN` secret needs Contents write access to the documentation repository.
 
 ## 🔗 Related Projects
 

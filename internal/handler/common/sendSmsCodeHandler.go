@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get sms verification code
+// SendSmsCodeHandler documents Get sms verification code.
+//
+// @Summary Get sms verification code
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.SendSmsCodeRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.SendCodeResponse}
+// @Router /v1/common/send_sms_code [post]
 func SendSmsCodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.SendSmsCodeRequest

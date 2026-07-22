@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// ListHandler 获取插件列表 GET /v1/admin/plugin/list
+// ListHandler lists loaded plugins.
+//
+// @Summary List loaded plugins
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} plugin.PluginInfo
+// @Router /v1/admin/plugin/list [get]
 func ListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		mgr, ok := svcCtx.PluginMgr.(*plugin.Manager)

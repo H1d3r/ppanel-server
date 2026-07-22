@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Reset all subscribe tokens
+// ResetAllSubscribeTokenHandler documents Reset all subscribe tokens.
+//
+// @Summary Reset all subscribe tokens
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.ResetAllSubscribeTokenResponse}
+// @Router /v1/admin/subscribe/reset_all_token [post]
 func ResetAllSubscribeTokenHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

@@ -11,7 +11,15 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get verification code
+// SendEmailCodeHandler documents Get verification code.
+//
+// @Summary Get verification code
+// @Tags common
+// @Accept json
+// @Produce json
+// @Param request body dto.SendCodeRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.SendCodeResponse}
+// @Router /v1/common/send_code [post]
 func SendEmailCodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.SendCodeRequest

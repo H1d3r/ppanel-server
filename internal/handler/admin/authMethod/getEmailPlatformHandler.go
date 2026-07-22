@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get email support platform
+// GetEmailPlatformHandler documents Get email support platform.
+//
+// @Summary Get email support platform
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PlatformResponse}
+// @Router /v1/admin/auth-method/email_platform [get]
 func GetEmailPlatformHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

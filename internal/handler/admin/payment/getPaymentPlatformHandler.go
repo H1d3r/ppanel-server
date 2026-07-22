@@ -9,7 +9,14 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get supported payment platform
+// GetPaymentPlatformHandler documents Get supported payment platform.
+//
+// @Summary Get supported payment platform
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.PlatformResponse}
+// @Router /v1/admin/payment/platform [get]
 func GetPaymentPlatformHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 

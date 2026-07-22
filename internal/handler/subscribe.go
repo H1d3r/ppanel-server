@@ -13,6 +13,18 @@ import (
 	"github.com/perfect-panel/server/pkg/tool"
 )
 
+// SubscribeHandler returns a client subscription configuration.
+//
+// @Summary Get subscription configuration
+// @Tags user
+// @Produce plain
+// @Param token query string false "Subscription token; alternatively send the token header"
+// @Param token header string false "Subscription token"
+// @Param flag query string false "Subscription format flag"
+// @Param type query string false "Subscription format type"
+// @Param User-Agent header string false "Client user agent"
+// @Success 200 {string} string
+// @Router /v1/subscribe/config [get]
 func SubscribeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.SubscribeRequest{
@@ -53,6 +65,14 @@ func SubscribeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	}
 }
 
+// PanDomainSubscribeHandler returns a subscription selected by the request host.
+//
+// @Summary Get pan-domain subscription configuration
+// @Tags user
+// @Produce plain
+// @Param User-Agent header string false "Client user agent"
+// @Success 200 {string} string
+// @Router / [get]
 func PanDomainSubscribeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		ua := string(ctx.UserAgent())

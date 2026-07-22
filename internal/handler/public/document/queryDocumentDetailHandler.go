@@ -11,7 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/result"
 )
 
-// Get document detail
+// QueryDocumentDetailHandler documents Get document detail.
+//
+// @Summary Get document detail
+// @Tags user
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request query dto.QueryDocumentDetailRequest false "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean{data=dto.Document}
+// @Router /v1/public/document/detail [get]
 func QueryDocumentDetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.QueryDocumentDetailRequest
