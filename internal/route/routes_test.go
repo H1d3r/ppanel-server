@@ -94,6 +94,25 @@ func TestRegisterHandlers_rejectsPluginRequestWithoutAuthorization(t *testing.T)
 	}
 }
 
+func TestRegisterHandlers_edgeManifestHidesUnauthorizedRequests(t *testing.T) {
+	// Given
+	router := server.Default()
+	RegisterHandlers(router, &svc.ServiceContext{Config: appconfig.Config{
+		EdgeSubscribe: appconfig.EdgeSubscribeConfig{Enabled: true},
+	}})
+	ctx := router.NewContext()
+	ctx.Request.SetRequestURI("/api/edge/v1/manifest?token=probe")
+	ctx.Request.Header.SetMethod(http.MethodGet)
+
+	// When
+	router.ServeHTTP(context.Background(), ctx)
+
+	// Then: no datastore access is attempted and credential/token state remains hidden.
+	if ctx.Response.StatusCode() != http.StatusNotFound || string(ctx.Response.Body()) != "Not Found" {
+		t.Fatalf("expected a uniform 404, got (%d, %q)", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+}
+
 func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 	routeCases := []struct {
 		name           string
@@ -134,11 +153,20 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			wantRouteCount: 260,
 			present:        []string{"/v1/subscribe/config", "/"},
 		},
+		{
+			name:           "edge-manifest-enabled",
+			wantRouteCount: 260,
+			present:        []string{"/v1/subscribe/config", "/api/edge/v1/manifest"},
+		},
 	}
 	for _, tc := range routeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given
-			svcCtx := &svc.ServiceContext{Config: appconfig.Config{Subscribe: tc.subscribe}}
+			config := appconfig.Config{Subscribe: tc.subscribe}
+			if tc.name == "edge-manifest-enabled" {
+				config.EdgeSubscribe.Enabled = true
+			}
+			svcCtx := &svc.ServiceContext{Config: config}
 			router := server.Default()
 			RegisterHandlers(router, svcCtx)
 			routes := router.Routes()

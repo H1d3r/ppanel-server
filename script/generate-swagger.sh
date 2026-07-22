@@ -29,5 +29,6 @@ generate admin --tags admin
 generate user --tags user
 generate common --tags common
 generate node --tags node
+generate edge --tags edge
 
 cp "${OUTPUT_ROOT}/ppanel.json" ppanel.json

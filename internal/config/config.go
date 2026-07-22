@@ -8,32 +8,33 @@ import (
 )
 
 type Config struct {
-	Model         string          `yaml:"Model" default:"prod"`
-	Host          string          `yaml:"Host" default:"0.0.0.0"`
-	Port          int             `yaml:"Port" default:"8080"`
-	Debug         bool            `yaml:"Debug" default:"false"`
-	AppLocation   string          `yaml:"AppLocation" default:"Asia/Shanghai"`
-	Transport     TransportConfig `yaml:"Transport"`
-	TLS           TLS             `yaml:"TLS"`
-	JwtAuth       JwtAuth         `yaml:"JwtAuth"`
-	Logger        logger.LogConf  `yaml:"Logger"`
-	Database      orm.Config      `yaml:"Database"`
-	MySQL         *orm.Config     `yaml:"MySQL,omitempty"` // Deprecated: use Database.
-	Redis         RedisConfig     `yaml:"Redis"`
-	Site          SiteConfig      `yaml:"Site"`
-	Node          NodeConfig      `yaml:"Node"`
-	Mobile        MobileConfig    `yaml:"Mobile"`
-	Email         EmailConfig     `yaml:"Email"`
-	Device        DeviceConfig    `yaml:"device"`
-	Verify        Verify          `yaml:"Verify"`
-	VerifyCode    VerifyCode      `yaml:"VerifyCode"`
-	Register      RegisterConfig  `yaml:"Register"`
-	Subscribe     SubscribeConfig `yaml:"Subscribe"`
-	Invite        InviteConfig    `yaml:"Invite"`
-	Telegram      Telegram        `yaml:"Telegram"`
-	Log           Log             `yaml:"Log"`
-	Currency      Currency        `yaml:"Currency"`
-	Plugin        PluginConfig    `yaml:"Plugin"`
+	Model         string              `yaml:"Model" default:"prod"`
+	Host          string              `yaml:"Host" default:"0.0.0.0"`
+	Port          int                 `yaml:"Port" default:"8080"`
+	Debug         bool                `yaml:"Debug" default:"false"`
+	AppLocation   string              `yaml:"AppLocation" default:"Asia/Shanghai"`
+	Transport     TransportConfig     `yaml:"Transport"`
+	TLS           TLS                 `yaml:"TLS"`
+	JwtAuth       JwtAuth             `yaml:"JwtAuth"`
+	Logger        logger.LogConf      `yaml:"Logger"`
+	Database      orm.Config          `yaml:"Database"`
+	MySQL         *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
+	Redis         RedisConfig         `yaml:"Redis"`
+	Site          SiteConfig          `yaml:"Site"`
+	Node          NodeConfig          `yaml:"Node"`
+	Mobile        MobileConfig        `yaml:"Mobile"`
+	Email         EmailConfig         `yaml:"Email"`
+	Device        DeviceConfig        `yaml:"device"`
+	Verify        Verify              `yaml:"Verify"`
+	VerifyCode    VerifyCode          `yaml:"VerifyCode"`
+	Register      RegisterConfig      `yaml:"Register"`
+	Subscribe     SubscribeConfig     `yaml:"Subscribe"`
+	EdgeSubscribe EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
+	Invite        InviteConfig        `yaml:"Invite"`
+	Telegram      Telegram            `yaml:"Telegram"`
+	Log           Log                 `yaml:"Log"`
+	Currency      Currency            `yaml:"Currency"`
+	Plugin        PluginConfig        `yaml:"Plugin"`
 	Administrator struct {
 		Email    string `yaml:"Email" default:"admin@ppanel.dev"`
 		Password string `yaml:"Password" default:"password"`
@@ -73,6 +74,23 @@ type SubscribeConfig struct {
 	ShowTutorial          bool   `yaml:"ShowTutorial" default:"true"`
 	ProfileUpdateInterval int64  `yaml:"ProfileUpdateInterval" default:"0"`
 	ProfileWebPageURL     string `yaml:"ProfileWebPageURL" default:""`
+}
+
+// EdgeSubscribeConfig configures the private manifest API consumed by the
+// Cloudflare edge-subscribe Worker. It intentionally has no relationship to
+// the user-facing subscription template configuration above.
+type EdgeSubscribeConfig struct {
+	Enabled             bool                     `yaml:"Enabled" default:"false"`
+	MaxClockSkewSeconds int64                    `yaml:"MaxClockSkewSeconds" default:"300"`
+	Keys                []EdgeSubscribeAccessKey `yaml:"Keys"`
+}
+
+// EdgeSubscribeAccessKey is an HMAC credential owned by a Worker deployment.
+// Secret must be stored only in the PPanel runtime config and the Worker secret
+// store; it must never be returned from an API.
+type EdgeSubscribeAccessKey struct {
+	ID     string `yaml:"ID"`
+	Secret string `yaml:"Secret"`
 }
 
 type RegisterConfig struct {
@@ -237,16 +255,17 @@ func (n *NodeOutbound) Marshal() ([]byte, error) {
 }
 
 type File struct {
-	Host      string          `yaml:"Host" default:"0.0.0.0"`
-	Port      int             `yaml:"Port" default:"8080"`
-	Transport TransportConfig `yaml:"Transport"`
-	TLS       TLS             `yaml:"TLS"`
-	Debug     bool            `yaml:"Debug" default:"true"`
-	JwtAuth   JwtAuth         `yaml:"JwtAuth"`
-	Logger    logger.LogConf  `yaml:"Logger"`
-	Database  orm.Config      `yaml:"Database"`
-	MySQL     *orm.Config     `yaml:"MySQL,omitempty"` // Deprecated: use Database.
-	Redis     RedisConfig     `yaml:"Redis"`
+	Host          string              `yaml:"Host" default:"0.0.0.0"`
+	Port          int                 `yaml:"Port" default:"8080"`
+	Transport     TransportConfig     `yaml:"Transport"`
+	TLS           TLS                 `yaml:"TLS"`
+	Debug         bool                `yaml:"Debug" default:"true"`
+	JwtAuth       JwtAuth             `yaml:"JwtAuth"`
+	Logger        logger.LogConf      `yaml:"Logger"`
+	Database      orm.Config          `yaml:"Database"`
+	MySQL         *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
+	Redis         RedisConfig         `yaml:"Redis"`
+	EdgeSubscribe EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
 }
 
 func (c Config) DatabaseConfig() orm.Config {
