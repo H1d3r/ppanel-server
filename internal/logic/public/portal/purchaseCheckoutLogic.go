@@ -21,11 +21,11 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/model/entity/user"
 	queueType "github.com/perfect-panel/server/queue/types"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/payment"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/payment/alipay"
 	"github.com/perfect-panel/server/pkg/payment/epay"
@@ -38,17 +38,151 @@ import (
 // including EPay, Stripe, Alipay F2F, and balance payments
 type PurchaseCheckoutLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps CheckoutDependencies
+}
+
+// CheckoutDependencies contains the infrastructure ports required by the
+// checkout use case. Keep it specific to this use case instead of passing the
+// application-wide ServiceContext into business logic.
+type CheckoutDependencies struct {
+	Store              CheckoutStore
+	GuestCheckoutCache GuestCheckoutCache
+	ActivationQueue    ActivationQueue
+	Config             CheckoutConfig
+	ExchangeRateCache  ExchangeRateCache
+}
+
+// CheckoutConfig is the configuration snapshot consumed by checkout.
+type CheckoutConfig struct {
+	Host              string
+	SiteName          string
+	CurrencyUnit      string
+	CurrencyAccessKey string
+}
+
+// GuestCheckoutCache provides the one Redis operation needed to validate
+// legacy guest checkout capabilities.
+type GuestCheckoutCache interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+}
+
+// ActivationQueue publishes order activation tasks after a successful balance
+// payment.
+type ActivationQueue interface {
+	EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+}
+
+// ExchangeRateCache is shared with the rate refresh task. It is deliberately
+// limited to the checkout use case's read/write needs.
+type ExchangeRateCache interface {
+	Get() float64
+	Set(float64)
+}
+
+// CheckoutStore is the persistence port required by checkout. It prevents the
+// use case from depending on the full repository facade.
+type CheckoutStore interface {
+	FindOrderByOrderNo(ctx context.Context, orderNo string) (*order.Order, error)
+	FindPayment(ctx context.Context, id int64) (*payment.Payment, error)
+	FindUser(ctx context.Context, id int64) (*user.User, error)
+	UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string) (bool, error)
+	SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string) (bool, error)
+	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error)
+	ClearUserCache(ctx context.Context, users ...*user.User) error
+	InTx(ctx context.Context, fn func(CheckoutTransaction) error) error
+}
+
+// CheckoutTransaction is the subset of persistence operations that must share
+// the balance-payment transaction.
+type CheckoutTransaction interface {
+	FindOrderByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error)
+	FindUserForUpdate(ctx context.Context, id int64) (*user.User, error)
+	UpdateUserBalance(ctx context.Context, data *user.User) error
+	InsertSystemLog(ctx context.Context, data *log.SystemLog) error
+	UpdateOrder(ctx context.Context, data *order.Order) error
+	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error)
+}
+
+type checkoutStore struct {
+	store repository.Store
+}
+
+type checkoutTransaction struct {
+	store repository.Store
+}
+
+// NewCheckoutStore adapts the application's repository facade at the
+// composition boundary to the checkout use case's narrow persistence port.
+func NewCheckoutStore(store repository.Store) CheckoutStore {
+	return checkoutStore{store: store}
+}
+
+func (s checkoutStore) FindOrderByOrderNo(ctx context.Context, orderNo string) (*order.Order, error) {
+	return s.store.Order().FindOneByOrderNo(ctx, orderNo)
+}
+
+func (s checkoutStore) FindPayment(ctx context.Context, id int64) (*payment.Payment, error) {
+	return s.store.Payment().FindOne(ctx, id)
+}
+
+func (s checkoutStore) FindUser(ctx context.Context, id int64) (*user.User, error) {
+	return s.store.User().FindOne(ctx, id)
+}
+
+func (s checkoutStore) UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string) (bool, error) {
+	return s.store.Order().UpdatePaymentExpectation(ctx, orderNo, amount, currency)
+}
+
+func (s checkoutStore) SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string) (bool, error) {
+	return s.store.Order().SetPaymentTradeNoIfEmpty(ctx, orderNo, tradeNo)
+}
+
+func (s checkoutStore) UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error) {
+	return s.store.Order().UpdateOrderStatusFrom(ctx, orderNo, from, status)
+}
+
+func (s checkoutStore) ClearUserCache(ctx context.Context, users ...*user.User) error {
+	return s.store.User().ClearUserCache(ctx, users...)
+}
+
+func (s checkoutStore) InTx(ctx context.Context, fn func(CheckoutTransaction) error) error {
+	return s.store.InTx(ctx, func(store repository.Store) error {
+		return fn(checkoutTransaction{store: store})
+	})
+}
+
+func (s checkoutTransaction) FindOrderByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error) {
+	return s.store.Order().FindOneByOrderNoForUpdate(ctx, orderNo)
+}
+
+func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*user.User, error) {
+	return s.store.User().FindOneForUpdate(ctx, id)
+}
+
+func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *user.User) error {
+	return s.store.User().UpdateBalanceFields(ctx, data)
+}
+
+func (s checkoutTransaction) InsertSystemLog(ctx context.Context, data *log.SystemLog) error {
+	return s.store.Log().Insert(ctx, data)
+}
+
+func (s checkoutTransaction) UpdateOrder(ctx context.Context, data *order.Order) error {
+	return s.store.Order().Update(ctx, data)
+}
+
+func (s checkoutTransaction) UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error) {
+	return s.store.Order().UpdateOrderStatusFrom(ctx, orderNo, from, status)
 }
 
 // NewPurchaseCheckoutLogic creates a new instance of PurchaseCheckoutLogic
 // for handling purchase checkout operations across different payment platforms
-func NewPurchaseCheckoutLogic(ctx context.Context, svcCtx *svc.ServiceContext) *PurchaseCheckoutLogic {
+func NewPurchaseCheckoutLogic(ctx context.Context, deps CheckoutDependencies) *PurchaseCheckoutLogic {
 	return &PurchaseCheckoutLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -57,7 +191,7 @@ func NewPurchaseCheckoutLogic(ctx context.Context, svcCtx *svc.ServiceContext) *
 func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) (resp *dto.CheckoutOrderResponse, err error) {
 
 	// Validate and retrieve order information
-	orderInfo, err := l.svcCtx.Store.Order().FindOneByOrderNo(l.ctx, req.OrderNo)
+	orderInfo, err := l.deps.Store.FindOrderByOrderNo(l.ctx, req.OrderNo)
 	if err != nil {
 		l.Logger.Error("[PurchaseCheckout] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", req.OrderNo))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", req.OrderNo)
@@ -73,7 +207,7 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 	}
 
 	// Retrieve payment method configuration
-	paymentConfig, err := l.svcCtx.Store.Payment().FindOne(l.ctx, orderInfo.PaymentId)
+	paymentConfig, err := l.deps.Store.FindPayment(l.ctx, orderInfo.PaymentId)
 	if err != nil {
 		l.Logger.Error("[PurchaseCheckout] Database query error", logger.Field("error", err.Error()), logger.Field("payment", orderInfo.Method))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment method error: %v", err.Error())
@@ -126,7 +260,7 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		}
 
 		// Retrieve user information for balance validation
-		userInfo, err := l.svcCtx.Store.User().FindOne(l.ctx, orderInfo.UserId)
+		userInfo, err := l.deps.Store.FindUser(l.ctx, orderInfo.UserId)
 		if err != nil {
 			l.Errorw("[PurchaseCheckout] FindOne User error", logger.Field("error", err.Error()))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOne error: %s", err.Error())
@@ -172,7 +306,7 @@ func (l *PurchaseCheckoutLogic) authorizeCheckout(orderInfo *order.Order, req *d
 	// Compatibility for guest orders created before checkout capabilities were
 	// persisted on the order itself.
 	cacheKey := fmt.Sprintf(constant.TempOrderCacheKey, orderInfo.OrderNo)
-	value, err := l.svcCtx.Redis.Get(l.ctx, cacheKey).Result()
+	value, err := l.deps.GuestCheckoutCache.Get(l.ctx, cacheKey).Result()
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
 	}
@@ -204,7 +338,7 @@ func (l *PurchaseCheckoutLogic) alipayF2fPayment(pay *payment.Payment, info *ord
 	} else {
 		host, ok := l.ctx.Value(constant.CtxKeyRequestHost).(string)
 		if !ok {
-			host = l.svcCtx.Config.Host
+			host = l.deps.Config.Host
 		}
 		notifyUrl = "https://" + strings.TrimSuffix(host, "/") + "/v1/notify/" + pay.Platform + "/" + pay.Token
 	}
@@ -265,7 +399,7 @@ func (l *PurchaseCheckoutLogic) stripePayment(config string, info *order.Order, 
 		PublicKey:     stripeConfig.PublicKey,
 		WebhookSecret: stripeConfig.WebhookSecret,
 	})
-	if err := l.persistPaymentExpectation(info, info.Amount, strings.ToUpper(l.svcCtx.Config.Currency.Unit)); err != nil {
+	if err := l.persistPaymentExpectation(info, info.Amount, strings.ToUpper(l.deps.Config.CurrencyUnit)); err != nil {
 		return nil, err
 	}
 
@@ -273,7 +407,7 @@ func (l *PurchaseCheckoutLogic) stripePayment(config string, info *order.Order, 
 		OrderNo:   info.OrderNo,
 		Subscribe: strconv.FormatInt(info.SubscribeId, 10),
 		Amount:    info.Amount,
-		Currency:  strings.ToLower(l.svcCtx.Config.Currency.Unit),
+		Currency:  strings.ToLower(l.deps.Config.CurrencyUnit),
 		Payment:   stripeConfig.Payment,
 	}
 	// A pending order owns exactly one Stripe PaymentIntent.  Reusing it is
@@ -291,7 +425,7 @@ func (l *PurchaseCheckoutLogic) stripePayment(config string, info *order.Order, 
 			Email:  identifier,
 		})
 		if err == nil {
-			claimed, claimErr := l.svcCtx.Store.Order().SetPaymentTradeNoIfEmpty(l.ctx, info.OrderNo, result.TradeNo)
+			claimed, claimErr := l.deps.Store.SetPaymentTradeNoIfEmpty(l.ctx, info.OrderNo, result.TradeNo)
 			if claimErr != nil {
 				_ = client.CancelPaymentIntent(result.TradeNo)
 				return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "claim Stripe payment intent: %v", claimErr)
@@ -302,7 +436,7 @@ func (l *PurchaseCheckoutLogic) stripePayment(config string, info *order.Order, 
 				if cancelErr := client.CancelPaymentIntent(result.TradeNo); cancelErr != nil {
 					return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "cancel duplicate Stripe payment intent: %v", cancelErr)
 				}
-				latest, latestErr := l.svcCtx.Store.Order().FindOneByOrderNo(l.ctx, info.OrderNo)
+				latest, latestErr := l.deps.Store.FindOrderByOrderNo(l.ctx, info.OrderNo)
 				if latestErr != nil || latest.Status != 1 || latest.TradeNo == "" {
 					if latestErr != nil {
 						return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "reload Stripe payment intent: %v", latestErr)
@@ -343,7 +477,7 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 	// Initialize EPay client with merchant credentials
 	client := epay.NewClient(epayConfig.Pid, epayConfig.Url, epayConfig.Key, epayConfig.Type)
 	var amount float64
-	if l.svcCtx.Config.Currency.Unit != "CNY" {
+	if l.deps.Config.CurrencyUnit != "CNY" {
 		// Convert order amount to CNY using current exchange rate
 		amount, err = l.queryExchangeRate("CNY", info.Amount)
 		if err != nil {
@@ -375,7 +509,7 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 	} else {
 		host, ok := l.ctx.Value(constant.CtxKeyRequestHost).(string)
 		if !ok {
-			host = l.svcCtx.Config.Host
+			host = l.deps.Config.Host
 		}
 		notifyUrl = "https://" + strings.TrimSuffix(host, "/")
 		if isGatewayMod {
@@ -386,7 +520,7 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 
 	// Create payment URL for user redirection
 	url := client.CreatePayUrl(epay.Order{
-		Name:      l.svcCtx.Config.Site.SiteName,
+		Name:      l.deps.Config.SiteName,
 		Amount:    amount,
 		OrderNo:   info.OrderNo,
 		SignType:  "MD5",
@@ -403,34 +537,36 @@ func (l *PurchaseCheckoutLogic) queryExchangeRate(to string, src int64) (amount 
 	amount = float64(src) / float64(100)
 
 	// No conversion needed if target currency matches system currency
-	if to == l.svcCtx.Config.Currency.Unit {
+	if to == l.deps.Config.CurrencyUnit {
 		return amount, nil
 	}
 
-	if l.svcCtx.ExchangeRate != 0 && to == "CNY" {
-		amount = amount * l.svcCtx.ExchangeRate
+	if l.deps.ExchangeRateCache != nil && l.deps.ExchangeRateCache.Get() != 0 && to == "CNY" {
+		amount = amount * l.deps.ExchangeRateCache.Get()
 		return amount, nil
 	}
 
 	// A gateway must never be sent a value merely relabelled as another
 	// currency. Without a configured conversion source, reject non-CNY
 	// checkout instead of silently charging the system-currency amount.
-	if l.svcCtx.Config.Currency.AccessKey == "" {
+	if l.deps.Config.CurrencyAccessKey == "" {
 		return 0, errors.New("exchange rate is not configured")
 	}
 
 	// Convert currency if system currency differs from target currency
-	result, err := exchangeRate.GetExchangeRete(l.svcCtx.Config.Currency.Unit, to, l.svcCtx.Config.Currency.AccessKey, 1)
+	result, err := exchangeRate.GetExchangeRete(l.deps.Config.CurrencyUnit, to, l.deps.Config.CurrencyAccessKey, 1)
 	if err != nil {
 		l.Logger.Error("[PurchaseCheckout] QueryExchangeRate error", logger.Field("error", err.Error()))
 		return 0, err
 	}
-	l.svcCtx.ExchangeRate = result
+	if l.deps.ExchangeRateCache != nil {
+		l.deps.ExchangeRateCache.Set(result)
+	}
 	return result * amount, nil
 }
 
 func (l *PurchaseCheckoutLogic) persistPaymentExpectation(info *order.Order, amount int64, currency string) error {
-	updated, err := l.svcCtx.Store.Order().UpdatePaymentExpectation(l.ctx, info.OrderNo, amount, currency)
+	updated, err := l.deps.Store.UpdatePaymentExpectation(l.ctx, info.OrderNo, amount, currency)
 	if err != nil {
 		l.Errorw("[PurchaseCheckout] Save payment expectation failed",
 			logger.Field("error", err.Error()),
@@ -458,7 +594,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 			logger.Field("orderNo", o.OrderNo),
 			logger.Field("userId", u.Id),
 		)
-		updated, err := l.svcCtx.Store.Order().UpdateOrderStatusFrom(l.ctx, o.OrderNo, 1, 2)
+		updated, err := l.deps.Store.UpdateOrderStatusFrom(l.ctx, o.OrderNo, 1, 2)
 		if err != nil {
 			l.Errorw("[PurchaseCheckout] Update order status error",
 				logger.Field("error", err.Error()),
@@ -472,10 +608,10 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 		goto activation
 	}
 
-	err = l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
+	err = l.deps.Store.InTx(l.ctx, func(store CheckoutTransaction) error {
 		// Lock the order first so concurrent checkout requests for the same
 		// order cannot both reach the balance debit path.
-		orderInfo, err := store.Order().FindOneByOrderNoForUpdate(l.ctx, o.OrderNo)
+		orderInfo, err := store.FindOrderByOrderNoForUpdate(l.ctx, o.OrderNo)
 		if err != nil {
 			return err
 		}
@@ -485,7 +621,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 
 		// Retrieve the latest user information inside the transaction without
 		// Redis cache and lock the row before checking or changing balances.
-		userInfo, err := store.User().FindOneForUpdate(l.ctx, u.Id)
+		userInfo, err := store.FindUserForUpdate(l.ctx, u.Id)
 		if err != nil {
 			return err
 		}
@@ -516,7 +652,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 		userInfo.Balance -= balanceUsed
 
 		// Save only the balance fields; do not write back a cached/stale user row.
-		if err = store.User().UpdateBalanceFields(l.ctx, userInfo); err != nil {
+		if err = store.UpdateUserBalance(l.ctx, userInfo); err != nil {
 			return err
 		}
 
@@ -531,7 +667,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 			}
 			content, _ := giftLog.Marshal()
 
-			err = store.Log().Insert(l.ctx, &log.SystemLog{
+			err = store.InsertSystemLog(l.ctx, &log.SystemLog{
 				Type:     log.TypeGift.Uint8(),
 				ObjectID: userInfo.Id,
 				Date:     timeutil.Now().Format(time.DateOnly),
@@ -552,7 +688,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 				Timestamp: timeutil.Now().UnixMilli(),
 			}
 			content, _ := balanceLog.Marshal()
-			err = store.Log().Insert(l.ctx, &log.SystemLog{
+			err = store.InsertSystemLog(l.ctx, &log.SystemLog{
 				Type:     log.TypeBalance.Uint8(),
 				ObjectID: userInfo.Id,
 				Date:     timeutil.Now().Format(time.DateOnly),
@@ -567,13 +703,13 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 		// Keep any gift amount that was already recorded at order creation.
 		if giftUsed > 0 {
 			orderInfo.GiftAmount += giftUsed
-			if err = store.Order().Update(l.ctx, orderInfo); err != nil {
+			if err = store.UpdateOrder(l.ctx, orderInfo); err != nil {
 				return err
 			}
 		}
 
 		// Mark order as paid (status = 2)
-		updated, err := store.Order().UpdateOrderStatusFrom(l.ctx, o.OrderNo, 1, 2)
+		updated, err := store.UpdateOrderStatusFrom(l.ctx, o.OrderNo, 1, 2)
 		if err != nil {
 			return err
 		}
@@ -592,7 +728,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 		return err
 	}
 	if paidUser != nil {
-		if cacheErr := l.svcCtx.Store.User().ClearUserCache(l.ctx, paidUser); cacheErr != nil {
+		if cacheErr := l.deps.Store.ClearUserCache(l.ctx, paidUser); cacheErr != nil {
 			l.Errorw("[PurchaseCheckout] Clear user cache error",
 				logger.Field("error", cacheErr.Error()),
 				logger.Field("userId", paidUser.Id))
@@ -611,7 +747,7 @@ activation:
 	}
 
 	task := asynq.NewTask(queueType.ForthwithActivateOrder, bytes, asynq.MaxRetry(5))
-	_, err = l.svcCtx.Queue.EnqueueContext(l.ctx, task, asynq.TaskID(queueType.ActivationTaskID(o.OrderNo)))
+	_, err = l.deps.ActivationQueue.EnqueueContext(l.ctx, task, asynq.TaskID(queueType.ActivationTaskID(o.OrderNo)))
 	if errors.Is(err, asynq.ErrTaskIDConflict) {
 		err = nil
 	}

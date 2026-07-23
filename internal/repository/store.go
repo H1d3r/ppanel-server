@@ -30,7 +30,7 @@ type Store interface {
 	TrafficLog() TrafficRepo
 	User() UserRepo
 
-	// DB returns the underlying *gorm.DB, used internally by plugins etc.
+	// DB returns the underlying *gorm.DB for infrastructure integrations.
 	DB() *gorm.DB
 
 	InTx(ctx context.Context, fn func(store Store) error) error
@@ -64,7 +64,7 @@ type GormStore struct {
 	user         UserRepo
 }
 
-// DB returns the underlying *gorm.DB (used internally by plugins etc.).
+// DB returns the underlying *gorm.DB for infrastructure integrations.
 func (s *GormStore) DB() *gorm.DB { return s.db }
 
 // NewGormStore creates a new GormStore with all domain repositories initialized.

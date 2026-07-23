@@ -33,7 +33,18 @@ func PurchaseCheckoutHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := portal.NewPurchaseCheckoutLogic(c, svcCtx)
+		l := portal.NewPurchaseCheckoutLogic(c, portal.CheckoutDependencies{
+			Store:              portal.NewCheckoutStore(svcCtx.Store),
+			GuestCheckoutCache: svcCtx.Redis,
+			ActivationQueue:    svcCtx.Queue,
+			Config: portal.CheckoutConfig{
+				Host:              svcCtx.Config.Host,
+				SiteName:          svcCtx.Config.Site.SiteName,
+				CurrencyUnit:      svcCtx.Config.Currency.Unit,
+				CurrencyAccessKey: svcCtx.Config.Currency.AccessKey,
+			},
+			ExchangeRateCache: svcCtx.ExchangeRate,
+		})
 		resp, err := l.PurchaseCheckout(&req)
 		result.HttpResult(ctx, resp, err)
 	}

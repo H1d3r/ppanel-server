@@ -14,7 +14,6 @@ import (
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -102,9 +101,9 @@ func newBalancePaymentLogic(t *testing.T, store *balancePaymentStore) *PurchaseC
 	redisServer := miniredis.RunT(t)
 	queue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = queue.Close() })
-	return NewPurchaseCheckoutLogic(context.Background(), &svc.ServiceContext{
-		Store: store,
-		Queue: queue,
+	return NewPurchaseCheckoutLogic(context.Background(), CheckoutDependencies{
+		Store:           NewCheckoutStore(store),
+		ActivationQueue: queue,
 	})
 }
 
@@ -179,7 +178,7 @@ func TestBalancePaymentDoesNotDebitNonPendingOrder(t *testing.T) {
 func TestAuthorizeCheckoutRequiresOwnerForUserOrder(t *testing.T) {
 	logic := NewPurchaseCheckoutLogic(
 		context.WithValue(context.Background(), constant.CtxKeyUser, &userEntity.User{Id: 7}),
-		&svc.ServiceContext{},
+		CheckoutDependencies{},
 	)
 	err := logic.authorizeCheckout(&orderEntity.Order{OrderNo: "order-1", UserId: 8}, &dto.CheckoutOrderRequest{OrderNo: "order-1"})
 	if err == nil || !strings.Contains(err.Error(), "does not belong") {
@@ -201,7 +200,7 @@ func TestAuthorizeCheckoutValidatesGuestCheckoutToken(t *testing.T) {
 		t.Fatalf("store temporary order: %v", err)
 	}
 
-	logic := NewPurchaseCheckoutLogic(context.Background(), &svc.ServiceContext{Redis: client})
+	logic := NewPurchaseCheckoutLogic(context.Background(), CheckoutDependencies{GuestCheckoutCache: client})
 	orderInfo := &orderEntity.Order{OrderNo: info.OrderNo}
 	if err := logic.authorizeCheckout(orderInfo, &dto.CheckoutOrderRequest{OrderNo: info.OrderNo, CheckoutToken: info.CheckoutToken}); err != nil {
 		t.Fatalf("valid guest checkout rejected: %v", err)

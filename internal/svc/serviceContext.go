@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/pkg/device"
+	"github.com/perfect-panel/server/pkg/exchangeRate"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/repository"
@@ -21,7 +22,7 @@ type ServiceContext struct {
 	Config       config.Config
 	Queue        *asynq.Client
 	Inspector    *asynq.Inspector
-	ExchangeRate float64
+	ExchangeRate *exchangeRate.Cache
 	GeoIP        *IPLocation
 	Store        repository.Store
 
@@ -65,7 +66,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		Config:       c,
 		Queue:        NewAsynqClient(c),
 		Inspector:    NewAsynqInspector(c),
-		ExchangeRate: 0,
+		ExchangeRate: exchangeRate.NewCache(0),
 		GeoIP:        geoIP,
 		Store:        store,
 		//NodeCache:   cache.NewNodeCacheClient(rds),

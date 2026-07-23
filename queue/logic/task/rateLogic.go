@@ -46,7 +46,7 @@ func (l *RateLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 		logger.Errorw("[RateLogic] GetExchangeRete error", logger.Field("error", err.Error()))
 		return err
 	}
-	l.svcCtx.ExchangeRate = result
+	l.svcCtx.ExchangeRate.Set(result)
 	logger.WithContext(ctx).Infof("[RateLogic] GetExchangeRete success, result: %+v", result)
 	return nil
 }
