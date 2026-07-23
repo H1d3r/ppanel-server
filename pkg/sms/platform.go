@@ -1,6 +1,6 @@
 package sms
 
-import "github.com/perfect-panel/server/internal/model/dto"
+import "github.com/perfect-panel/server/pkg/platform"
 
 type Platform int
 
@@ -36,11 +36,11 @@ func parsePlatform(s string) Platform {
 	return unsupported
 }
 
-func GetSupportedPlatforms() []dto.PlatformInfo {
-	return []dto.PlatformInfo{
+func GetSupportedPlatforms() []platform.Info {
+	return []platform.Info{
 		{
 			Platform:    AlibabaCloud.String(),
-			PlatformUrl: "https://www.alibabacloud.com",
+			PlatformURL: "https://www.alibabacloud.com",
 			PlatformFieldDescription: map[string]string{
 				"access":        "AccessKeyId",
 				"secret":        "AccessKeySecret",
@@ -51,7 +51,7 @@ func GetSupportedPlatforms() []dto.PlatformInfo {
 		},
 		{
 			Platform:    Smsbao.String(),
-			PlatformUrl: "https://www.smsbao.com",
+			PlatformURL: "https://www.smsbao.com",
 			PlatformFieldDescription: map[string]string{
 				"access":        "Username",
 				"secret":        "Password",
@@ -61,7 +61,7 @@ func GetSupportedPlatforms() []dto.PlatformInfo {
 		},
 		{
 			Platform:    Abosend.String(),
-			PlatformUrl: "https://www.abosend.com",
+			PlatformURL: "https://www.abosend.com",
 			PlatformFieldDescription: map[string]string{
 				"access":        "OrgCode",
 				"secret":        "MD5Key",
@@ -72,7 +72,7 @@ func GetSupportedPlatforms() []dto.PlatformInfo {
 		},
 		{
 			Platform:    Twilio.String(),
-			PlatformUrl: "https://www.twilio.com",
+			PlatformURL: "https://www.twilio.com",
 			PlatformFieldDescription: map[string]string{
 				"access":        "AccessSID",
 				"secret":        "AuthToken",

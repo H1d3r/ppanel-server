@@ -8,7 +8,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/config"
 	"github.com/perfect-panel/server/internal/handler"
 	"github.com/perfect-panel/server/internal/middleware"
-	"github.com/perfect-panel/server/internal/plugin"
 	"github.com/perfect-panel/server/internal/route"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -37,11 +36,6 @@ func newServer(svc *svc.ServiceContext, opts []config.Option) *Server {
 	route.RegisterHandlers(engine, svc)
 	handler.RegisterTelegramHandlers(engine, svc)
 	handler.RegisterNotifyHandlers(engine, svc)
-
-	// 注册插件路由
-	if mgr, ok := svc.PluginMgr.(*plugin.Manager); ok {
-		route.RegisterPluginDispatcherRoutes(engine, svc, mgr)
-	}
 
 	return &Server{h: engine}
 }

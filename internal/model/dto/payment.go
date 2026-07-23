@@ -1,5 +1,7 @@
 package dto
 
+import "github.com/perfect-panel/server/pkg/platform"
+
 type AlipayNotifyResponse struct {
 	ReturnCode string `json:"return_code"`
 }
@@ -95,11 +97,9 @@ type PaymentMethodDetail struct {
 	NotifyURL   string      `json:"notify_url"`
 }
 
-type PlatformInfo struct {
-	Platform                 string            `json:"platform"`
-	PlatformUrl              string            `json:"platform_url"`
-	PlatformFieldDescription map[string]string `json:"platform_field_description"`
-}
+// PlatformInfo is kept as a DTO alias for API compatibility. Provider metadata
+// belongs to the infrastructure-neutral platform package.
+type PlatformInfo = platform.Info
 
 type PlatformResponse struct {
 	List []PlatformInfo `json:"list"`

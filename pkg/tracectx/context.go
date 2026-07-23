@@ -1,4 +1,6 @@
-package trace
+// Package tracectx provides trace-context access without depending on an
+// application layer.
+package tracectx
 
 import (
 	"context"
@@ -6,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// SpanIDFromContext returns the span ID stored in ctx, if present.
 func SpanIDFromContext(ctx context.Context) string {
 	spanCtx := trace.SpanContextFromContext(ctx)
 	if spanCtx.HasSpanID() {
@@ -15,6 +18,7 @@ func SpanIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// TraceIDFromContext returns the trace ID stored in ctx, if present.
 func TraceIDFromContext(ctx context.Context) string {
 	spanCtx := trace.SpanContextFromContext(ctx)
 	if spanCtx.HasTraceID() {

@@ -16,11 +16,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// PluginReadySignaler 用于等待插件管理器就绪
-type PluginReadySignaler interface {
-	WaitReady(ctx context.Context) error
-}
-
 type ServiceContext struct {
 	Redis        *redis.Client
 	Config       config.Config
@@ -36,8 +31,6 @@ type ServiceContext struct {
 	NodeMultiplierManager *nodeMultiplier.Manager
 	AuthLimiter           *limit.PeriodLimit
 	DeviceManager         *device.DeviceManager
-	PluginReady           PluginReadySignaler
-	PluginMgr             any // *plugin.Manager, avoids import cycle
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {

@@ -9,7 +9,6 @@ func RegisterHandlers(router *server.Hertz, serverCtx *svc.ServiceContext) {
 	registerEdgeRoutes(router, serverCtx)
 	registerSubscribeConfigRoutes(router, serverCtx)
 	registerServerRoutes(router, serverCtx)
-	registerAdminPluginRoutes(router, serverCtx)
 
 	registerAdminAdsRoutes(router, serverCtx)
 	registerAdminAnnouncementRoutes(router, serverCtx)

@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/perfect-panel/server/internal/trace"
-
 	"github.com/perfect-panel/server/pkg/timex"
+	"github.com/perfect-panel/server/pkg/tracectx"
 )
 
 // WithCallerSkip returns a Logger with given caller skip.
@@ -189,12 +188,12 @@ func (l *richLogger) buildFields(fields ...LogField) []LogField {
 		return fields
 	}
 
-	traceID := trace.TraceIDFromContext(l.ctx)
+	traceID := tracectx.TraceIDFromContext(l.ctx)
 	if len(traceID) > 0 {
 		fields = append(fields, Field(traceKey, traceID))
 	}
 
-	spanID := trace.SpanIDFromContext(l.ctx)
+	spanID := tracectx.SpanIDFromContext(l.ctx)
 	if len(spanID) > 0 {
 		fields = append(fields, Field(spanKey, spanID))
 	}

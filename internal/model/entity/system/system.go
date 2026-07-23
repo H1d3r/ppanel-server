@@ -16,3 +16,9 @@ type System struct {
 func (System) TableName() string {
 	return "system"
 }
+
+// ConfigKey, ConfigValue, and ConfigType expose the system configuration
+// record through the narrow contract used by generic configuration helpers.
+func (s *System) ConfigKey() string   { return s.Key }
+func (s *System) ConfigValue() string { return s.Value }
+func (s *System) ConfigType() string  { return s.Type }

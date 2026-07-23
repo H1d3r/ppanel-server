@@ -1,6 +1,6 @@
 package payment
 
-import "github.com/perfect-panel/server/internal/model/dto"
+import "github.com/perfect-panel/server/pkg/platform"
 
 type Platform int
 
@@ -44,11 +44,11 @@ func SupportedPlatformNames() []string {
 	return []string{Stripe.String(), AlipayF2F.String(), EPay.String(), Balance.String()}
 }
 
-func GetSupportedPlatforms() []dto.PlatformInfo {
-	return []dto.PlatformInfo{
+func GetSupportedPlatforms() []platform.Info {
+	return []platform.Info{
 		{
 			Platform:    Stripe.String(),
-			PlatformUrl: "https://stripe.com",
+			PlatformURL: "https://stripe.com",
 			PlatformFieldDescription: map[string]string{
 				"public_key":     "Publishable key",
 				"secret_key":     "Secret key",
@@ -58,7 +58,7 @@ func GetSupportedPlatforms() []dto.PlatformInfo {
 		},
 		{
 			Platform:    AlipayF2F.String(),
-			PlatformUrl: "https://alipay.com",
+			PlatformURL: "https://alipay.com",
 			PlatformFieldDescription: map[string]string{
 				"app_id":       "App ID",
 				"private_key":  "Private Key",
@@ -69,7 +69,7 @@ func GetSupportedPlatforms() []dto.PlatformInfo {
 		},
 		{
 			Platform:    EPay.String(),
-			PlatformUrl: "",
+			PlatformURL: "",
 			PlatformFieldDescription: map[string]string{
 				"pid":  "PID",
 				"url":  "URL",

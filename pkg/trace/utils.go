@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	ptrace "github.com/perfect-panel/server/internal/trace"
+	"github.com/perfect-panel/server/pkg/tracectx"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
@@ -17,9 +17,9 @@ const localhost = "127.0.0.1"
 
 var (
 	// SpanIDFromContext returns the span id from ctx.
-	SpanIDFromContext = ptrace.SpanIDFromContext
+	SpanIDFromContext = tracectx.SpanIDFromContext
 	// TraceIDFromContext returns the trace id from ctx.
-	TraceIDFromContext = ptrace.TraceIDFromContext
+	TraceIDFromContext = tracectx.TraceIDFromContext
 )
 
 // ParseFullMethod returns the method name and attributes.

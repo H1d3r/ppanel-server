@@ -1,6 +1,6 @@
 package email
 
-import "github.com/perfect-panel/server/internal/model/dto"
+import "github.com/perfect-panel/server/pkg/platform"
 
 type Platform int
 
@@ -30,11 +30,11 @@ func parsePlatform(s string) Platform {
 	return unsupported
 }
 
-func GetSupportedPlatforms() []dto.PlatformInfo {
-	return []dto.PlatformInfo{
+func GetSupportedPlatforms() []platform.Info {
+	return []platform.Info{
 		{
 			Platform:    SMTP.String(),
-			PlatformUrl: "",
+			PlatformURL: "",
 			PlatformFieldDescription: map[string]string{
 				"host":     "host",
 				"port":     "port",

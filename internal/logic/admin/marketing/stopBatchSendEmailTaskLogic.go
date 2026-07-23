@@ -5,7 +5,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
-	"github.com/perfect-panel/server/pkg/email"
+	emailworker "github.com/perfect-panel/server/internal/worker/email"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
@@ -26,10 +26,10 @@ func NewStopBatchSendEmailTaskLogic(ctx context.Context, svcCtx *svc.ServiceCont
 }
 
 func (l *StopBatchSendEmailTaskLogic) StopBatchSendEmailTask(req *dto.StopBatchSendEmailTaskRequest) (err error) {
-	if email.Manager != nil {
-		email.Manager.RemoveWorker(req.Id)
+	if emailworker.Manager != nil {
+		emailworker.Manager.RemoveWorker(req.Id)
 	} else {
-		logger.Error("[StopBatchSendEmailTaskLogic] email.Manager is nil, cannot stop task")
+		logger.Error("[StopBatchSendEmailTaskLogic] email worker manager is nil, cannot stop task")
 	}
 	err = l.svcCtx.Store.Task().UpdateStatus(l.ctx, req.Id, 2)
 

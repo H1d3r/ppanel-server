@@ -12,7 +12,6 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/perfect-panel/server/internal/handler"
-	"github.com/perfect-panel/server/internal/plugin"
 	"github.com/perfect-panel/server/internal/route"
 	"github.com/perfect-panel/server/internal/svc"
 )
@@ -50,8 +49,6 @@ func TestSwaggerCoversHertzRoutes(t *testing.T) {
 	route.RegisterHandlers(engine, serverCtx)
 	handler.RegisterTelegramHandlers(engine, serverCtx)
 	handler.RegisterNotifyHandlers(engine, serverCtx)
-	pluginManager := plugin.NewManager(&plugin.HostEnv{Config: serverCtx.Config})
-	route.RegisterPluginDispatcherRoutes(engine, serverCtx, pluginManager)
 
 	document := readSwaggerDocument(t)
 	want := make(map[string]bool)
