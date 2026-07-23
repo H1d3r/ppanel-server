@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/perfect-panel/server/internal/config"
@@ -22,14 +23,28 @@ type TelegramLogic struct {
 	logger.Logger
 	ctx    context.Context
 	svcCtx *svc.ServiceContext
+	admin  *TelegramAdmin
 }
 
 func NewTelegramLogic(ctx context.Context, svcCtx *svc.ServiceContext) *TelegramLogic {
-	return &TelegramLogic{
+	logic := &TelegramLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
 		svcCtx: svcCtx,
 	}
+	logic.admin = NewTelegramAdmin(ctx, TelegramAdminDependencies{
+		Messenger:     telegramBotMessenger{bot: svcCtx.TelegramBot},
+		Actions:       redisTelegramAdminActionStore{client: svcCtx.Redis},
+		Tickets:       svcCtx.Store.Ticket(),
+		Orders:        svcCtx.Store.Order(),
+		Users:         svcCtx.Store.User(),
+		UserAuth:      svcCtx.Store.UserAuth(),
+		Subscriptions: svcCtx.Store.UserSubscription(),
+		UserCache:     svcCtx.Store.UserCache(),
+		Plans:         svcCtx.Store.Subscribe(),
+		Logs:          svcCtx.Store.Log(),
+	})
+	return logic
 }
 
 func (l *TelegramLogic) TelegramLogic(req *tgbotapi.Update) {
@@ -39,7 +54,7 @@ func (l *TelegramLogic) TelegramLogic(req *tgbotapi.Update) {
 	}
 	cmd := req.Message.Command()
 	if isAdminCommand(cmd) {
-		l.admin(req.Message)
+		l.admin.Handle(req.Message)
 		return
 	}
 	switch cmd {
@@ -75,6 +90,33 @@ func (l *TelegramLogic) sendMessage(bot *tgbotapi.BotAPI, message string, userId
 	msg.ParseMode = "Markdown"
 	_, err := bot.Send(msg)
 	return err
+}
+
+type telegramBotMessenger struct {
+	bot *tgbotapi.BotAPI
+}
+
+func (m telegramBotMessenger) Send(chatID int64, message string) error {
+	msg := tgbotapi.NewMessage(chatID, message)
+	msg.ParseMode = "Markdown"
+	_, err := m.bot.Send(msg)
+	return err
+}
+
+type redisTelegramAdminActionStore struct {
+	client *redis.Client
+}
+
+func (s redisTelegramAdminActionStore) Get(ctx context.Context, key string) (string, error) {
+	return s.client.Get(ctx, key).Result()
+}
+
+func (s redisTelegramAdminActionStore) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return s.client.Set(ctx, key, value, ttl).Err()
+}
+
+func (s redisTelegramAdminActionStore) Delete(ctx context.Context, key string) error {
+	return s.client.Del(ctx, key).Err()
 }
 
 func (l *TelegramLogic) traffic(userId int64) error {

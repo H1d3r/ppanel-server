@@ -1,7 +1,6 @@
 package telegram
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -12,7 +11,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/ticket"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -33,73 +31,73 @@ type tgAction struct {
 	Extra   string `json:"extra,omitempty"`
 }
 
-// admin runs an admin command; returns true if the message was consumed.
-func (l *TelegramLogic) admin(msg *tgbotapi.Message) {
+// Handle runs an administrator command.
+func (a *TelegramAdmin) Handle(msg *tgbotapi.Message) {
 	rawCmd := msg.Command()
 	arg := msg.CommandArguments()
 
 	// Step 1: Admin check
-	adminUser, reject := adminAuth(l.ctx, l.svcCtx, msg)
+	adminUser, reject := a.authenticate(msg)
 	if reject != "" {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, reject, msg.Chat.ID)
+		_ = a.sendMessage(reject, msg.Chat.ID)
 		return
 	}
 
 	// Step 2: Confirm / cancel short-circuit
 	if strings.HasPrefix(rawCmd, "confirm_") {
-		l.confirmAction(msg, adminUser, strings.TrimPrefix(rawCmd, "confirm_"))
+		a.confirmAction(msg, adminUser, strings.TrimPrefix(rawCmd, "confirm_"))
 		return
 	}
 	if strings.HasPrefix(rawCmd, "cancel_") {
 		actionID := strings.TrimPrefix(rawCmd, "cancel_")
-		if err := l.svcCtx.Redis.Del(l.ctx, tgActionPrefix+actionID).Err(); err != nil {
-			l.Errorw("admin cancel action: redis del failed", logger.Field("error", err.Error()))
+		if err := a.deps.Actions.Delete(a.ctx, tgActionPrefix+actionID); err != nil {
+			a.Errorw("admin cancel action: redis del failed", logger.Field("error", err.Error()))
 		}
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "❌ 操作已取消。", msg.Chat.ID)
+		_ = a.sendMessage("❌ 操作已取消。", msg.Chat.ID)
 		return
 	}
 
 	// Step 3: Dispatch
 	switch rawCmd {
 	case "dash":
-		l.dashboard(msg, adminUser)
+		a.dashboard(msg, adminUser)
 	case "tickets":
 		page, _ := strconv.Atoi(arg)
 		if page < 1 {
 			page = 1
 		}
-		l.listTickets(msg, adminUser, page, nil)
+		a.listTickets(msg, adminUser, page, nil)
 	case "tickets_waiting":
 		st := uint8(ticket.Pending)
-		l.listTickets(msg, adminUser, 1, &st)
+		a.listTickets(msg, adminUser, 1, &st)
 	case "tk":
-		l.ticketDetail(msg, adminUser, arg)
+		a.ticketDetail(msg, adminUser, arg)
 	case "rp":
-		l.replyTicket(msg, adminUser, arg)
+		a.replyTicket(msg, adminUser, arg)
 	case "close":
-		l.confirmCloseTicket(msg, adminUser, arg)
+		a.confirmCloseTicket(msg, adminUser, arg)
 	case "reopen":
-		l.reopenTicket(msg, adminUser, arg)
+		a.reopenTicket(msg, adminUser, arg)
 	case "user":
-		l.userDetail(msg, adminUser, arg)
+		a.userDetail(msg, adminUser, arg)
 	case "user_sub":
-		l.userSubs(msg, adminUser, arg)
+		a.userSubs(msg, adminUser, arg)
 	case "user_log":
-		l.userLogs(msg, adminUser, arg)
+		a.userLogs(msg, adminUser, arg)
 	case "reset":
-		l.confirmResetTraffic(msg, adminUser, arg)
+		a.confirmResetTraffic(msg, adminUser, arg)
 	case "toggle":
-		l.confirmToggleSub(msg, adminUser, arg)
+		a.confirmToggleSub(msg, adminUser, arg)
 	case "ban":
-		l.confirmBanUser(msg, adminUser, arg)
+		a.confirmBanUser(msg, adminUser, arg)
 	case "help", "h":
-		l.adminHelp(msg)
+		a.adminHelp(msg)
 	default:
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "未知命令。/help 查看可用命令。", msg.Chat.ID)
+		_ = a.sendMessage("未知命令。/help 查看可用命令。", msg.Chat.ID)
 	}
 }
 
-func (l *TelegramLogic) adminHelp(msg *tgbotapi.Message) {
+func (a *TelegramAdmin) adminHelp(msg *tgbotapi.Message) {
 	help := `🤖 Admin Commands
 
 📊 仪表盘
@@ -124,23 +122,23 @@ func (l *TelegramLogic) adminHelp(msg *tgbotapi.Message) {
   /ban <邮箱|ID>       封/解封用户
 
 /h  或  /help      帮助`
-	_ = l.sendMessage(l.svcCtx.TelegramBot, help, msg.Chat.ID)
+	_ = a.sendMessage(help, msg.Chat.ID)
 }
 
 // ─────────────────────────────────────
 // Dashboard
 // ─────────────────────────────────────
 
-func (l *TelegramLogic) dashboard(msg *tgbotapi.Message, adminUser *user.User) {
-	ctx := l.ctx
+func (a *TelegramAdmin) dashboard(msg *tgbotapi.Message, adminUser *user.User) {
+	ctx := a.ctx
 	now := timeutil.Now()
 
-	pendingTickets, _ := l.svcCtx.Store.Ticket().QueryWaitReplyTotal(ctx)
-	orderData, _ := l.svcCtx.Store.Order().QueryDateOrders(ctx, now)
+	pendingTickets, _ := a.deps.Tickets.QueryWaitReplyTotal(ctx)
+	orderData, _ := a.deps.Orders.QueryDateOrders(ctx, now)
 	todayRevenue := orderData.AmountTotal
-	todayUsers, _ := l.svcCtx.Store.User().QueryResisterUserTotalByDate(ctx, now)
+	todayUsers, _ := a.deps.Users.QueryResisterUserTotalByDate(ctx, now)
 
-	_, pending, _ := l.svcCtx.Store.Ticket().QueryTicketList(ctx, 1, 3, 0, ticketStatusPtr(ticket.Pending), "")
+	_, pending, _ := a.deps.Tickets.QueryTicketList(ctx, 1, 3, 0, ticketStatusPtr(ticket.Pending), "")
 	var recentBlock strings.Builder
 	for _, tk := range pending {
 		recentBlock.WriteString(fmt.Sprintf("  #%d [%s] %s\n", tk.Id, ticketStatusEmoji(tk.Status), truncate(tk.Title, 30)))
@@ -160,7 +158,7 @@ func (l *TelegramLogic) dashboard(msg *tgbotapi.Message, adminUser *user.User) {
 	if recentBlock.Len() > 0 {
 		text += "\n最近待处理工单：\n" + recentBlock.String()
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, text, msg.Chat.ID)
+	_ = a.sendMessage(text, msg.Chat.ID)
 }
 
 // ─────────────────────────────────────
@@ -169,16 +167,16 @@ func (l *TelegramLogic) dashboard(msg *tgbotapi.Message, adminUser *user.User) {
 
 func ticketStatusPtr(s uint8) *uint8 { return &s }
 
-func (l *TelegramLogic) listTickets(msg *tgbotapi.Message, adminUser *user.User, page int, status *uint8) {
+func (a *TelegramAdmin) listTickets(msg *tgbotapi.Message, adminUser *user.User, page int, status *uint8) {
 	pageSize := 10
-	total, list, err := l.svcCtx.Store.Ticket().QueryTicketList(l.ctx, page, pageSize, 0, status, "")
+	total, list, err := a.deps.Tickets.QueryTicketList(a.ctx, page, pageSize, 0, status, "")
 	if err != nil {
-		l.Errorw("list tickets failed", logger.Field("error", err.Error()))
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "查询工单列表失败。", msg.Chat.ID)
+		a.Errorw("list tickets failed", logger.Field("error", err.Error()))
+		_ = a.sendMessage("查询工单列表失败。", msg.Chat.ID)
 		return
 	}
 	if len(list) == 0 {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "暂无工单。", msg.Chat.ID)
+		_ = a.sendMessage("暂无工单。", msg.Chat.ID)
 		return
 	}
 
@@ -200,26 +198,26 @@ func (l *TelegramLogic) listTickets(msg *tgbotapi.Message, adminUser *user.User,
 	if page < totalPages {
 		sb.WriteString(fmt.Sprintf("📖 下一页：/tickets_%d", page+1))
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, sb.String(), msg.Chat.ID)
+	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (l *TelegramLogic) ticketDetail(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) ticketDetail(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
 	if idStr == "" {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "用法：/tk <工单ID>", msg.Chat.ID)
+		_ = a.sendMessage("用法：/tk <工单ID>", msg.Chat.ID)
 		return
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "工单ID格式错误。", msg.Chat.ID)
+		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
 		return
 	}
-	tk, err := l.svcCtx.Store.Ticket().QueryTicketDetail(l.ctx, id)
+	tk, err := a.deps.Tickets.QueryTicketDetail(a.ctx, id)
 	if err != nil {
-		l.Errorw("ticket detail failed", logger.Field("error", err.Error()), logger.Field("id", id))
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "工单不存在或查询失败。", msg.Chat.ID)
+		a.Errorw("ticket detail failed", logger.Field("error", err.Error()), logger.Field("id", id))
+		_ = a.sendMessage("工单不存在或查询失败。", msg.Chat.ID)
 		return
 	}
-	email, _ := userEmail(l.ctx, l.svcCtx, tk.UserId)
+	email, _ := a.userEmail(tk.UserId)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("🎫 #%d %s\n", tk.Id, ticketStatusName(tk.Status)))
@@ -245,23 +243,23 @@ func (l *TelegramLogic) ticketDetail(msg *tgbotapi.Message, adminUser *user.User
 		}
 	}
 	sb.WriteString(fmt.Sprintf("\n👉 /rp_%d <回复>   /close_%d 关闭", tk.Id, tk.Id))
-	_ = l.sendMessage(l.svcCtx.TelegramBot, sb.String(), msg.Chat.ID)
+	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (l *TelegramLogic) replyTicket(msg *tgbotapi.Message, adminUser *user.User, args string) {
+func (a *TelegramAdmin) replyTicket(msg *tgbotapi.Message, adminUser *user.User, args string) {
 	parts := strings.SplitN(args, " ", 2)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "用法：/rp <工单ID> <回复内容>", msg.Chat.ID)
+		_ = a.sendMessage("用法：/rp <工单ID> <回复内容>", msg.Chat.ID)
 		return
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "工单ID格式错误。", msg.Chat.ID)
+		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
 		return
 	}
-	tk, err := l.svcCtx.Store.Ticket().FindOne(l.ctx, id)
+	tk, err := a.deps.Tickets.FindOne(a.ctx, id)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "工单不存在。", msg.Chat.ID)
+		_ = a.sendMessage("工单不存在。", msg.Chat.ID)
 		return
 	}
 	follow := &ticket.Follow{
@@ -270,80 +268,104 @@ func (l *TelegramLogic) replyTicket(msg *tgbotapi.Message, adminUser *user.User,
 		Type:     1,
 		Content:  parts[1],
 	}
-	if err := l.svcCtx.Store.Ticket().InsertTicketFollow(l.ctx, follow); err != nil {
-		l.Errorw("ticket follow insert failed", logger.Field("error", err.Error()))
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "回复失败，请稍后再试。", msg.Chat.ID)
+	if err := a.deps.Tickets.InsertTicketFollow(a.ctx, follow); err != nil {
+		a.Errorw("ticket follow insert failed", logger.Field("error", err.Error()))
+		_ = a.sendMessage("回复失败，请稍后再试。", msg.Chat.ID)
 		return
 	}
-	if err := l.svcCtx.Store.Ticket().UpdateTicketStatus(l.ctx, id, 0, ticket.Waiting); err != nil {
-		l.Errorw("ticket status update failed", logger.Field("error", err.Error()))
+	if err := a.deps.Tickets.UpdateTicketStatus(a.ctx, id, 0, ticket.Waiting); err != nil {
+		a.Errorw("ticket status update failed", logger.Field("error", err.Error()))
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(tk.Status)), msg.Chat.ID)
+	_ = a.sendMessage(fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(tk.Status)), msg.Chat.ID)
 }
 
-func (l *TelegramLogic) confirmCloseTicket(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) confirmCloseTicket(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "工单ID格式错误。", msg.Chat.ID)
+		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
 		return
 	}
-	if _, err := l.svcCtx.Store.Ticket().FindOne(l.ctx, id); err != nil {
+	if _, err := a.deps.Tickets.FindOne(a.ctx, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "工单不存在。", msg.Chat.ID)
+			_ = a.sendMessage("工单不存在。", msg.Chat.ID)
 			return
 		}
-		l.Errorw("close ticket precondition failed", logger.Field("error", err.Error()))
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "查询工单失败。", msg.Chat.ID)
+		a.Errorw("close ticket precondition failed", logger.Field("error", err.Error()))
+		_ = a.sendMessage("查询工单失败。", msg.Chat.ID)
 		return
 	}
-	actionID := l.saveAction("close", adminUser.Id, strconv.FormatInt(id, 10), "")
-	_ = l.sendMessage(l.svcCtx.TelegramBot,
-		fmt.Sprintf("确认关闭工单 #%d ？\n/confirm_%s 确认\n/cancel_%s 取消", id, actionID, actionID),
+	actionID := a.saveAction("close", adminUser.Id, strconv.FormatInt(id, 10), "")
+	_ = a.sendMessage(fmt.Sprintf("确认关闭工单 #%d ？\n/confirm_%s 确认\n/cancel_%s 取消", id, actionID, actionID),
 		msg.Chat.ID)
 }
 
-func (l *TelegramLogic) reopenTicket(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) reopenTicket(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "ID格式错误。", msg.Chat.ID)
+		_ = a.sendMessage("ID格式错误。", msg.Chat.ID)
 		return
 	}
-	if err := l.svcCtx.Store.Ticket().UpdateTicketStatus(l.ctx, id, 0, ticket.Pending); err != nil {
-		l.Errorw("reopen ticket failed", logger.Field("error", err.Error()))
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "操作失败。", msg.Chat.ID)
+	if err := a.deps.Tickets.UpdateTicketStatus(a.ctx, id, 0, ticket.Pending); err != nil {
+		a.Errorw("reopen ticket failed", logger.Field("error", err.Error()))
+		_ = a.sendMessage("操作失败。", msg.Chat.ID)
 		return
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, fmt.Sprintf("✅ 工单 #%d 已重新打开", id), msg.Chat.ID)
+	_ = a.sendMessage(fmt.Sprintf("✅ 工单 #%d 已重新打开", id), msg.Chat.ID)
 }
 
 // ─────────────────────────────────────
 // User
 // ─────────────────────────────────────
 
-func (l *TelegramLogic) lookupUser(msg *tgbotapi.Message, input string) (*user.User, bool) {
+func (a *TelegramAdmin) lookupUser(msg *tgbotapi.Message, input string) (*user.User, bool) {
 	if input == "" {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "用法：/user <邮箱|ID>", msg.Chat.ID)
+		_ = a.sendMessage("用法：/user <邮箱|ID>", msg.Chat.ID)
 		return nil, false
 	}
 	if id, e := strconv.ParseInt(input, 10, 64); e == nil {
-		u, err := l.svcCtx.Store.User().FindOne(l.ctx, id)
+		u, err := a.deps.Users.FindOne(a.ctx, id)
 		if err == nil && u.Id > 0 {
 			return u, true
 		}
 	}
-	auth, err := l.svcCtx.Store.UserAuth().FindUserAuthMethodByOpenID(l.ctx, "email", input)
+	auth, err := a.deps.UserAuth.FindUserAuthMethodByOpenID(a.ctx, "email", input)
 	if err == nil && auth.UserId > 0 {
-		u, err := l.svcCtx.Store.User().FindOne(l.ctx, auth.UserId)
+		u, err := a.deps.Users.FindOne(a.ctx, auth.UserId)
 		if err == nil {
 			return u, true
 		}
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, "找不到用户。", msg.Chat.ID)
+	_ = a.sendMessage("找不到用户。", msg.Chat.ID)
 	return nil, false
 }
 
-func userEmail(ctx context.Context, svcCtx *svc.ServiceContext, userId int64) (string, error) {
-	auths, err := svcCtx.Store.UserAuth().FindUserAuthMethods(ctx, userId)
+func (a *TelegramAdmin) authenticate(msg *tgbotapi.Message) (admin *user.User, rejectMsg string) {
+	chatID := strconv.FormatInt(msg.Chat.ID, 10)
+
+	auth, err := a.deps.UserAuth.FindUserAuthMethodByOpenID(a.ctx, "telegram", chatID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			a.Infow("admin auth: Telegram not bound", logger.Field("chat_id", msg.Chat.ID))
+			return nil, "您的 Telegram 尚未绑定账号。\n请登录 Web 后台 → 个人设置 → 绑定 Telegram。"
+		}
+		a.Errorw("admin auth: query auth method failed", logger.Field("error", err.Error()))
+		return nil, "系统错误，请稍后再试。"
+	}
+
+	u, err := a.deps.Users.FindOne(a.ctx, auth.UserId)
+	if err != nil {
+		a.Errorw("admin auth: query user failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))
+		return nil, "系统错误，请稍后再试。"
+	}
+	if u.IsAdmin == nil || !*u.IsAdmin {
+		a.Infow("admin auth: user is not admin", logger.Field("user_id", u.Id))
+		return nil, "您没有管理权限。"
+	}
+	return u, ""
+}
+
+func (a *TelegramAdmin) userEmail(userId int64) (string, error) {
+	auths, err := a.deps.UserAuth.FindUserAuthMethods(a.ctx, userId)
 	if err != nil {
 		return fmt.Sprintf("ID:%d", userId), err
 	}
@@ -355,12 +377,12 @@ func userEmail(ctx context.Context, svcCtx *svc.ServiceContext, userId int64) (s
 	return fmt.Sprintf("ID:%d", userId), nil
 }
 
-func (l *TelegramLogic) userDetail(msg *tgbotapi.Message, adminUser *user.User, input string) {
-	u, ok := l.lookupUser(msg, input)
+func (a *TelegramAdmin) userDetail(msg *tgbotapi.Message, adminUser *user.User, input string) {
+	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
 	}
-	subs, _ := l.svcCtx.Store.UserSubscription().QueryUserSubscribe(l.ctx, u.Id)
+	subs, _ := a.deps.Subscriptions.QueryUserSubscribe(a.ctx, u.Id)
 
 	enable := "❌ 已禁用"
 	if u.Enable != nil && *u.Enable {
@@ -370,7 +392,7 @@ func (l *TelegramLogic) userDetail(msg *tgbotapi.Message, adminUser *user.User, 
 	if u.IsAdmin != nil && *u.IsAdmin {
 		adminFlag = "⭐ 管理员"
 	}
-	email, _ := userEmail(l.ctx, l.svcCtx, u.Id)
+	email, _ := a.userEmail(u.Id)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("👤 用户详情\n━━━━━━━━━━━━━━━━━━\nID：%d\n邮箱：%s\n状态：%s\n角色：%s\n余额：¥%.2f\n注册：%s\n推荐码：%s\n",
@@ -380,7 +402,7 @@ func (l *TelegramLogic) userDetail(msg *tgbotapi.Message, adminUser *user.User, 
 		u.ReferCode,
 	))
 
-	auths, _ := l.svcCtx.Store.UserAuth().FindUserAuthMethods(l.ctx, u.Id)
+	auths, _ := a.deps.UserAuth.FindUserAuthMethods(a.ctx, u.Id)
 	if len(auths) > 0 {
 		sb.WriteString("\n绑定方式：\n")
 		for _, a := range auths {
@@ -421,21 +443,21 @@ func (l *TelegramLogic) userDetail(msg *tgbotapi.Message, adminUser *user.User, 
 		u.Id, u.Id, u.Id, banOp,
 	))
 
-	_ = l.sendMessage(l.svcCtx.TelegramBot, sb.String(), msg.Chat.ID)
+	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (l *TelegramLogic) userSubs(msg *tgbotapi.Message, adminUser *user.User, input string) {
-	u, ok := l.lookupUser(msg, input)
+func (a *TelegramAdmin) userSubs(msg *tgbotapi.Message, adminUser *user.User, input string) {
+	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
 	}
-	subs, _ := l.svcCtx.Store.UserSubscription().QueryUserSubscribe(l.ctx, u.Id)
+	subs, _ := a.deps.Subscriptions.QueryUserSubscribe(a.ctx, u.Id)
 	if len(subs) == 0 {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "用户无订阅。", msg.Chat.ID)
+		_ = a.sendMessage("用户无订阅。", msg.Chat.ID)
 		return
 	}
 	var sb strings.Builder
-	email, _ := userEmail(l.ctx, l.svcCtx, u.Id)
+	email, _ := a.userEmail(u.Id)
 	sb.WriteString(fmt.Sprintf("📦 用户 %s 订阅列表 (%d)\n", email, len(subs)))
 	for i, s := range subs {
 		status := subStatusName(s.Status)
@@ -448,28 +470,28 @@ func (l *TelegramLogic) userSubs(msg *tgbotapi.Message, adminUser *user.User, in
 			s.ExpireTime.Format("2006-01-02 15:04"),
 		))
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, sb.String(), msg.Chat.ID)
+	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (l *TelegramLogic) userLogs(msg *tgbotapi.Message, adminUser *user.User, input string) {
-	u, ok := l.lookupUser(msg, input)
+func (a *TelegramAdmin) userLogs(msg *tgbotapi.Message, adminUser *user.User, input string) {
+	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
 	}
-	email, _ := userEmail(l.ctx, l.svcCtx, u.Id)
-	logs, _, err := l.svcCtx.Store.Log().FilterSystemLog(l.ctx, &log.FilterParams{
+	email, _ := a.userEmail(u.Id)
+	logs, _, err := a.deps.Logs.FilterSystemLog(a.ctx, &log.FilterParams{
 		Page:     1,
 		Size:     10,
 		Type:     log.TypeLogin.Uint8(),
 		ObjectID: u.Id,
 	})
 	if err != nil {
-		l.Errorw("user logs failed", logger.Field("error", err.Error()))
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "查询日志失败。", msg.Chat.ID)
+		a.Errorw("user logs failed", logger.Field("error", err.Error()))
+		_ = a.sendMessage("查询日志失败。", msg.Chat.ID)
 		return
 	}
 	if len(logs) == 0 {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, fmt.Sprintf("📜 %s 无登录日志。", email), msg.Chat.ID)
+		_ = a.sendMessage(fmt.Sprintf("📜 %s 无登录日志。", email), msg.Chat.ID)
 		return
 	}
 	var sb strings.Builder
@@ -488,113 +510,109 @@ func (l *TelegramLogic) userLogs(msg *tgbotapi.Message, adminUser *user.User, in
 			entryLog.LoginIP, entryLog.Method,
 		))
 	}
-	_ = l.sendMessage(l.svcCtx.TelegramBot, sb.String(), msg.Chat.ID)
+	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
 // ─────────────────────────────────────
 // Mutations (with confirm)
 // ─────────────────────────────────────
 
-func (l *TelegramLogic) confirmResetTraffic(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) confirmResetTraffic(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
 	subID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "订阅ID格式错误。", msg.Chat.ID)
+		_ = a.sendMessage("订阅ID格式错误。", msg.Chat.ID)
 		return
 	}
-	sub, err := l.svcCtx.Store.UserSubscription().FindOneSubscribe(l.ctx, subID)
+	sub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, subID)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "订阅不存在。", msg.Chat.ID)
+		_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
 		return
 	}
-	actionID := l.saveAction("reset", adminUser.Id, strconv.FormatInt(subID, 10), sub.Token)
+	actionID := a.saveAction("reset", adminUser.Id, strconv.FormatInt(subID, 10), sub.Token)
 	usedStr := trafficGB(sub.Download + sub.Upload)
-	_ = l.sendMessage(l.svcCtx.TelegramBot,
-		fmt.Sprintf("确认重置 订阅(ID:%d)流量？\n  已用：%s\n\n/confirm_%s 确认\n/cancel_%s 取消",
-			subID, usedStr, actionID, actionID),
+	_ = a.sendMessage(fmt.Sprintf("确认重置 订阅(ID:%d)流量？\n  已用：%s\n\n/confirm_%s 确认\n/cancel_%s 取消",
+		subID, usedStr, actionID, actionID),
 		msg.Chat.ID)
 }
 
-func (l *TelegramLogic) confirmToggleSub(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) confirmToggleSub(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
 	subID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "订阅ID格式错误。", msg.Chat.ID)
+		_ = a.sendMessage("订阅ID格式错误。", msg.Chat.ID)
 		return
 	}
-	userSub, err := l.svcCtx.Store.UserSubscription().FindOneSubscribe(l.ctx, subID)
+	userSub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, subID)
 	if err != nil {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "订阅不存在。", msg.Chat.ID)
+		_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
 		return
 	}
 	opLabel := "暂停"
 	if userSub.Status == 5 {
 		opLabel = "启用"
 	}
-	actionID := l.saveAction("toggle", adminUser.Id, strconv.FormatInt(subID, 10), "")
-	_ = l.sendMessage(l.svcCtx.TelegramBot,
-		fmt.Sprintf("确认%s订阅 (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
-			opLabel, subID, actionID, actionID),
+	actionID := a.saveAction("toggle", adminUser.Id, strconv.FormatInt(subID, 10), "")
+	_ = a.sendMessage(fmt.Sprintf("确认%s订阅 (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
+		opLabel, subID, actionID, actionID),
 		msg.Chat.ID)
 }
 
-func (l *TelegramLogic) confirmBanUser(msg *tgbotapi.Message, adminUser *user.User, input string) {
-	u, ok := l.lookupUser(msg, input)
+func (a *TelegramAdmin) confirmBanUser(msg *tgbotapi.Message, adminUser *user.User, input string) {
+	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
 	}
 	if u.Id == adminUser.Id {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "无法对自己的账号执行此操作。", msg.Chat.ID)
+		_ = a.sendMessage("无法对自己的账号执行此操作。", msg.Chat.ID)
 		return
 	}
 	opLabel := "禁用"
 	if u.Enable != nil && !*u.Enable {
 		opLabel = "启用"
 	}
-	actionID := l.saveAction("ban", adminUser.Id, strconv.FormatInt(u.Id, 10), "")
-	email, _ := userEmail(l.ctx, l.svcCtx, u.Id)
-	_ = l.sendMessage(l.svcCtx.TelegramBot,
-		fmt.Sprintf("确认%s用户 %s (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
-			opLabel, email, u.Id, actionID, actionID),
+	actionID := a.saveAction("ban", adminUser.Id, strconv.FormatInt(u.Id, 10), "")
+	email, _ := a.userEmail(u.Id)
+	_ = a.sendMessage(fmt.Sprintf("确认%s用户 %s (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
+		opLabel, email, u.Id, actionID, actionID),
 		msg.Chat.ID)
 }
 
-func (l *TelegramLogic) confirmAction(msg *tgbotapi.Message, adminUser *user.User, actionID string) {
-	act, ok := l.loadAction(actionID, adminUser.Id)
+func (a *TelegramAdmin) confirmAction(msg *tgbotapi.Message, adminUser *user.User, actionID string) {
+	act, ok := a.loadAction(actionID, adminUser.Id)
 	if !ok {
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "操作已过期或无效。", msg.Chat.ID)
+		_ = a.sendMessage("操作已过期或无效。", msg.Chat.ID)
 		return
 	}
 	switch act.Cmd {
 	case "close":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
-		if err := l.svcCtx.Store.Ticket().UpdateTicketStatus(l.ctx, id, 0, ticket.Closed); err != nil {
-			l.Errorw("close ticket failed", logger.Field("error", err.Error()))
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "关闭工单失败。", msg.Chat.ID)
+		if err := a.deps.Tickets.UpdateTicketStatus(a.ctx, id, 0, ticket.Closed); err != nil {
+			a.Errorw("close ticket failed", logger.Field("error", err.Error()))
+			_ = a.sendMessage("关闭工单失败。", msg.Chat.ID)
 			return
 		}
-		_ = l.sendMessage(l.svcCtx.TelegramBot, fmt.Sprintf("✅ 工单 #%d 已关闭", id), msg.Chat.ID)
+		_ = a.sendMessage(fmt.Sprintf("✅ 工单 #%d 已关闭", id), msg.Chat.ID)
 	case "reset":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
-		userSub, err := l.svcCtx.Store.UserSubscription().FindOneSubscribe(l.ctx, id)
+		userSub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, id)
 		if err != nil {
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "订阅不存在。", msg.Chat.ID)
+			_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
 			return
 		}
 		userSub.Download = 0
 		userSub.Upload = 0
-		if err := l.svcCtx.Store.UserSubscription().UpdateSubscribe(l.ctx, userSub); err != nil {
-			l.Errorw("reset traffic failed", logger.Field("error", err.Error()))
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "重置流量失败。", msg.Chat.ID)
+		if err := a.deps.Subscriptions.UpdateSubscribe(a.ctx, userSub); err != nil {
+			a.Errorw("reset traffic failed", logger.Field("error", err.Error()))
+			_ = a.sendMessage("重置流量失败。", msg.Chat.ID)
 			return
 		}
-		_ = l.svcCtx.Store.UserCache().ClearSubscribeCache(l.ctx, userSub)
-		_ = l.svcCtx.Store.Subscribe().ClearCache(l.ctx, userSub.SubscribeId)
-		_ = l.sendMessage(l.svcCtx.TelegramBot,
-			fmt.Sprintf("✅ 订阅 ID:%d 流量已重置", id), msg.Chat.ID)
+		_ = a.deps.UserCache.ClearSubscribeCache(a.ctx, userSub)
+		_ = a.deps.Plans.ClearCache(a.ctx, userSub.SubscribeId)
+		_ = a.sendMessage(fmt.Sprintf("✅ 订阅 ID:%d 流量已重置", id), msg.Chat.ID)
 	case "toggle":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
-		userSub, err := l.svcCtx.Store.UserSubscription().FindOneSubscribe(l.ctx, id)
+		userSub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, id)
 		if err != nil {
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "订阅不存在。", msg.Chat.ID)
+			_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
 			return
 		}
 		var newStatus uint8 = 1
@@ -604,20 +622,19 @@ func (l *TelegramLogic) confirmAction(msg *tgbotapi.Message, adminUser *user.Use
 			opLabel = "已暂停"
 		}
 		userSub.Status = newStatus
-		if err := l.svcCtx.Store.UserSubscription().UpdateSubscribe(l.ctx, userSub); err != nil {
-			l.Errorw("toggle sub failed", logger.Field("error", err.Error()))
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "操作失败。", msg.Chat.ID)
+		if err := a.deps.Subscriptions.UpdateSubscribe(a.ctx, userSub); err != nil {
+			a.Errorw("toggle sub failed", logger.Field("error", err.Error()))
+			_ = a.sendMessage("操作失败。", msg.Chat.ID)
 			return
 		}
-		_ = l.svcCtx.Store.UserCache().ClearSubscribeCache(l.ctx, userSub)
-		_ = l.svcCtx.Store.Subscribe().ClearCache(l.ctx, userSub.SubscribeId)
-		_ = l.sendMessage(l.svcCtx.TelegramBot,
-			fmt.Sprintf("✅ 订阅 ID:%d %s", id, opLabel), msg.Chat.ID)
+		_ = a.deps.UserCache.ClearSubscribeCache(a.ctx, userSub)
+		_ = a.deps.Plans.ClearCache(a.ctx, userSub.SubscribeId)
+		_ = a.sendMessage(fmt.Sprintf("✅ 订阅 ID:%d %s", id, opLabel), msg.Chat.ID)
 	case "ban":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
-		u, err := l.svcCtx.Store.User().FindOne(l.ctx, id)
+		u, err := a.deps.Users.FindOne(a.ctx, id)
 		if err != nil {
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "用户不存在。", msg.Chat.ID)
+			_ = a.sendMessage("用户不存在。", msg.Chat.ID)
 			return
 		}
 		enable := false
@@ -627,35 +644,34 @@ func (l *TelegramLogic) confirmAction(msg *tgbotapi.Message, adminUser *user.Use
 			opLabel = "已启用"
 		}
 		u.Enable = &enable
-		if err := l.svcCtx.Store.User().Update(l.ctx, u); err != nil {
-			l.Errorw("ban user failed", logger.Field("error", err.Error()))
-			_ = l.sendMessage(l.svcCtx.TelegramBot, "操作失败。", msg.Chat.ID)
+		if err := a.deps.Users.Update(a.ctx, u); err != nil {
+			a.Errorw("ban user failed", logger.Field("error", err.Error()))
+			_ = a.sendMessage("操作失败。", msg.Chat.ID)
 			return
 		}
-		_ = l.sendMessage(l.svcCtx.TelegramBot,
-			fmt.Sprintf("✅ 用户 (ID:%d) %s", u.Id, opLabel), msg.Chat.ID)
+		_ = a.sendMessage(fmt.Sprintf("✅ 用户 (ID:%d) %s", u.Id, opLabel), msg.Chat.ID)
 	default:
-		_ = l.sendMessage(l.svcCtx.TelegramBot, "未知操作。", msg.Chat.ID)
+		_ = a.sendMessage("未知操作。", msg.Chat.ID)
 	}
-	l.svcCtx.Redis.Del(l.ctx, tgActionPrefix+actionID)
+	_ = a.deps.Actions.Delete(a.ctx, tgActionPrefix+actionID)
 }
 
 // ─────────────────────────────────────
 // Action token (Redis)
 // ─────────────────────────────────────
 
-func (l *TelegramLogic) saveAction(cmd string, adminID int64, target, extra string) string {
+func (a *TelegramAdmin) saveAction(cmd string, adminID int64, target, extra string) string {
 	actionID := random.KeyNew(8, 1)
 	data, _ := json.Marshal(&tgAction{Cmd: cmd, AdminID: adminID, Target: target, Extra: extra})
-	_ = l.svcCtx.Redis.Set(l.ctx, tgActionPrefix+actionID, string(data), tgActionTTL).Err()
+	_ = a.deps.Actions.Set(a.ctx, tgActionPrefix+actionID, string(data), tgActionTTL)
 	return actionID
 }
 
-func (l *TelegramLogic) loadAction(actionID string, adminID int64) (tgAction, bool) {
-	val, err := l.svcCtx.Redis.Get(l.ctx, tgActionPrefix+actionID).Result()
+func (a *TelegramAdmin) loadAction(actionID string, adminID int64) (tgAction, bool) {
+	val, err := a.deps.Actions.Get(a.ctx, tgActionPrefix+actionID)
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
-			l.Errorw("load action failed", logger.Field("error", err.Error()))
+			a.Errorw("load action failed", logger.Field("error", err.Error()))
 		}
 		return tgAction{}, false
 	}
