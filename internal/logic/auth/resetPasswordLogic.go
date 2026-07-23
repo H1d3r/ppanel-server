@@ -5,44 +5,40 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/logic/common"
+	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/pkg/jwt"
-	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/perfect-panel/server/pkg/uuidx"
-
-	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
-	"github.com/perfect-panel/server/internal/logic/common"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/constant"
+	"github.com/perfect-panel/server/pkg/jwt"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/tool"
+	"github.com/perfect-panel/server/pkg/uuidx"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
-
-	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 )
 
 type ResetPasswordLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps ResetPasswordDependencies
 }
 
 // NewResetPasswordLogic Reset password
-func NewResetPasswordLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ResetPasswordLogic {
+func NewResetPasswordLogic(ctx context.Context, deps ResetPasswordDependencies) *ResetPasswordLogic {
 	return &ResetPasswordLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp *dto.LoginResponse, err error) {
-	if err := registerpolicy.EnsureMethodEnabled(l.ctx, l.svcCtx, registerpolicy.MethodEmail); err != nil {
+	if err := l.deps.Policy.EnsureMethodEnabled(l.ctx, authmethod.Email); err != nil {
 		return nil, err
 	}
 	var userInfo *user.User
@@ -59,7 +55,7 @@ func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp 
 				Timestamp: timeutil.Now().UnixMilli(),
 			}
 			content, _ := loginLog.Marshal()
-			if err := l.svcCtx.Store.Log().Insert(l.ctx, &log.SystemLog{
+			if err := l.deps.Store.Log().Insert(l.ctx, &log.SystemLog{
 				Id:       0,
 				Type:     log.TypeLogin.Uint8(),
 				Date:     timeutil.Now().Format("2006-01-02"),
@@ -76,12 +72,12 @@ func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp 
 	}()
 
 	cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, constant.Security, email)
-	if err := common.ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, false); err != nil {
+	if err := common.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "Verification code error")
 	}
 
 	// Check user
-	authMethod, err := l.svcCtx.Store.UserAuth().FindUserAuthMethodByOpenID(l.ctx, authmethod.Email, email)
+	authMethod, err := l.deps.Store.UserAuth().FindUserAuthMethodByOpenID(l.ctx, authmethod.Email, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user email not exist: %v", req.Email)
@@ -89,14 +85,14 @@ func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp 
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user by email error: %v", err.Error())
 	}
 
-	userInfo, err = l.svcCtx.Store.User().FindOne(l.ctx, authMethod.UserId)
+	userInfo, err = l.deps.Store.User().FindOne(l.ctx, authMethod.UserId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user email not exist: %v", req.Email)
 		}
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query user info failed: %v", err.Error())
 	}
-	if err := common.ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, true); err != nil {
+	if err := common.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "Verification code error")
 	}
 
@@ -104,14 +100,13 @@ func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp 
 	userInfo.Password = tool.EncodePassWord(req.Password)
 	userInfo.Algo = tool.PasswordAlgoArgon2id
 	userInfo.Salt = ""
-	if err = l.svcCtx.Store.User().Update(l.ctx, userInfo); err != nil {
+	if err = l.deps.Store.User().Update(l.ctx, userInfo); err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update user info failed: %v", err.Error())
 	}
 
 	// Bind device to user if identifier is provided
-	if req.Identifier != "" {
-		bindLogic := NewBindDeviceLogic(l.ctx, l.svcCtx)
-		if err := bindLogic.BindDeviceToUser(req.Identifier, req.IP, req.UserAgent, userInfo.Id); err != nil {
+	if req.Identifier != "" && l.deps.DeviceBinder != nil {
+		if err := l.deps.DeviceBinder.BindDeviceToUser(req.Identifier, req.IP, req.UserAgent, userInfo.Id); err != nil {
 			l.Errorw("failed to bind device to user",
 				logger.Field("user_id", userInfo.Id),
 				logger.Field("identifier", req.Identifier),
@@ -127,9 +122,9 @@ func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp 
 	sessionId := uuidx.NewUUID().String()
 	// Generate token
 	token, err := jwt.NewJwtToken(
-		l.svcCtx.Config.JwtAuth.AccessSecret,
+		l.deps.Config.JWTAccessSecret,
 		timeutil.Now().Unix(),
-		l.svcCtx.Config.JwtAuth.AccessExpire,
+		l.deps.Config.JWTAccessExpire,
 		jwt.WithOption("UserId", userInfo.Id),
 		jwt.WithOption("SessionId", sessionId),
 		jwt.WithOption("LoginType", req.LoginType),
@@ -139,7 +134,7 @@ func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp 
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "token generate error: %v", err.Error())
 	}
 	sessionIdCacheKey := fmt.Sprintf("%v:%v", config.SessionIdKey, sessionId)
-	if err = l.svcCtx.Redis.Set(l.ctx, sessionIdCacheKey, userInfo.Id, time.Duration(l.svcCtx.Config.JwtAuth.AccessExpire)*time.Second).Err(); err != nil {
+	if err = l.deps.Redis.Set(l.ctx, sessionIdCacheKey, userInfo.Id, time.Duration(l.deps.Config.JWTAccessExpire)*time.Second).Err(); err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "set session id error: %v", err.Error())
 	}
 	loginStatus = true

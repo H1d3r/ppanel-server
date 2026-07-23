@@ -6,6 +6,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/perfect-panel/server/internal/logic/auth"
+	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -49,7 +50,16 @@ func ResetPasswordHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 				return
 			}
 		}
-		l := auth.NewResetPasswordLogic(ctx, svcCtx)
+		l := auth.NewResetPasswordLogic(ctx, auth.ResetPasswordDependencies{
+			Store: svcCtx.Store,
+			Redis: svcCtx.Redis,
+			Config: auth.ResetPasswordConfig{
+				JWTAccessSecret: svcCtx.Config.JwtAuth.AccessSecret,
+				JWTAccessExpire: svcCtx.Config.JwtAuth.AccessExpire,
+			},
+			Policy:       registerpolicy.NewServicePolicy(svcCtx),
+			DeviceBinder: auth.NewBindDeviceLogic(ctx, svcCtx),
+		})
 		resp, err := l.ResetPassword(&req)
 		result.HttpResult(c, resp, err)
 	}
