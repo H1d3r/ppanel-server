@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/perfect-panel/server/internal/logic/auth"
 	"github.com/perfect-panel/server/internal/model/dto"
@@ -32,7 +33,7 @@ func CheckUserHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := auth.NewCheckUserLogic(ctx, svcCtx)
+		l := auth.NewCheckUserLogic(ctx, auth.CheckUserDependencies{Store: svcCtx.Store})
 		resp, err := l.CheckUser(&req)
 		result.HttpResult(c, resp, err)
 	}
