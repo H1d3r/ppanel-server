@@ -8,21 +8,22 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// EmailCodePolicy contains the authentication policy required before issuing
-// an email verification code.
-type EmailCodePolicy interface {
+// VerificationCodePolicy contains the authentication policy required before
+// issuing a verification code.
+type VerificationCodePolicy interface {
 	EnsureRegistrationOpen(ctx context.Context, method string) error
 	EnsureMethodEnabled(ctx context.Context, method string) error
 }
 
-// EmailCodeStore is the persistence surface used by email code delivery. It
+// VerificationIdentityStore is the persistence surface used by verification
+// code delivery. It
 // excludes unrelated application repositories.
-type EmailCodeStore interface {
+type VerificationIdentityStore interface {
 	UserAuth() repository.UserAuthRepo
 }
 
-// EmailTaskQueue publishes email delivery tasks.
-type EmailTaskQueue interface {
+// VerificationTaskQueue publishes verification-code delivery tasks.
+type VerificationTaskQueue interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
@@ -41,9 +42,9 @@ type EmailCodeConfig struct {
 // SendEmailCodeDependencies explicitly declares the collaborators of email
 // code delivery instead of passing ServiceContext to business logic.
 type SendEmailCodeDependencies struct {
-	Store  EmailCodeStore
+	Store  VerificationIdentityStore
 	Redis  *redis.Client
-	Queue  EmailTaskQueue
+	Queue  VerificationTaskQueue
 	Config EmailCodeConfig
-	Policy EmailCodePolicy
+	Policy VerificationCodePolicy
 }
