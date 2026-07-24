@@ -151,6 +151,20 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 		IsTrialPlan: func(planID int64) bool {
 			return srv.Config.Register.EnableTrial && srv.Config.Register.TrialSubscribe == planID
 		},
+		Clients: store.Client(),
+		Users:   store.User(),
+		Logs:    store.Log(),
+		DeliveryConfig: func() subscription.DeliveryConfig {
+			return subscription.DeliveryConfig{
+				SiteName:              srv.Config.Site.SiteName,
+				Host:                  srv.Config.Host,
+				SubscribeDomain:       srv.Config.Subscribe.SubscribeDomain,
+				ProfileUpdateInterval: srv.Config.Subscribe.ProfileUpdateInterval,
+				ProfileWebPageURL:     srv.Config.Subscribe.ProfileWebPageURL,
+				UserAgentList:         srv.Config.Subscribe.UserAgentList,
+				GatewayMode:           report.IsGatewayMode(),
+			}
+		},
 	})
 }
 

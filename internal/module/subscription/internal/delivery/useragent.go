@@ -1,21 +1,20 @@
-package subscribe
+package delivery
 
 import (
 	"context"
 	"strings"
 
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 )
 
-func IsUserAgentAllowed(ctx context.Context, svc *svc.ServiceContext, userAgent string) bool {
+func (s *Service) IsUserAgentAllowed(ctx context.Context, userAgent string) bool {
 	if userAgent == "" {
 		return false
 	}
 
-	keywords := tool.RemoveDuplicateElements(strings.Split(svc.Config.Subscribe.UserAgentList, "\n")...)
-	clients, err := svc.Store.Client().List(ctx)
+	keywords := tool.RemoveDuplicateElements(strings.Split(s.deps.config().UserAgentList, "\n")...)
+	clients, err := s.deps.Clients.List(ctx)
 	if err != nil {
 		logger.WithContext(ctx).Errorw("[Subscribe] Query client list failed", logger.Field("error", err.Error()))
 	}

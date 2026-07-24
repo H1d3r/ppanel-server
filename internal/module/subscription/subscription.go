@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/delivery"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
 	"github.com/perfect-panel/server/internal/repository"
@@ -32,7 +33,18 @@ type Service interface {
 	QuerySubscribeList(ctx context.Context, req *dto.QuerySubscribeListRequest) (*dto.QuerySubscribeListResponse, error)
 	QuerySubscribeGroupList(ctx context.Context) (*dto.QuerySubscribeGroupListResponse, error)
 	QueryUserSubscribeNodeList(ctx context.Context) (*dto.QueryUserSubscribeNodeListResponse, error)
+
+	// Deliver renders the client configuration for a subscription token.
+	Deliver(ctx context.Context, meta RequestMeta, req *dto.SubscribeRequest) (*dto.SubscribeResponse, error)
+	// IsUserAgentAllowed gates delivery by the configured user-agent allowlist.
+	IsUserAgentAllowed(ctx context.Context, userAgent string) bool
 }
+
+// RequestMeta re-exports the delivery subdomain's transport details.
+type RequestMeta = delivery.RequestMeta
+
+// DeliveryConfig re-exports the delivery subdomain's runtime snapshot.
+type DeliveryConfig = delivery.Config
 
 // SubscriptionTransactor re-exports the plan subdomain's transaction port.
 type SubscriptionTransactor = plan.SubscriptionTransactor
@@ -50,6 +62,13 @@ type Deps struct {
 	Host string
 	// IsTrialPlan reports whether the plan is the configured trial plan.
 	IsTrialPlan func(planID int64) bool
+
+	// Delivery dependencies.
+	Clients repository.ClientRepo
+	Users   repository.UserRepo
+	Logs    repository.LogRepo
+	// DeliveryConfig reads the runtime-mutable delivery configuration.
+	DeliveryConfig func() DeliveryConfig
 }
 
 func New(deps Deps) Service {
@@ -59,6 +78,15 @@ func New(deps Deps) Service {
 			UserSubs:          deps.UserSubs,
 			Store:             deps.Store,
 			NotifyPlanChanged: deps.NotifyPlanChanged,
+		}),
+		delivery: delivery.NewService(delivery.Deps{
+			Clients:        deps.Clients,
+			Plans:          deps.Plans,
+			UserSubs:       deps.UserSubs,
+			Users:          deps.Users,
+			Nodes:          deps.Nodes,
+			Logs:           deps.Logs,
+			ConfigSnapshot: deps.DeliveryConfig,
 		}),
 		storefront: storefront.NewService(storefront.Deps{
 			Plans:       deps.Plans,
@@ -73,6 +101,7 @@ func New(deps Deps) Service {
 type service struct {
 	plans      *plan.Service
 	storefront *storefront.Service
+	delivery   *delivery.Service
 }
 
 func (s *service) CreateSubscribe(ctx context.Context, req *dto.CreateSubscribeRequest) error {
@@ -137,4 +166,12 @@ func (s *service) QuerySubscribeGroupList(ctx context.Context) (*dto.QuerySubscr
 
 func (s *service) QueryUserSubscribeNodeList(ctx context.Context) (*dto.QueryUserSubscribeNodeListResponse, error) {
 	return s.storefront.QueryUserSubscribeNodeList(ctx)
+}
+
+func (s *service) Deliver(ctx context.Context, meta RequestMeta, req *dto.SubscribeRequest) (*dto.SubscribeResponse, error) {
+	return s.delivery.Deliver(ctx, meta, req)
+}
+
+func (s *service) IsUserAgentAllowed(ctx context.Context, userAgent string) bool {
+	return s.delivery.IsUserAgentAllowed(ctx, userAgent)
 }
