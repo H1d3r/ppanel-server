@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/announcement"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetAnnouncementHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := announcement.NewGetAnnouncementLogic(ctx, svcCtx)
-		resp, err := l.GetAnnouncement(&req)
+		resp, err := svcCtx.Support.GetAnnouncement(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }

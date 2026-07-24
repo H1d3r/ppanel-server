@@ -7,6 +7,7 @@ import (
 	"github.com/perfect-panel/server/pkg/exchangeRate"
 
 	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/module/support"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/limit"
 	"github.com/perfect-panel/server/pkg/nodeMultiplier"
@@ -25,6 +26,10 @@ type ServiceContext struct {
 	ExchangeRate *exchangeRate.Cache
 	GeoIP        *IPLocation
 	Store        repository.Store
+
+	// Domain modules (see docs/adr-001-modular-monolith.md). ServiceContext is
+	// their composition root; handlers call the module facades.
+	Support support.Service
 
 	//NodeCache   *cache.NodeCacheClient
 	Restart               func() error
@@ -69,6 +74,9 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		ExchangeRate: exchangeRate.NewCache(0),
 		GeoIP:        geoIP,
 		Store:        store,
+		Support: support.New(support.Deps{
+			Announcements: store.Announcement(),
+		}),
 		//NodeCache:   cache.NewNodeCacheClient(rds),
 		AuthLimiter: authLimiter,
 	}
