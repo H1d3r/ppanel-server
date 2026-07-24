@@ -182,16 +182,18 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 		IsTrialPlan: func(planID int64) bool {
 			return srv.Config.Register.EnableTrial && srv.Config.Register.TrialSubscribe == planID
 		},
-		Clients:     store.Client(),
-		Users:       store.User(),
-		Logs:        store.Log(),
-		Devices:     store.UserDevice(),
-		Cache:       store.UserCache(),
-		Traffic:     store.TrafficLog(),
-		Orders:      store.Order(),
-		Inbox:       store.Inbox(),
-		FullStore:   store,
-		SingleModel: func() bool { return srv.Config.Subscribe.SingleModel },
+		Clients:         store.Client(),
+		Users:           store.User(),
+		Logs:            store.Log(),
+		Devices:         store.UserDevice(),
+		Cache:           store.UserCache(),
+		Traffic:         store.TrafficLog(),
+		Orders:          store.Order(),
+		Inbox:           store.Inbox(),
+		FullStore:       store,
+		SingleModel:     func() bool { return srv.Config.Subscribe.SingleModel },
+		UserAuths:       store.UserAuth(),
+		LifecycleNotify: lifecycleEmailNotifier{srv: srv},
 		DeliveryConfig: func() subscription.DeliveryConfig {
 			return subscription.DeliveryConfig{
 				SiteName:              srv.Config.Site.SiteName,
@@ -204,6 +206,54 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 			}
 		},
 	})
+}
+
+// lifecycleEmailNotifier adapts the subscription sweep's owner notices to
+// the email delivery queue; the site branding is read per send because the
+// admin can change it at runtime.
+type lifecycleEmailNotifier struct {
+	srv *ServiceContext
+}
+
+func (n lifecycleEmailNotifier) enqueue(payload queuetypes.SendEmailPayload, userEmail string) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		logger.Errorw("[CheckSubscription] Marshal payload failed", logger.Field("error", err.Error()))
+		return
+	}
+	task := asynq.NewTask(queuetypes.ForthwithSendEmail, body, asynq.MaxRetry(3))
+	info, err := n.srv.Queue.Enqueue(task)
+	if err != nil {
+		logger.Errorw("[CheckSubscription] Enqueue task failed", logger.Field("error", err.Error()), logger.Field("payload", string(body)))
+		return
+	}
+	logger.Infow("[CheckSubscription] Send email success",
+		logger.Field("taskID", info.ID), logger.Field("Email", userEmail))
+}
+
+func (n lifecycleEmailNotifier) NotifySubscriptionExpired(_ context.Context, email string, expiredAt time.Time) {
+	n.enqueue(queuetypes.SendEmailPayload{
+		Type:    queuetypes.EmailTypeExpiration,
+		Email:   email,
+		Subject: "Subscription Expired",
+		Content: map[string]interface{}{
+			"SiteLogo":   n.srv.Config.Site.SiteLogo,
+			"SiteName":   n.srv.Config.Site.SiteName,
+			"ExpireDate": expiredAt.Format("2006-01-02 15:04:05"),
+		},
+	}, email)
+}
+
+func (n lifecycleEmailNotifier) NotifyTrafficExceeded(_ context.Context, email string) {
+	n.enqueue(queuetypes.SendEmailPayload{
+		Type:    queuetypes.EmailTypeTrafficExceed,
+		Email:   email,
+		Subject: "Subscription Traffic Exceed",
+		Content: map[string]interface{}{
+			"SiteLogo": n.srv.Config.Site.SiteLogo,
+			"SiteName": n.srv.Config.Site.SiteName,
+		},
+	}, email)
 }
 
 // newIdentityModule wires the identity module against the legacy store;

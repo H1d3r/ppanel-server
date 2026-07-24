@@ -12,6 +12,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/sweep"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 )
@@ -19,6 +20,11 @@ import (
 // Service is the only surface other code may depend on; the implementation
 // lives under internal/ where the compiler seals it off.
 type Service interface {
+	// CheckSubscriptions runs the lifecycle sweeps (traffic exceeded,
+	// expired), committing status flips in subscription transactions with
+	// notification and cache invalidation as post-commit side effects.
+	CheckSubscriptions(ctx context.Context) error
+
 	// The client-application management for subscription delivery.
 	CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
 	UpdateSubscribeApplication(ctx context.Context, req *dto.UpdateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
@@ -118,10 +124,22 @@ type Deps struct {
 	// SingleModel forbids holding more than one blocking subscription;
 	// runtime-mutable, read per request.
 	SingleModel func() bool
+	// UserAuths and LifecycleNotify serve the lifecycle sweep: the identity
+	// email lookup and the owner notification channel.
+	UserAuths       sweep.OwnerEmailReader
+	LifecycleNotify sweep.Notifier
 }
 
 func New(deps Deps) Service {
 	return &service{
+		sweeper: sweep.NewService(sweep.Deps{
+			UserSubs: deps.UserSubs,
+			Plans:    deps.Plans,
+			Cache:    deps.Cache,
+			Store:    deps.FullStore,
+			Emails:   deps.UserAuths,
+			Notify:   deps.LifecycleNotify,
+		}),
 		apps: application.NewService(application.Deps{
 			Clients: deps.Clients,
 			Nodes:   deps.Nodes,
@@ -174,6 +192,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	sweeper    *sweep.Service
 	apps       *application.Service
 	plans      *plan.Service
 	storefront *storefront.Service
@@ -344,4 +363,8 @@ func (s *service) GetSubscribeApplicationList(ctx context.Context, req *dto.GetS
 
 func (s *service) PreviewSubscribeTemplate(ctx context.Context, req *dto.PreviewSubscribeTemplateRequest) (*dto.PreviewSubscribeTemplateResponse, error) {
 	return s.apps.PreviewSubscribeTemplate(ctx, req)
+}
+
+func (s *service) CheckSubscriptions(ctx context.Context) error {
+	return s.sweeper.CheckSubscriptions(ctx)
 }

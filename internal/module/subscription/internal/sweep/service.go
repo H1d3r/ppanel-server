@@ -1,0 +1,153 @@
+// Package sweep implements the subscription lifecycle sweep: marking
+// traffic-exceeded and expired subscriptions finished, then firing the
+// retryable side effects (owner notification, cache invalidation). Only the
+// module facade may reach it.
+package sweep
+
+import (
+	"context"
+	"time"
+
+	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/timeutil"
+)
+
+// Notifier delivers the lifecycle notices to the subscription owner. The
+// composition root adapts it to the notification queue until a notification
+// facade owns email delivery.
+type Notifier interface {
+	NotifySubscriptionExpired(ctx context.Context, email string, expiredAt time.Time)
+	NotifyTrafficExceeded(ctx context.Context, email string)
+}
+
+// OwnerEmailReader is the read-only identity port resolving a user's email
+// binding; the legacy user-auth repository satisfies it structurally.
+type OwnerEmailReader interface {
+	FindUserAuthMethodByUserId(ctx context.Context, method string, userId int64) (*user.AuthMethods, error)
+}
+
+// Deps declares the subdomain's dependencies; the module facade forwards
+// them from the composition root.
+type Deps struct {
+	UserSubs repository.UserSubscriptionRepo
+	Plans    repository.SubscribeRepo
+	Cache    repository.UserCacheRepo
+	Store    repository.Store
+	Emails   OwnerEmailReader
+	Notify   Notifier
+}
+
+// Service is the lifecycle-sweep entry point used by the subscription
+// facade.
+type Service struct {
+	deps Deps
+}
+
+func NewService(deps Deps) *Service {
+	return &Service{deps: deps}
+}
+
+// CheckSubscriptions runs both lifecycle sweeps. Each sweep commits its
+// status flip in a subscription-domain transaction; notifications and cache
+// invalidation are retryable side effects that run after the commit
+// (ADR-001 step 2).
+func (s *Service) CheckSubscriptions(ctx context.Context) error {
+	logger.Infof("[CheckSubscription] Start check subscription: %s", timeutil.Now().Format("2006-01-02 15:04:05"))
+	if err := s.markSubscribes(ctx, 2, "[Check Subscription Traffic]", s.sendTrafficNotify,
+		func(store repository.SubscriptionStore) ([]*user.Subscribe, error) {
+			return store.UserSubscription().FindTrafficExceededSubscribes(ctx)
+		}); err != nil {
+		logger.Error("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
+	}
+	if err := s.markSubscribes(ctx, 3, "[Check Subscription Expire]", s.sendExpiredNotify,
+		func(store repository.SubscriptionStore) ([]*user.Subscribe, error) {
+			return store.UserSubscription().FindExpiredSubscribes(ctx, timeutil.Now())
+		}); err != nil {
+		logger.Info("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
+	}
+	return nil
+}
+
+func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []int64), find func(repository.SubscriptionStore) ([]*user.Subscribe, error)) error {
+	var list []*user.Subscribe
+	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+		var err error
+		list, err = find(store)
+		if err != nil {
+			logger.Errorw(tag+" Query subscribe failed", logger.Field("error", err.Error()))
+			return err
+		}
+		if len(list) == 0 {
+			return nil
+		}
+		ids := make([]int64, 0, len(list))
+		for _, item := range list {
+			ids = append(ids, item.Id)
+		}
+		return store.UserSubscription().MarkSubscribesFinished(ctx, ids, status, timeutil.Now())
+	})
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		logger.Info(tag + " No subscribe need to update")
+		return nil
+	}
+	ids := make([]int64, 0, len(list))
+	for _, item := range list {
+		ids = append(ids, item.Id)
+	}
+	notify(ctx, ids)
+	if err := s.deps.Cache.ClearSubscribeCache(ctx, list...); err != nil {
+		logger.Errorw(tag+" Clear subscribe cache failed", logger.Field("error", err.Error()))
+	}
+	s.clearServerCache(ctx, list...)
+	logger.Infow(tag+" Update subscribe status", logger.Field("user_ids", ids), logger.Field("count", int64(len(ids))))
+	return nil
+}
+
+// ownerEmail resolves the subscription's owner email; failures are logged
+// and skipped, matching the sweep's best-effort notification semantics.
+func (s *Service) ownerEmail(ctx context.Context, id int64) (email string, expireAt time.Time, ok bool) {
+	sub, err := s.deps.UserSubs.FindOneUserSubscribe(ctx, id)
+	if err != nil {
+		logger.Errorw("[CheckSubscription] FindOneUserSubscribe failed", logger.Field("error", err.Error()))
+		return "", time.Time{}, false
+	}
+	method, err := s.deps.Emails.FindUserAuthMethodByUserId(ctx, "email", sub.UserId)
+	if err != nil {
+		logger.Errorw("[CheckSubscription] FindUserAuthMethodByUserId failed", logger.Field("error", err.Error()), logger.Field("user_id", sub.UserId))
+		return "", time.Time{}, false
+	}
+	return method.AuthIdentifier, sub.ExpireTime, true
+}
+
+func (s *Service) sendExpiredNotify(ctx context.Context, subs []int64) {
+	for _, id := range subs {
+		if email, expireAt, ok := s.ownerEmail(ctx, id); ok {
+			s.deps.Notify.NotifySubscriptionExpired(ctx, email, expireAt)
+		}
+	}
+}
+
+func (s *Service) sendTrafficNotify(ctx context.Context, subs []int64) {
+	for _, id := range subs {
+		if email, _, ok := s.ownerEmail(ctx, id); ok {
+			s.deps.Notify.NotifyTrafficExceeded(ctx, email)
+		}
+	}
+}
+
+func (s *Service) clearServerCache(ctx context.Context, userSubs ...*user.Subscribe) {
+	subs := make(map[int64]bool)
+	for _, sub := range userSubs {
+		subs[sub.SubscribeId] = true
+	}
+	for sub := range subs {
+		if err := s.deps.Plans.ClearCache(ctx, sub); err != nil {
+			logger.Errorw("[CheckSubscription] ClearCache failed", logger.Field("error", err.Error()), logger.Field("subscribe_id", sub))
+		}
+	}
+}
