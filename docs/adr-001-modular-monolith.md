@@ -117,7 +117,12 @@ internal/module/<name>/
      过渡期保留：新购事务内的 user 行锁（按用户串行化配额检查，第 5 步移交 subscription 模块）；
      已知窗口：管理员在履约后、结算前关闭 Paid 订单会留下已履约的 Closed 订单（改造前由行锁互斥），
      补偿属 billing 关单流程的后续工作。
-3. **拆 ServiceContext**：延续现有 DI 重构，每模块一个 deps 结构，`ServiceContext` 只在组装根出现。
+3. **拆 ServiceContext**（进行中）：延续现有 DI 重构，每模块一个 deps 结构，`ServiceContext`
+   只在组装根出现。已落地：`internal/arch` 的 `TestSvcImportFreeze` 把 import `internal/svc`
+   的包目录冻结为基线（71 项，只许收窄）——新代码必须走模块门面注入依赖；每迁移一个域，
+   基线相应删项，收缩过程可度量。billing 模块（admin order/payment）已按此模式落地：
+   激活入队、网关模式探测、站点 Host 全部经 Deps 注入，`ActivationEnqueuer` 端口在组装根
+   适配 asynq。
 4. **域优先重组**：把 `logic/admin/<域>` + `logic/public/<域>` + `queue/logic/<域>` 收拢进
    `internal/module/<域>/internal/service`，handler 变薄。试点顺序：`support`（耦合最低）
    → `billing`（刚硬化过、测试最全）→ 其余。
