@@ -42,7 +42,6 @@ func (s *closeOrderStore) Order() repository.OrderRepo   { return s.orders }
 func (s *closeOrderStore) Subscribe() repository.SubscribeRepo {
 	return s.subscribes
 }
-func (s *closeOrderStore) User() repository.UserRepo { return s.users }
 func (s *closeOrderStore) Log() repository.LogRepo   { return s.logs }
 func (s *closeOrderStore) Inbox() repository.InboxRepo {
 	if s.inbox == nil {
@@ -149,28 +148,23 @@ func (r *closeSubscribeRepo) RestoreInventory(_ context.Context, id int64, _ ...
 }
 
 type closeUserRepo struct {
-	repository.UserRepo
 	repository.WalletRepo
-	user        *userEntity.User
+	wallet      *userEntity.Wallet
 	updateCalls int
 }
 
-func (r *closeUserRepo) FindOne(_ context.Context, id int64) (*userEntity.User, error) {
-	if r.user == nil || id != r.user.Id {
+func (r *closeUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
+	if r.wallet == nil || id != r.wallet.UserId {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.user
+	copy := *r.wallet
 	return &copy, nil
 }
 
-func (r *closeUserRepo) FindOneForUpdate(ctx context.Context, id int64) (*userEntity.User, error) {
-	return r.FindOne(ctx, id)
-}
-
-func (r *closeUserRepo) UpdateBalanceFields(_ context.Context, value *userEntity.User, _ ...*gorm.DB) error {
+func (r *closeUserRepo) UpdateBalanceFields(_ context.Context, value *userEntity.Wallet, _ ...*gorm.DB) error {
 	r.updateCalls++
-	r.user.Balance = value.Balance
-	r.user.GiftAmount = value.GiftAmount
+	r.wallet.Balance = value.Balance
+	r.wallet.GiftAmount = value.GiftAmount
 	return nil
 }
 
@@ -232,7 +226,7 @@ func TestCloseOrderRefundsGiftAndRestoresInventory(t *testing.T) {
 		transition: true,
 	}
 	subscribes := &closeSubscribeRepo{sub: &subscribeEntity.Subscribe{Id: 99, Inventory: 2}}
-	users := &closeUserRepo{user: &userEntity.User{Id: 7, GiftAmount: 10}}
+	users := &closeUserRepo{wallet: &userEntity.Wallet{UserId: 7, GiftAmount: 10}}
 	logs := &closeLogRepo{}
 	store := &closeOrderStore{orders: orders, subscribes: subscribes, users: users, logs: logs}
 	store.markReserved(t, "gift-order")
@@ -241,8 +235,8 @@ func TestCloseOrderRefundsGiftAndRestoresInventory(t *testing.T) {
 	if err := svc.Close(context.Background(), &dto.CloseOrderRequest{OrderNo: "gift-order"}); err != nil {
 		t.Fatalf("CloseOrder: %v", err)
 	}
-	if users.updateCalls != 1 || users.user.GiftAmount != 50 || logs.insertCalls != 1 {
-		t.Fatalf("expected gift refund and log, updates=%d balance=%d logs=%d", users.updateCalls, users.user.GiftAmount, logs.insertCalls)
+	if users.updateCalls != 1 || users.wallet.GiftAmount != 50 || logs.insertCalls != 1 {
+		t.Fatalf("expected gift refund and log, updates=%d balance=%d logs=%d", users.updateCalls, users.wallet.GiftAmount, logs.insertCalls)
 	}
 	if subscribes.updateCalls != 1 || subscribes.sub.Inventory != 3 {
 		t.Fatalf("expected inventory restoration after gift refund, calls=%d inventory=%d", subscribes.updateCalls, subscribes.sub.Inventory)

@@ -19,19 +19,12 @@ import (
 type fakeUserRepo struct {
 	repository.UserRepo
 	repository.UserSubscriptionRepo
-	repository.WalletRepo
 
 	findOneSubscribeFn    func(context.Context, int64) (*usermodel.Subscribe, error)
 	findOneSubscribeCalls int
 
 	findOneUserSubscribeFn    func(context.Context, int64) (*usermodel.SubscribeDetails, error)
 	findOneUserSubscribeCalls int
-}
-
-// FindOneForUpdate disambiguates the embedded UserRepo/WalletRepo pair; the
-// tests exercising it stub the identity side.
-func (r *fakeUserRepo) FindOneForUpdate(ctx context.Context, id int64) (*usermodel.User, error) {
-	return r.UserRepo.FindOneForUpdate(ctx, id)
 }
 
 func (r *fakeUserRepo) FindOneSubscribe(ctx context.Context, id int64) (*usermodel.Subscribe, error) {
@@ -73,7 +66,10 @@ func (s *fakeStore) InBillingTx(_ context.Context, fn func(repository.BillingSto
 	return fn(s)
 }
 
-func (s *fakeStore) Wallet() repository.WalletRepo { return s.uRepo }
+// The auth-gate tests never reach the refund; a nil embed panics if they do.
+func (s *fakeStore) Wallet() repository.WalletRepo { return fakeWalletRepo{} }
+
+type fakeWalletRepo struct{ repository.WalletRepo }
 
 func (s *fakeStore) User() repository.UserRepo { return s.uRepo }
 func (s *fakeStore) UserSubscription() repository.UserSubscriptionRepo {

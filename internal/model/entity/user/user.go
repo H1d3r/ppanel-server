@@ -13,13 +13,10 @@ type User struct {
 	Algo                  string         `gorm:"type:varchar(20);default:'default';comment:Encryption Algorithm"`
 	Salt                  string         `gorm:"type:varchar(20);default:null;comment:Password Salt"`
 	Avatar                string         `gorm:"type:MEDIUMTEXT;comment:User Avatar"`
-	Balance               int64          `gorm:"default:0;comment:User Balance"` // User Balance Amount
 	ReferCode             string         `gorm:"type:varchar(20);default:'';comment:Referral Code"`
 	RefererId             int64          `gorm:"index:idx_referer;comment:Referrer ID"`
-	Commission            int64          `gorm:"default:0;comment:Commission"`                      // Commission Amount
 	ReferralPercentage    uint8          `gorm:"default:0;comment:Referral"`                        // Referral Percentage
 	OnlyFirstPurchase     *bool          `gorm:"default:true;not null;comment:Only First Purchase"` // Only First Purchase Referral
-	GiftAmount            int64          `gorm:"default:0;comment:User Gift Amount"`
 	Enable                *bool          `gorm:"default:true;not null;comment:Is Account Enabled"`
 	IsAdmin               *bool          `gorm:"default:false;not null;comment:Is Admin"`
 	EnableBalanceNotify   *bool          `gorm:"default:false;not null;comment:Enable Balance Change Notifications"`

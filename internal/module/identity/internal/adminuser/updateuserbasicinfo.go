@@ -51,42 +51,38 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Error")
 		}
-		// The wallet values are authoritative from the wallet row.
-		userInfo.Balance = walletInfo.Balance
-		userInfo.GiftAmount = walletInfo.GiftAmount
-		userInfo.Commission = walletInfo.Commission
 		if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
 			return err
 		}
-		if userInfo.Balance != req.Balance {
-			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: req.Balance - userInfo.Balance, Balance: req.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
+		if walletInfo.Balance != req.Balance {
+			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: req.Balance - walletInfo.Balance, Balance: req.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
 			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: userInfo.Id, Content: string(content)}); err != nil {
 				return err
 			}
 		}
-		if userInfo.GiftAmount != req.GiftAmount {
+		if walletInfo.GiftAmount != req.GiftAmount {
 			changeType := log.GiftTypeReduce
-			if req.GiftAmount > userInfo.GiftAmount {
+			if req.GiftAmount > walletInfo.GiftAmount {
 				changeType = log.GiftTypeIncrease
 			}
-			content, _ := (&log.Gift{Type: changeType, Amount: req.GiftAmount - userInfo.GiftAmount, Balance: req.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
+			content, _ := (&log.Gift{Type: changeType, Amount: req.GiftAmount - walletInfo.GiftAmount, Balance: req.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
 			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: userInfo.Id, Content: string(content)}); err != nil {
 				return err
 			}
 		}
-		if userInfo.Commission != req.Commission {
-			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: req.Commission - userInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
+		if walletInfo.Commission != req.Commission {
+			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: req.Commission - walletInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
 			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: userInfo.Id, Content: string(content)}); err != nil {
 				return err
 			}
 		}
 
-		walletChanged := userInfo.Balance != req.Balance ||
-			userInfo.GiftAmount != req.GiftAmount ||
-			userInfo.Commission != req.Commission
-		userInfo.Balance = req.Balance
-		userInfo.GiftAmount = req.GiftAmount
-		userInfo.Commission = req.Commission
+		walletChanged := walletInfo.Balance != req.Balance ||
+			walletInfo.GiftAmount != req.GiftAmount ||
+			walletInfo.Commission != req.Commission
+		walletInfo.Balance = req.Balance
+		walletInfo.GiftAmount = req.GiftAmount
+		walletInfo.Commission = req.Commission
 		userInfo.Avatar = req.Avatar
 		userInfo.ReferCode = req.ReferCode
 		userInfo.RefererId = req.RefererId
@@ -109,10 +105,10 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 		// admin's wallet adjustment goes through the wallet view under the
 		// same row lock (their audit logs are recorded above).
 		if walletChanged {
-			if err := store.Wallet().UpdateBalanceFields(l.ctx, userInfo); err != nil {
+			if err := store.Wallet().UpdateBalanceFields(l.ctx, walletInfo); err != nil {
 				return err
 			}
-			if err := store.Wallet().UpdateCommission(l.ctx, userInfo); err != nil {
+			if err := store.Wallet().UpdateCommission(l.ctx, walletInfo); err != nil {
 				return err
 			}
 		}

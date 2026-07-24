@@ -318,7 +318,7 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 			return fmt.Errorf("update user gift amount: %w", err)
 		}
 
-		if err := l.createGiftLog(ctx, store, sub.Id, userInfo.Id, giftAmount, userInfo.GiftAmount, now); err != nil {
+		if err := l.createGiftLog(ctx, store, sub.Id, userInfo.UserId, giftAmount, userInfo.GiftAmount, now); err != nil {
 			return fmt.Errorf("create gift log: %w", err)
 		}
 	}

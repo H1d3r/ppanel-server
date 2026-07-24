@@ -31,7 +31,6 @@ func (s *balancePaymentStore) InTx(ctx context.Context, fn func(repository.Store
 }
 
 func (s *balancePaymentStore) Order() repository.OrderRepo   { return s.orders }
-func (s *balancePaymentStore) User() repository.UserRepo     { return s.users }
 func (s *balancePaymentStore) Wallet() repository.WalletRepo { return s.users }
 func (s *balancePaymentStore) UserCache() repository.UserCacheRepo {
 	return s.users
@@ -68,23 +67,23 @@ func (r *balancePaymentOrderRepo) UpdateOrderStatusFrom(_ context.Context, order
 }
 
 type balancePaymentUserRepo struct {
-	repository.UserRepo
 	repository.WalletRepo
 	repository.UserCacheRepo
-	user *userEntity.User
+	user   *userEntity.User
+	wallet *userEntity.Wallet
 }
 
-func (r *balancePaymentUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.User, error) {
-	if r.user.Id != id {
+func (r *balancePaymentUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
+	if r.wallet.UserId != id {
 		return nil, stderrors.New("unexpected user")
 	}
-	locked := *r.user
+	locked := *r.wallet
 	return &locked, nil
 }
 
-func (r *balancePaymentUserRepo) UpdateBalanceFields(_ context.Context, data *userEntity.User, _ ...*gorm.DB) error {
-	r.user.Balance = data.Balance
-	r.user.GiftAmount = data.GiftAmount
+func (r *balancePaymentUserRepo) UpdateBalanceFields(_ context.Context, data *userEntity.Wallet, _ ...*gorm.DB) error {
+	r.wallet.Balance = data.Balance
+	r.wallet.GiftAmount = data.GiftAmount
 	return nil
 }
 
@@ -116,7 +115,7 @@ func newBalancePaymentLogic(t *testing.T, store *balancePaymentStore) *PurchaseC
 func TestBalancePaymentRejectsInsufficientCurrentBalance(t *testing.T) {
 	store := &balancePaymentStore{
 		orders: &balancePaymentOrderRepo{order: &orderEntity.Order{OrderNo: "order-1", UserId: 10, Amount: 2500, Status: 1}},
-		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10, Balance: 500}},
+		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &userEntity.Wallet{UserId: 10, Balance: 500}},
 		logs:   &balancePaymentLogRepo{},
 	}
 	logic := newBalancePaymentLogic(t, store)
@@ -125,8 +124,8 @@ func TestBalancePaymentRejectsInsufficientCurrentBalance(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Insufficient balance") {
 		t.Fatalf("balancePayment error = %v, want insufficient balance", err)
 	}
-	if store.users.user.Balance != 500 || store.users.user.GiftAmount != 0 {
-		t.Fatalf("user balance changed: %+v", store.users.user)
+	if store.users.wallet.Balance != 500 || store.users.wallet.GiftAmount != 0 {
+		t.Fatalf("user balance changed: %+v", store.users.wallet)
 	}
 	if store.orders.order.Status != 1 {
 		t.Fatalf("order status = %d, want pending", store.orders.order.Status)
@@ -139,7 +138,7 @@ func TestBalancePaymentRejectsInsufficientCurrentBalance(t *testing.T) {
 func TestBalancePaymentAddsCheckoutGiftToExistingOrderGift(t *testing.T) {
 	store := &balancePaymentStore{
 		orders: &balancePaymentOrderRepo{order: &orderEntity.Order{OrderNo: "order-2", UserId: 10, Amount: 2500, GiftAmount: 300, Status: 1}},
-		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10, Balance: 2300, GiftAmount: 200}},
+		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &userEntity.Wallet{UserId: 10, Balance: 2300, GiftAmount: 200}},
 		logs:   &balancePaymentLogRepo{},
 	}
 	logic := newBalancePaymentLogic(t, store)
@@ -147,8 +146,8 @@ func TestBalancePaymentAddsCheckoutGiftToExistingOrderGift(t *testing.T) {
 	if err := logic.balancePayment(store.users.user, store.orders.order); err != nil {
 		t.Fatalf("balancePayment: %v", err)
 	}
-	if store.users.user.Balance != 0 || store.users.user.GiftAmount != 0 {
-		t.Fatalf("user balance = %+v, want zero balances", store.users.user)
+	if store.users.wallet.Balance != 0 || store.users.wallet.GiftAmount != 0 {
+		t.Fatalf("user balance = %+v, want zero balances", store.users.wallet)
 	}
 	if store.orders.order.GiftAmount != 500 {
 		t.Fatalf("order gift amount = %d, want 500", store.orders.order.GiftAmount)
@@ -164,7 +163,7 @@ func TestBalancePaymentAddsCheckoutGiftToExistingOrderGift(t *testing.T) {
 func TestBalancePaymentDoesNotDebitNonPendingOrder(t *testing.T) {
 	store := &balancePaymentStore{
 		orders: &balancePaymentOrderRepo{order: &orderEntity.Order{OrderNo: "order-3", UserId: 10, Amount: 2500, Status: 2}},
-		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10, Balance: 2500}},
+		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &userEntity.Wallet{UserId: 10, Balance: 2500}},
 		logs:   &balancePaymentLogRepo{},
 	}
 	logic := newBalancePaymentLogic(t, store)
@@ -173,8 +172,8 @@ func TestBalancePaymentDoesNotDebitNonPendingOrder(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "order is no longer pending") {
 		t.Fatalf("balancePayment error = %v, want order status error", err)
 	}
-	if store.users.user.Balance != 2500 || store.users.user.GiftAmount != 0 {
-		t.Fatalf("user balance changed: %+v", store.users.user)
+	if store.users.wallet.Balance != 2500 || store.users.wallet.GiftAmount != 0 {
+		t.Fatalf("user balance changed: %+v", store.users.wallet)
 	}
 	if len(store.logs.logs) != 0 {
 		t.Fatalf("unexpected logs: %d", len(store.logs.logs))

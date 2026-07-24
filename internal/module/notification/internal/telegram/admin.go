@@ -393,7 +393,7 @@ func (a *TelegramAdmin) userDetail(msg *tgbotapi.Message, adminUser *user.User, 
 		adminFlag = "⭐ 管理员"
 	}
 	email, _ := a.userEmail(u.Id)
-	balance := u.Balance
+	var balance int64
 	if a.deps.Wallet != nil {
 		if w, err := a.deps.Wallet.FindWallet(a.ctx, u.Id); err == nil && w != nil {
 			balance = w.Balance

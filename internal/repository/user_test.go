@@ -51,7 +51,7 @@ func TestUserRepoFindOneForUpdateUsesRowLockAndDefaultScope(t *testing.T) {
 	}
 }
 
-func TestUserRepoUpdateBalanceFieldsOnlyWritesBalanceColumns(t *testing.T) {
+func TestWalletRepoUpdateBalanceFieldsWritesWalletTable(t *testing.T) {
 	var logs bytes.Buffer
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
@@ -69,31 +69,23 @@ func TestUserRepoUpdateBalanceFieldsOnlyWritesBalanceColumns(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	err = newUserBillingRepo(newUserRepo(db, redisClient)).UpdateBalanceFields(context.Background(), &user.User{Id: 42, Balance: 100, GiftAmount: 20})
+	err = newUserBillingRepo(newUserRepo(db, redisClient)).UpdateBalanceFields(context.Background(), &user.Wallet{UserId: 42, Balance: 100, GiftAmount: 20})
 	if err != nil {
 		t.Fatalf("UpdateBalanceFields: %v", err)
 	}
 	sql := logs.String()
-	for _, want := range []string{"UPDATE `user`", "`balance`=100", "`gift_amount`=20", "WHERE id = 42"} {
+	for _, want := range []string{"UPDATE `user_wallet`", "`balance`=100", "`gift_amount`=20", "WHERE user_id = 42"} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("SQL missing %q:\n%s", want, sql)
 		}
 	}
-	// Only inspect the user-row UPDATE: the transitional wallet dual-write
-	// legitimately mentions every money column in its upsert.
-	userUpdate := ""
-	for _, line := range strings.Split(sql, "\n") {
-		if strings.Contains(line, "UPDATE `user`") {
-			userUpdate = line
-			break
-		}
-	}
-	for _, unwanted := range []string{"`password`", "`commission`", "`refer_code`"} {
-		if strings.Contains(userUpdate, unwanted) {
+	for _, unwanted := range []string{"UPDATE `user` ", "`commission`"} {
+		if strings.Contains(sql, unwanted) {
 			t.Fatalf("SQL should not contain %q:\n%s", unwanted, sql)
 		}
 	}
 }
+
 
 func TestFindDeviceOnlineRecordUsesCreatedAt(t *testing.T) {
 	var logs bytes.Buffer

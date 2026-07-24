@@ -192,7 +192,7 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 			if err := txStore.Log().Insert(ctx, &logEntity.SystemLog{
 				Type:     logEntity.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: lockedUser.Id,
+				ObjectID: lockedUser.UserId,
 				Content:  string(content),
 			}); err != nil {
 				log.Errorw("[Renewal] Database insert error", logger.Field("error", err.Error()), logger.Field("deductionLog", giftLog))

@@ -43,7 +43,6 @@ func (l *CreateUserLogic) CreateUser(req *dto.CreateUserRequest) error {
 		ReferralPercentage: req.ReferralPercentage,
 		OnlyFirstPurchase:  &req.OnlyFirstPurchase,
 		ReferCode:          req.ReferCode,
-		Balance:            req.Balance,
 		IsAdmin:            &req.IsAdmin,
 	}
 	var ams []user.AuthMethods
@@ -91,6 +90,23 @@ func (l *CreateUserLogic) CreateUser(req *dto.CreateUserRequest) error {
 	err := l.deps.Users.Insert(l.ctx, newUser)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert user failed: %v", err.Error())
+	}
+	// The initial money lives in the billing-owned wallet: credit it after
+	// the account (and its zero wallet row) exists.
+	if req.Balance != 0 || req.Commission != 0 || req.GiftAmount != 0 {
+		w, err := l.deps.Wallet.FindOneForUpdate(l.ctx, newUser.Id)
+		if err != nil {
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "load new user wallet failed: %v", err.Error())
+		}
+		w.Balance = req.Balance
+		w.GiftAmount = req.GiftAmount
+		w.Commission = req.Commission
+		if err := l.deps.Wallet.UpdateBalanceFields(l.ctx, w); err != nil {
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "credit new user wallet failed: %v", err.Error())
+		}
+		if err := l.deps.Wallet.UpdateCommission(l.ctx, w); err != nil {
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "credit new user commission failed: %v", err.Error())
+		}
 	}
 	return nil
 }

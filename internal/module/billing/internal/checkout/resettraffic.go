@@ -114,7 +114,7 @@ func (s *Service) ResetTraffic(ctx context.Context, req *dto.ResetTrafficOrderRe
 			if err := txStore.Log().Insert(ctx, &logEntity.SystemLog{
 				Type:     logEntity.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: lockedUser.Id,
+				ObjectID: lockedUser.UserId,
 				Content:  string(content),
 			}); err != nil {
 				log.Errorw("[ResetTraffic] Database insert error", logger.Field("error", err.Error()), logger.Field("deductionLog", content))

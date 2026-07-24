@@ -257,7 +257,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 			if e := txStore.Log().Insert(ctx, &logEntity.SystemLog{
 				Type:     logEntity.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: lockedUser.Id,
+				ObjectID: lockedUser.UserId,
 				Content:  string(content),
 			}); e != nil {
 				log.Errorw("[Purchase] Database insert error",

@@ -40,7 +40,6 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "withdraw amount must be positive")
 	}
 
-	var updatedUser *user.User
 	err = l.deps.Tx.InBillingTx(l.ctx, func(store repository.BillingStore) error {
 		// Do not rely on the user object placed in the request context: it can
 		// be stale while another withdrawal or commission credit is committed.
@@ -57,8 +56,6 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 			l.Errorf("Failed to update user %d commission balance: %v", u.Id, err)
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Failed to update user %d commission balance: %v", u.Id, err)
 		}
-		updatedUser = lockedUser
-
 		// Use negative amount to reflect the balance decrease, so that
 		// SumAmountByTypeAndObjectID produces the correct net total.
 		logInfo := log.Commission{
@@ -97,12 +94,6 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 	if err != nil {
 		return nil, err
 	}
-	if updatedUser != nil {
-		if cacheErr := l.deps.Cache.ClearUserCache(l.ctx, updatedUser); cacheErr != nil {
-			l.Errorf("Failed to clear commission cache for user %d: %v", u.Id, cacheErr)
-		}
-	}
-
 	return &dto.WithdrawalLog{
 		UserId:    u.Id,
 		Amount:    req.Amount,

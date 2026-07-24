@@ -223,7 +223,7 @@ func (l *UnsubscribeLogic) settleRefundOnce(userID, subID int64, subKey string) 
 				if err := store.Log().Insert(l.ctx, &log.SystemLog{
 					Type:     log.TypeBalance.Uint8(),
 					Date:     timeutil.Now().Format(time.DateOnly),
-					ObjectID: lockedUser.Id,
+					ObjectID: lockedUser.UserId,
 					Content:  string(content),
 				}); err != nil {
 					return err
@@ -245,7 +245,7 @@ func (l *UnsubscribeLogic) settleRefundOnce(userID, subID int64, subKey string) 
 				if err := store.Log().Insert(l.ctx, &log.SystemLog{
 					Type:     log.TypeGift.Uint8(),
 					Date:     timeutil.Now().Format(time.DateOnly),
-					ObjectID: lockedUser.Id,
+					ObjectID: lockedUser.UserId,
 					Content:  string(content),
 				}); err != nil {
 					return err

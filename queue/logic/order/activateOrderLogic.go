@@ -68,6 +68,9 @@ type activationResult struct {
 	userSub             *user.Subscribe
 	commissionRecipient *user.User
 	notifyType          string
+	// balance carries the post-recharge wallet balance for the notification
+	// template (the user entity no longer has money fields).
+	balance int64
 }
 
 // NewActivateOrderLogic creates a new instance of ActivateOrderLogic
@@ -524,19 +527,19 @@ func (l *ActivateOrderLogic) activateResetTrafficTx(ctx context.Context, store r
 }
 
 func (l *ActivateOrderLogic) activateRechargeTx(ctx context.Context, store repository.BillingStore, orderInfo *order.Order) (*activationResult, error) {
-	userInfo, err := store.Wallet().FindOneForUpdate(ctx, orderInfo.UserId)
+	wallet, err := store.Wallet().FindOneForUpdate(ctx, orderInfo.UserId)
 	if err != nil {
 		return nil, err
 	}
-	userInfo.Balance += orderInfo.Price
-	if err := store.Wallet().UpdateBalanceFields(ctx, userInfo); err != nil {
+	wallet.Balance += orderInfo.Price
+	if err := store.Wallet().UpdateBalanceFields(ctx, wallet); err != nil {
 		return nil, err
 	}
 	balanceLog := &log.Balance{
 		Amount:    orderInfo.Price,
 		Type:      log.BalanceTypeRecharge,
 		OrderNo:   orderInfo.OrderNo,
-		Balance:   userInfo.Balance,
+		Balance:   wallet.Balance,
 		Timestamp: timeutil.Now().UnixMilli(),
 	}
 	content, err := balanceLog.Marshal()
@@ -546,12 +549,18 @@ func (l *ActivateOrderLogic) activateRechargeTx(ctx context.Context, store repos
 	if err := store.Log().Insert(ctx, &log.SystemLog{
 		Type:     log.TypeBalance.Uint8(),
 		Date:     timeutil.Now().Format(time.DateOnly),
-		ObjectID: userInfo.Id,
+		ObjectID: wallet.UserId,
 		Content:  string(content),
 	}); err != nil {
 		return nil, err
 	}
-	return &activationResult{order: orderInfo, user: userInfo}, nil
+	// The notification needs the identity profile (Telegram binding); the
+	// wallet transaction itself only touches billing data.
+	userInfo, err := l.svc.Store.User().FindOne(ctx, orderInfo.UserId)
+	if err != nil {
+		return nil, err
+	}
+	return &activationResult{order: orderInfo, user: userInfo, balance: wallet.Balance}, nil
 }
 
 func (l *ActivateOrderLogic) afterActivationCommit(ctx context.Context, result *activationResult) {
@@ -577,10 +586,7 @@ func (l *ActivateOrderLogic) afterActivationCommit(ctx context.Context, result *
 			l.sendNotifications(ctx, result.order, result.user, result.subscribe, result.userSub, result.notifyType)
 		}
 	case OrderTypeRecharge:
-		if err := l.svc.Store.UserCache().UpdateUserCache(ctx, result.user); err != nil {
-			logger.WithContext(ctx).Error("[Recharge] Update user cache failed", logger.Field("error", err.Error()))
-		}
-		l.sendRechargeNotifications(ctx, result.order, result.user)
+		l.sendRechargeNotifications(ctx, result.order, result.user, result.balance)
 	}
 }
 
@@ -638,13 +644,17 @@ func (l *ActivateOrderLogic) handleCommissionTx(ctx context.Context, store repos
 	if userInfo == nil || userInfo.RefererId == 0 || (orderInfo.Type != OrderTypeSubscribe && orderInfo.Type != OrderTypeRenewal) {
 		return nil, nil
 	}
+	refererProfile, err := l.svc.Store.User().FindOne(ctx, userInfo.RefererId)
+	if err != nil {
+		return nil, err
+	}
 	referer, err := store.Wallet().FindOneForUpdate(ctx, userInfo.RefererId)
 	if err != nil {
 		return nil, err
 	}
-	percentage := referer.ReferralPercentage
+	percentage := refererProfile.ReferralPercentage
 	if percentage != 0 {
-		if referer.OnlyFirstPurchase != nil && *referer.OnlyFirstPurchase && !orderInfo.IsNew {
+		if refererProfile.OnlyFirstPurchase != nil && *refererProfile.OnlyFirstPurchase && !orderInfo.IsNew {
 			return nil, nil
 		}
 	} else {
@@ -677,12 +687,12 @@ func (l *ActivateOrderLogic) handleCommissionTx(ctx context.Context, store repos
 	if err := store.Log().Insert(ctx, &log.SystemLog{
 		Type:     log.TypeCommission.Uint8(),
 		Date:     timeutil.Now().Format(time.DateOnly),
-		ObjectID: referer.Id,
+		ObjectID: referer.UserId,
 		Content:  string(content),
 	}); err != nil {
 		return nil, err
 	}
-	return referer, nil
+	return refererProfile, nil
 }
 
 // calculateCommission computes the commission amount based on order price and referral percentage
@@ -715,14 +725,14 @@ func (l *ActivateOrderLogic) sendNotifications(ctx context.Context, orderInfo *o
 }
 
 // sendRechargeNotifications sends specific notifications for balance recharge orders
-func (l *ActivateOrderLogic) sendRechargeNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User) {
+func (l *ActivateOrderLogic) sendRechargeNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User, balance int64) {
 	// Send user notification
 	if telegramId, ok := findTelegram(userInfo); ok {
 		templateData := map[string]string{
 			"OrderAmount":   fmt.Sprintf("%.2f", float64(orderInfo.Price)/100),
 			"PaymentMethod": orderInfo.Method,
 			"Time":          orderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
-			"Balance":       fmt.Sprintf("%.2f", float64(userInfo.Balance)/100),
+			"Balance":       fmt.Sprintf("%.2f", float64(balance)/100),
 		}
 		if text, err := tool.RenderTemplateToString(notification.RechargeNotify, templateData); err == nil {
 			l.sendUserNotifyWithTelegram(telegramId, text)

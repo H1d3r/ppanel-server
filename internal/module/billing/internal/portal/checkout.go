@@ -100,8 +100,8 @@ type CheckoutStore interface {
 // the balance-payment transaction.
 type CheckoutTransaction interface {
 	FindOrderByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error)
-	FindUserForUpdate(ctx context.Context, id int64) (*user.User, error)
-	UpdateUserBalance(ctx context.Context, data *user.User) error
+	FindUserForUpdate(ctx context.Context, id int64) (*user.Wallet, error)
+	UpdateUserBalance(ctx context.Context, data *user.Wallet) error
 	InsertSystemLog(ctx context.Context, data *log.SystemLog) error
 	UpdateOrder(ctx context.Context, data *order.Order) error
 	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error)
@@ -159,11 +159,11 @@ func (s checkoutTransaction) FindOrderByOrderNoForUpdate(ctx context.Context, or
 	return s.store.Order().FindOneByOrderNoForUpdate(ctx, orderNo)
 }
 
-func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*user.User, error) {
+func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*user.Wallet, error) {
 	return s.store.Wallet().FindOneForUpdate(ctx, id)
 }
 
-func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *user.User) error {
+func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *user.Wallet) error {
 	return s.store.Wallet().UpdateBalanceFields(ctx, data)
 }
 
@@ -626,7 +626,7 @@ func (l *PurchaseCheckoutLogic) persistPaymentExpectation(info *order.Order, amo
 // It prioritizes using gift amount first, then regular balance, and creates proper audit logs
 func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) error {
 	var err error
-	var paidUser *user.User
+	var paidUser *user.Wallet
 	if o.Amount == 0 {
 		// No payment required for zero-amount orders
 		l.Logger.Info(
@@ -709,7 +709,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 
 			err = store.InsertSystemLog(l.ctx, &log.SystemLog{
 				Type:     log.TypeGift.Uint8(),
-				ObjectID: userInfo.Id,
+				ObjectID: userInfo.UserId,
 				Date:     timeutil.Now().Format(time.DateOnly),
 				Content:  string(content),
 			})
@@ -730,7 +730,7 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 			content, _ := balanceLog.Marshal()
 			err = store.InsertSystemLog(l.ctx, &log.SystemLog{
 				Type:     log.TypeBalance.Uint8(),
-				ObjectID: userInfo.Id,
+				ObjectID: userInfo.UserId,
 				Date:     timeutil.Now().Format(time.DateOnly),
 				Content:  string(content),
 			})
@@ -768,10 +768,10 @@ func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) err
 		return err
 	}
 	if paidUser != nil {
-		if cacheErr := l.deps.Store.ClearUserCache(l.ctx, paidUser); cacheErr != nil {
+		if cacheErr := l.deps.Store.ClearUserCache(l.ctx, &user.User{Id: paidUser.UserId}); cacheErr != nil {
 			l.Errorw("[PurchaseCheckout] Clear user cache error",
 				logger.Field("error", cacheErr.Error()),
-				logger.Field("userId", paidUser.Id))
+				logger.Field("userId", paidUser.UserId))
 		}
 	}
 

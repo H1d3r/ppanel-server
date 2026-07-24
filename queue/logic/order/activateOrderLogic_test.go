@@ -22,6 +22,7 @@ import (
 
 type activationStore struct {
 	repository.Store
+	wallet *activationWalletRepo
 	orders     *activationOrderRepo
 	users      *activationUserRepo
 	subscribes *activationSubscribeRepo
@@ -45,7 +46,7 @@ func (s *activationStore) InSubscriptionTx(_ context.Context, fn func(repository
 	return fn(s)
 }
 
-func (s *activationStore) Wallet() repository.WalletRepo { return s.users }
+func (s *activationStore) Wallet() repository.WalletRepo { return s.walletRepo() }
 func (s *activationStore) Order() repository.OrderRepo   { return s.orders }
 func (s *activationStore) User() repository.UserRepo     { return s.users }
 func (s *activationStore) UserSubscription() repository.UserSubscriptionRepo {
@@ -108,11 +109,37 @@ func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo s
 	return true, nil
 }
 
+type activationWalletRepo struct {
+	repository.WalletRepo
+	wallet *userEntity.Wallet
+}
+
+func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
+	if r.wallet == nil {
+		r.wallet = &userEntity.Wallet{UserId: id}
+	}
+	if r.wallet.UserId != id {
+		return nil, gorm.ErrRecordNotFound
+	}
+	copy := *r.wallet
+	return &copy, nil
+}
+
+func (r *activationWalletRepo) UpdateBalanceFields(_ context.Context, data *userEntity.Wallet, _ ...*gorm.DB) error {
+	r.wallet.Balance = data.Balance
+	r.wallet.GiftAmount = data.GiftAmount
+	return nil
+}
+
+func (r *activationWalletRepo) UpdateCommission(_ context.Context, data *userEntity.Wallet, _ ...*gorm.DB) error {
+	r.wallet.Commission = data.Commission
+	return nil
+}
+
 type activationUserRepo struct {
 	repository.UserRepo
 	repository.UserSubscriptionRepo
 	repository.UserCacheRepo
-	repository.WalletRepo
 	user             *userEntity.User
 	updateCacheCalls int
 	quotaCount       int64
@@ -131,21 +158,10 @@ func (r *activationUserRepo) FindOne(_ context.Context, id int64) (*userEntity.U
 }
 
 func (r *activationUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.User, error) {
-	if r.user.Id != id {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *r.user
-	return &copy, nil
+	return r.FindOne(context.Background(), id)
 }
 
-func (r *activationUserRepo) Update(_ context.Context, data *userEntity.User, _ ...*gorm.DB) error {
-	r.user.Balance = data.Balance
-	return nil
-}
-
-func (r *activationUserRepo) UpdateBalanceFields(_ context.Context, data *userEntity.User, _ ...*gorm.DB) error {
-	r.user.Balance = data.Balance
-	r.user.GiftAmount = data.GiftAmount
+func (r *activationUserRepo) Update(_ context.Context, _ *userEntity.User, _ ...*gorm.DB) error {
 	return nil
 }
 
@@ -218,7 +234,8 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 		orders: &activationOrderRepo{order: &orderEntity.Order{
 			OrderNo: "recharge-order", UserId: 7, Type: OrderTypeRecharge, Price: 1250, Status: OrderStatusPaid,
 		}},
-		users: &activationUserRepo{user: &userEntity.User{Id: 7, Balance: 500}},
+		users:  &activationUserRepo{user: &userEntity.User{Id: 7}},
+		wallet: &activationWalletRepo{wallet: &userEntity.Wallet{UserId: 7, Balance: 500}},
 		logs:  &activationLogRepo{},
 		inbox: newActivationInboxRepo(),
 	}
@@ -238,8 +255,8 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 	if store.orders.order.Status != OrderStatusFinished {
 		t.Fatalf("order status = %d, want finished", store.orders.order.Status)
 	}
-	if store.users.user.Balance != 1750 {
-		t.Fatalf("balance = %d, want 1750", store.users.user.Balance)
+	if store.wallet.wallet.Balance != 1750 {
+		t.Fatalf("balance = %d, want 1750", store.wallet.wallet.Balance)
 	}
 	if len(store.logs.logs) != 1 {
 		t.Fatalf("recharge logs = %d, want 1", len(store.logs.logs))
@@ -255,7 +272,8 @@ func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
 		orders: &activationOrderRepo{order: &orderEntity.Order{
 			OrderNo: "recharge-replay", UserId: 7, Type: OrderTypeRecharge, Price: 1250, Status: OrderStatusPaid,
 		}},
-		users: &activationUserRepo{user: &userEntity.User{Id: 7, Balance: 500}},
+		users:  &activationUserRepo{user: &userEntity.User{Id: 7}},
+		wallet: &activationWalletRepo{wallet: &userEntity.Wallet{UserId: 7, Balance: 500}},
 		logs:  &activationLogRepo{},
 		inbox: newActivationInboxRepo(),
 	}
@@ -275,8 +293,8 @@ func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
 	if err := logic.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("replayed activation: %v", err)
 	}
-	if store.users.user.Balance != 1750 {
-		t.Fatalf("balance = %d, want 1750 (credited exactly once)", store.users.user.Balance)
+	if store.wallet.wallet.Balance != 1750 {
+		t.Fatalf("balance = %d, want 1750 (credited exactly once)", store.wallet.wallet.Balance)
 	}
 	if len(store.logs.logs) != 1 {
 		t.Fatalf("balance logs = %d, want 1", len(store.logs.logs))
@@ -398,4 +416,11 @@ func newResetTrafficTestLogic(t *testing.T) (*ActivateOrderLogic, *activationSto
 		logs:       &activationLogRepo{},
 	}
 	return NewActivateOrderLogic(&svc.ServiceContext{Store: store}), store
+}
+
+func (s *activationStore) walletRepo() *activationWalletRepo {
+	if s.wallet == nil {
+		s.wallet = &activationWalletRepo{}
+	}
+	return s.wallet
 }

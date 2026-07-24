@@ -129,7 +129,7 @@ func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
 				Id:       0,
 				Type:     logEntity.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: userInfo.Id,
+				ObjectID: userInfo.UserId,
 				Content:  string(content),
 			})
 			if err != nil {

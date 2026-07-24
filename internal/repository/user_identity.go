@@ -59,15 +59,10 @@ func (m *userRepo) Insert(ctx context.Context, data *user.User, tx ...*gorm.DB) 
 		if err := conn.Create(&data).Error; err != nil {
 			return err
 		}
-		// Transitional dual-write (ADR-001 step 5): every account gets its
-		// billing-owned wallet row seeded with the initial money values that
-		// still live on the user columns.
-		return conn.Create(&user.Wallet{
-			UserId:     data.Id,
-			Balance:    data.Balance,
-			GiftAmount: data.GiftAmount,
-			Commission: data.Commission,
-		}).Error
+		// Every account gets its billing-owned wallet row at creation;
+		// initial money (admin-created accounts) is credited through the
+		// wallet view afterwards.
+		return conn.Create(&user.Wallet{UserId: data.Id}).Error
 	}, m.getCacheKeys(data)...)
 	return err
 }
@@ -103,10 +98,7 @@ func (m *userRepo) Update(ctx context.Context, data *user.User, tx ...*gorm.DB) 
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		// The money columns belong to the billing domain (WalletRepo): a
-		// full-row save from a stale in-memory user must never clobber a
-		// concurrent wallet movement (ADR-001 step 5).
-		return conn.Omit("balance", "gift_amount", "commission").Save(data).Error
+		return conn.Save(data).Error
 	}, m.getCacheKeys(old)...)
 	return err
 }

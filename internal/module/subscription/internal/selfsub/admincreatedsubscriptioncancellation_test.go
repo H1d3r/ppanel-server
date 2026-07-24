@@ -16,18 +16,12 @@ type adminCreatedSubscriptionUserRepo struct {
 	repository.UserRepo
 	repository.UserSubscriptionRepo
 	repository.UserCacheRepo
-	repository.WalletRepo
 
 	subscribe                 *usermodel.Subscribe
 	findOneSubscribeCalls     int
 	findOneUserSubscribeCalls int
 	updateSubscribeCalls      int
 	clearSubscribeCacheCalls  int
-}
-
-// FindOneForUpdate disambiguates the embedded UserRepo/WalletRepo pair.
-func (r *adminCreatedSubscriptionUserRepo) FindOneForUpdate(ctx context.Context, id int64) (*usermodel.User, error) {
-	return r.UserRepo.FindOneForUpdate(ctx, id)
 }
 
 func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribe(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
@@ -67,6 +61,7 @@ func (r *adminCreatedSubscriptionSubscribeRepo) ClearCache(_ context.Context, _ 
 
 type adminCreatedSubscriptionStore struct {
 	repository.Store
+	wallet *adminCreatedWalletRepo
 
 	userRepo      *adminCreatedSubscriptionUserRepo
 	subscribeRepo repository.SubscribeRepo
@@ -118,7 +113,19 @@ func (s *adminCreatedSubscriptionStore) InBillingTx(_ context.Context, fn func(r
 	return fn(s)
 }
 
-func (s *adminCreatedSubscriptionStore) Wallet() repository.WalletRepo { return s.userRepo }
+// adminCreatedWalletRepo fails the test if the skip-refund path touches the
+// wallet at all.
+type adminCreatedWalletRepo struct {
+	repository.WalletRepo
+	calls int
+}
+
+func (r *adminCreatedWalletRepo) FindOneForUpdate(_ context.Context, _ int64) (*usermodel.Wallet, error) {
+	r.calls++
+	panic("admin-created subscription cancellation must not move money")
+}
+
+func (s *adminCreatedSubscriptionStore) Wallet() repository.WalletRepo { return s.wallet }
 
 func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	logtest.Discard(t)
@@ -129,11 +136,7 @@ func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 		planID      int64 = 300
 	)
 
-	currentUser := &usermodel.User{
-		Id:         userID,
-		Balance:    1_000,
-		GiftAmount: 200,
-	}
+	currentUser := &usermodel.User{Id: userID}
 	userSubscribe := &usermodel.Subscribe{
 		Id:          subscribeID,
 		UserId:      userID,
@@ -146,6 +149,7 @@ func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	store := &adminCreatedSubscriptionStore{
 		userRepo:      userRepo,
 		subscribeRepo: subscribeRepo,
+		wallet:        &adminCreatedWalletRepo{},
 	}
 	ctx := context.WithValue(context.Background(), constant.CtxKeyUser, currentUser)
 	logic := newUnsubscribeLogic(ctx, Deps{
@@ -165,11 +169,8 @@ func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	if userRepo.subscribe.Status != 4 {
 		t.Fatalf("subscription status = %d, want 4 (cancelled)", userRepo.subscribe.Status)
 	}
-	if currentUser.Balance != 1_000 {
-		t.Fatalf("user balance = %d, want 1000", currentUser.Balance)
-	}
-	if currentUser.GiftAmount != 200 {
-		t.Fatalf("user gift amount = %d, want 200", currentUser.GiftAmount)
+	if store.wallet.calls != 0 {
+		t.Fatalf("wallet touched %d time(s), want 0", store.wallet.calls)
 	}
 	// One subscription-domain cancellation transaction plus one billing
 	// transaction that only records the settled-refund marker.

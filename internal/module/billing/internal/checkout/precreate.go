@@ -136,7 +136,7 @@ func (s *Service) PreCreateOrder(ctx context.Context, req *dto.PurchaseOrderRequ
 	var deductionAmount int64
 	// The preview reads the authoritative wallet row: the context user is
 	// the middleware's cached identity snapshot (ADR-001 step 5).
-	giftAvailable := u.GiftAmount
+	var giftAvailable int64
 	if s.deps.Store != nil {
 		if w, err := s.deps.Store.Wallet().FindWallet(ctx, u.Id); err == nil && w != nil {
 			giftAvailable = w.GiftAmount
