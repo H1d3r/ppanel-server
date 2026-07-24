@@ -1,4 +1,4 @@
-package notify
+package callbacks
 
 import (
 	"context"
@@ -12,14 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/hibiken/asynq"
-	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/payment/alipay"
 	"github.com/perfect-panel/server/pkg/payment/epay"
@@ -42,21 +39,23 @@ func (r *callbackOrderRepo) FindOneByOrderNo(_ context.Context, orderNo string) 
 }
 
 func (r *callbackOrderRepo) MarkOrderPaid(_ context.Context, orderNo, tradeNo string, _ ...*gorm.DB) (bool, error) {
-	if r.order.OrderNo != orderNo || r.order.Status != orderStatusPending {
+	if r.order.OrderNo != orderNo || r.order.Status != settle.StatusPending {
 		return false, nil
 	}
-	r.order.Status = orderStatusPaid
+	r.order.Status = settle.StatusPaid
 	r.order.TradeNo = tradeNo
 	r.markCount++
 	return true, nil
 }
 
-type callbackStore struct {
-	repository.Store
-	orders repository.OrderRepo
+type fakeActivationQueue struct {
+	enqueued []string
 }
 
-func (s callbackStore) Order() repository.OrderRepo { return s.orders }
+func (f *fakeActivationQueue) EnqueueActivation(_ context.Context, orderNo string) error {
+	f.enqueued = append(f.enqueued, orderNo)
+	return nil
+}
 
 var errUnexpectedOrder = errors.New("unexpected order")
 
@@ -67,16 +66,16 @@ func TestEPayNotifyRejectsInvalidSignatureWhenDebugEnabled(t *testing.T) {
 		Config:   `{"pid":"1001","url":"https://pay.example","key":"secret","type":"alipay"}`,
 	}
 	ctx := context.WithValue(context.Background(), constant.CtxKeyPayment, paymentConfig)
-	logic := NewEPayNotifyLogic(ctx, &svc.ServiceContext{Config: config.Config{Debug: true}}, EPayNotifyMeta{
+	svc := NewService(nil, nil)
+
+	err := svc.EPayNotify(ctx, EPayNotifyMeta{
 		Method: "POST",
 		Params: map[string]string{
 			"out_trade_no": "order-1",
 			"trade_status": "TRADE_SUCCESS",
 			"sign":         "invalid",
 		},
-	})
-
-	err := logic.EPayNotify(&dto.EPayNotifyRequest{OutTradeNo: "order-1", TradeStatus: "TRADE_SUCCESS", Sign: "invalid"})
+	}, &dto.EPayNotifyRequest{OutTradeNo: "order-1", TradeStatus: "TRADE_SUCCESS", Sign: "invalid"})
 	if err == nil || !strings.Contains(err.Error(), "verify sign failed") {
 		t.Fatalf("debug mode must still reject invalid signature, got %v", err)
 	}
@@ -91,9 +90,7 @@ func TestEPayNotifySettlesOnlyAfterSignedAndQueriedDetailsMatch(t *testing.T) {
 	}))
 	defer queryServer.Close()
 
-	redisServer := miniredis.RunT(t)
-	queue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisServer.Addr()})
-	t.Cleanup(func() { _ = queue.Close() })
+	queue := &fakeActivationQueue{}
 
 	paymentConfig := &payment.Payment{
 		Id:       10,
@@ -101,7 +98,7 @@ func TestEPayNotifySettlesOnlyAfterSignedAndQueriedDetailsMatch(t *testing.T) {
 		Config:   `{"pid":"1001","url":"` + queryServer.URL + `","key":"secret","type":"alipay"}`,
 	}
 	orders := &callbackOrderRepo{order: &order.Order{
-		OrderNo: "order-1", PaymentId: 10, Method: "EPay", Status: orderStatusPending,
+		OrderNo: "order-1", PaymentId: 10, Method: "EPay", Status: settle.StatusPending,
 		PaymentAmount: 1000, PaymentCurrency: "CNY",
 	}}
 	params := map[string]string{
@@ -110,23 +107,21 @@ func TestEPayNotifySettlesOnlyAfterSignedAndQueriedDetailsMatch(t *testing.T) {
 	}
 	params["sign"] = signEPayTestParams(params, "secret")
 	ctx := context.WithValue(context.Background(), constant.CtxKeyPayment, paymentConfig)
-	logic := NewEPayNotifyLogic(ctx, &svc.ServiceContext{
-		Store: callbackStore{orders: orders},
-		Queue: queue,
-	}, EPayNotifyMeta{Method: "POST", Params: params})
+	svc := NewService(orders, queue)
+	meta := EPayNotifyMeta{Method: "POST", Params: params}
 
 	req := &dto.EPayNotifyRequest{
 		Pid: "1001", TradeNo: "trade-1", OutTradeNo: "order-1", Type: "alipay", Name: "product",
 		Money: "10.00", TradeStatus: "TRADE_SUCCESS", Sign: params["sign"], SignType: "MD5",
 	}
-	err := logic.EPayNotify(req)
+	err := svc.EPayNotify(ctx, meta, req)
 	if err != nil {
 		t.Fatalf("EPayNotify: %v", err)
 	}
-	if err := logic.EPayNotify(req); err != nil {
+	if err := svc.EPayNotify(ctx, meta, req); err != nil {
 		t.Fatalf("duplicate EPayNotify must be idempotent: %v", err)
 	}
-	if orders.markCount != 1 || orders.order.Status != orderStatusPaid || orders.order.TradeNo != "trade-1" {
+	if orders.markCount != 1 || orders.order.Status != settle.StatusPaid || orders.order.TradeNo != "trade-1" {
 		t.Fatalf("order was not settled exactly once: %+v, marks=%d", orders.order, orders.markCount)
 	}
 }
@@ -137,9 +132,7 @@ func TestEPayNotifySettlesWithSignedCallbackWhenQueryUnsupported(t *testing.T) {
 	}))
 	defer queryServer.Close()
 
-	redisServer := miniredis.RunT(t)
-	queue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisServer.Addr()})
-	t.Cleanup(func() { _ = queue.Close() })
+	queue := &fakeActivationQueue{}
 
 	paymentConfig := &payment.Payment{
 		Id:       10,
@@ -147,7 +140,7 @@ func TestEPayNotifySettlesWithSignedCallbackWhenQueryUnsupported(t *testing.T) {
 		Config:   `{"pid":"1001","url":"` + queryServer.URL + `","key":"secret","type":"alipay"}`,
 	}
 	orders := &callbackOrderRepo{order: &order.Order{
-		OrderNo: "order-1", PaymentId: 10, Method: "EPay", Status: orderStatusPending,
+		OrderNo: "order-1", PaymentId: 10, Method: "EPay", Status: settle.StatusPending,
 		PaymentAmount: 1000, PaymentCurrency: "CNY",
 	}}
 	params := map[string]string{
@@ -156,19 +149,17 @@ func TestEPayNotifySettlesWithSignedCallbackWhenQueryUnsupported(t *testing.T) {
 	}
 	params["sign"] = signEPayTestParams(params, "secret")
 	ctx := context.WithValue(context.Background(), constant.CtxKeyPayment, paymentConfig)
-	logic := NewEPayNotifyLogic(ctx, &svc.ServiceContext{
-		Store: callbackStore{orders: orders},
-		Queue: queue,
-	}, EPayNotifyMeta{Method: "POST", Params: params})
+	svc := NewService(orders, queue)
+	meta := EPayNotifyMeta{Method: "POST", Params: params}
 
 	req := &dto.EPayNotifyRequest{
 		Pid: "1001", TradeNo: "trade-1", OutTradeNo: "order-1", Type: "alipay", Name: "product",
 		Money: "10.00", TradeStatus: "TRADE_SUCCESS", Sign: params["sign"], SignType: "MD5",
 	}
-	if err := logic.EPayNotify(req); err != nil {
+	if err := svc.EPayNotify(ctx, meta, req); err != nil {
 		t.Fatalf("EPayNotify: %v", err)
 	}
-	if orders.markCount != 1 || orders.order.Status != orderStatusPaid || orders.order.TradeNo != "trade-1" {
+	if orders.markCount != 1 || orders.order.Status != settle.StatusPaid || orders.order.TradeNo != "trade-1" {
 		t.Fatalf("signed fallback callback did not settle order: %+v, marks=%d", orders.order, orders.markCount)
 	}
 }
@@ -179,9 +170,7 @@ func TestEPayNotifyRejectsAmountMismatchWhenQueryUnsupported(t *testing.T) {
 	}))
 	defer queryServer.Close()
 
-	redisServer := miniredis.RunT(t)
-	queue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisServer.Addr()})
-	t.Cleanup(func() { _ = queue.Close() })
+	queue := &fakeActivationQueue{}
 
 	paymentConfig := &payment.Payment{
 		Id:       10,
@@ -189,7 +178,7 @@ func TestEPayNotifyRejectsAmountMismatchWhenQueryUnsupported(t *testing.T) {
 		Config:   `{"pid":"1001","url":"` + queryServer.URL + `","key":"secret","type":"alipay"}`,
 	}
 	orders := &callbackOrderRepo{order: &order.Order{
-		OrderNo: "order-1", PaymentId: 10, Method: "EPay", Status: orderStatusPending,
+		OrderNo: "order-1", PaymentId: 10, Method: "EPay", Status: settle.StatusPending,
 		PaymentAmount: 1000, PaymentCurrency: "CNY",
 	}}
 	params := map[string]string{
@@ -198,19 +187,17 @@ func TestEPayNotifyRejectsAmountMismatchWhenQueryUnsupported(t *testing.T) {
 	}
 	params["sign"] = signEPayTestParams(params, "secret")
 	ctx := context.WithValue(context.Background(), constant.CtxKeyPayment, paymentConfig)
-	logic := NewEPayNotifyLogic(ctx, &svc.ServiceContext{
-		Store: callbackStore{orders: orders},
-		Queue: queue,
-	}, EPayNotifyMeta{Method: "POST", Params: params})
+	svc := NewService(orders, queue)
+	meta := EPayNotifyMeta{Method: "POST", Params: params}
 
 	req := &dto.EPayNotifyRequest{
 		Pid: "1001", TradeNo: "trade-1", OutTradeNo: "order-1", Type: "alipay", Name: "product",
 		Money: "9.99", TradeStatus: "TRADE_SUCCESS", Sign: params["sign"], SignType: "MD5",
 	}
-	if err := logic.EPayNotify(req); err == nil {
+	if err := svc.EPayNotify(ctx, meta, req); err == nil {
 		t.Fatal("callback amount mismatch must be rejected even when order queries are unsupported")
 	}
-	if orders.markCount != 0 || orders.order.Status != orderStatusPending {
+	if orders.markCount != 0 || orders.order.Status != settle.StatusPending {
 		t.Fatalf("amount-mismatched callback settled order: %+v, marks=%d", orders.order, orders.markCount)
 	}
 }
@@ -290,7 +277,7 @@ func TestActivationTaskIDIsDeterministicPerOrder(t *testing.T) {
 
 func TestFinishedOrderDuplicateRequiresSameTradeNumber(t *testing.T) {
 	ctx := context.Background()
-	orderInfo := &order.Order{Status: orderStatusFinished, TradeNo: "trade-1"}
+	orderInfo := &order.Order{Status: settle.StatusFinished, TradeNo: "trade-1"}
 	finished, err := finishedOrderDuplicate(ctx, orderInfo, "trade-1")
 	if err != nil || !finished {
 		t.Fatalf("matching finished duplicate rejected: finished=%t err=%v", finished, err)
@@ -306,7 +293,7 @@ func TestFinishedOrderDuplicateRequiresSameTradeNumber(t *testing.T) {
 func TestFinishedOrderDuplicateToleratesEmptyTradeNo(t *testing.T) {
 	ctx := context.Background()
 	// Simulate a legacy finished order whose TradeNo was never persisted.
-	orderInfo := &order.Order{Status: orderStatusFinished, TradeNo: ""}
+	orderInfo := &order.Order{Status: settle.StatusFinished, TradeNo: ""}
 	finished, err := finishedOrderDuplicate(ctx, orderInfo, "trade-abc")
 	if err != nil {
 		t.Fatalf("legacy finished order (empty TradeNo) must not return an error, got: %v", err)
@@ -329,7 +316,7 @@ func TestStripeCallbackRequiresBoundConfigAmountCurrencyAndMethod(t *testing.T) 
 	paymentConfig := &payment.Payment{Id: 20, Platform: "Stripe"}
 	stripeConfig := &payment.StripeConfig{Payment: "card"}
 	orderInfo := &order.Order{
-		PaymentId: 20, Method: "Stripe", Status: orderStatusPending,
+		PaymentId: 20, Method: "Stripe", Status: settle.StatusPending,
 		PaymentAmount: 1000, PaymentCurrency: "USD", TradeNo: "pi_1",
 	}
 	notify := &stripe.NotifyResult{TradeNo: "pi_1", Method: "card", Amount: 1000, Currency: "usd"}
@@ -358,7 +345,7 @@ func TestAlipayCallbackRequiresBoundAppAndExactAmount(t *testing.T) {
 	paymentConfig := &payment.Payment{Id: 30, Platform: "AlipayF2F"}
 	alipayConfig := &payment.AlipayF2FConfig{AppId: "app-1"}
 	orderInfo := &order.Order{
-		PaymentId: 30, Method: "AlipayF2F", Status: orderStatusPending,
+		PaymentId: 30, Method: "AlipayF2F", Status: settle.StatusPending,
 		PaymentAmount: 1000, PaymentCurrency: "CNY",
 	}
 	notify := &alipay.Notification{TradeNo: "trade-1", AppId: "app-1", Amount: 1000}

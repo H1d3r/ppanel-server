@@ -1,4 +1,4 @@
-package notify
+package callbacks
 
 import (
 	"context"
@@ -12,29 +12,14 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/payment"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/payment/stripe"
 )
 
-type StripeNotifyLogic struct {
-	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
-}
-
-// NewStripeNotifyLogic Stripe notify
-func NewStripeNotifyLogic(ctx context.Context, svcCtx *svc.ServiceContext) *StripeNotifyLogic {
-	return &StripeNotifyLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		svcCtx: svcCtx,
-	}
-}
-
-func (l *StripeNotifyLogic) StripeNotify(payload []byte, signature string) error {
-	store := l.svcCtx.Store
-	stripeConfig, ok := l.ctx.Value(constant.CtxKeyPayment).(*payment.Payment)
+// StripeNotify authenticates and settles a Stripe webhook event.
+func (s *Service) StripeNotify(ctx context.Context, payload []byte, signature string) error {
+	l := logger.WithContext(ctx)
+	stripeConfig, ok := ctx.Value(constant.CtxKeyPayment).(*payment.Payment)
 	if !ok {
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "payment config not found")
 	}
@@ -56,12 +41,12 @@ func (l *StripeNotifyLogic) StripeNotify(payload []byte, signature string) error
 	if notify.EventType != "payment_intent.succeeded" {
 		return nil
 	}
-	orderInfo, err := store.Order().FindOneByOrderNo(l.ctx, notify.OrderNo)
+	orderInfo, err := s.orders.FindOneByOrderNo(ctx, notify.OrderNo)
 	if err != nil {
-		l.Logger.Error("[StripeNotify] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", notify.OrderNo))
+		l.Error("[StripeNotify] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", notify.OrderNo))
 		return errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", notify.OrderNo)
 	}
-	if finished, err := validateStripeCallback(l.ctx, orderInfo, stripeConfig, &config, notify); err != nil {
+	if finished, err := validateStripeCallback(ctx, orderInfo, stripeConfig, &config, notify); err != nil {
 		return err
 	} else if finished {
 		return nil
@@ -73,7 +58,7 @@ func (l *StripeNotifyLogic) StripeNotify(payload []byte, signature string) error
 	if !paid {
 		return errors.New("Stripe payment intent is not paid")
 	}
-	if err := markOrderPaidAndEnqueue(l.ctx, l.svcCtx, orderInfo, notify.TradeNo); err != nil {
+	if err := s.settle(ctx, orderInfo, notify.TradeNo); err != nil {
 		return err
 	}
 	l.Infow("[StripeNotify] success", logger.Field("orderNo", notify.OrderNo))

@@ -8,8 +8,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/perfect-panel/server/internal/logic/notify"
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -55,11 +55,10 @@ func PaymentNotifyHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 				return
 			}
 			req := epayNotifyRequest(params)
-			l := notify.NewEPayNotifyLogic(c, svcCtx, notify.EPayNotifyMeta{
+			if err := svcCtx.Billing.EPayNotify(c, billing.EPayNotifyMeta{
 				Method: string(ctx.Method()),
 				Params: params,
-			})
-			if err := l.EPayNotify(req); err != nil {
+			}, req); err != nil {
 				logger.WithContext(c).Errorf("EPayNotify failed: %v", err.Error())
 				ctx.String(consts.StatusBadRequest, err.Error())
 				return
@@ -71,16 +70,14 @@ func PaymentNotifyHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 				result.HttpResult(ctx, nil, err)
 				return
 			}
-			l := notify.NewStripeNotifyLogic(c, svcCtx)
-			if err := l.StripeNotify(payload, string(ctx.GetHeader("Stripe-Signature"))); err != nil {
+			if err := svcCtx.Billing.StripeNotify(c, payload, string(ctx.GetHeader("Stripe-Signature"))); err != nil {
 				result.HttpResult(ctx, nil, err)
 				return
 			}
 			result.HttpResult(ctx, nil, nil)
 
 		case payment.AlipayF2F:
-			l := notify.NewAlipayNotifyLogic(c, svcCtx)
-			if err := l.AlipayNotify(nativeFormValues(ctx)); err != nil {
+			if err := svcCtx.Billing.AlipayNotify(c, nativeFormValues(ctx)); err != nil {
 				result.HttpResult(ctx, nil, err)
 				return
 			}

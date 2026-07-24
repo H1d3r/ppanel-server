@@ -5,8 +5,6 @@ package checkout
 
 import (
 	"context"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/coupon"
@@ -14,6 +12,7 @@ import (
 	paymentEntity "github.com/perfect-panel/server/internal/model/entity/payment"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
 	"github.com/perfect-panel/server/internal/repository"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -150,59 +149,10 @@ func calculateFee(amount int64, config *paymentEntity.Payment) int64 {
 	return int64(fee)
 }
 
-func validateTradeNo(tradeNo string) error {
-	if tradeNo == "" || len(tradeNo) > 255 || strings.TrimSpace(tradeNo) != tradeNo || !utf8.ValidString(tradeNo) {
-		return errors.New("invalid trade number")
-	}
-	for _, char := range tradeNo {
-		if char < 0x20 || char == 0x7f {
-			return errors.New("invalid trade number")
-		}
-	}
-	return nil
-}
-
 // settleVerifiedPayment marks a gateway-verified payment as paid and enqueues
 // activation. Callers must authenticate the gateway response and verify the
 // order amount before invoking it. The committed Paid state is the durable
 // outbox: an enqueue failure is repaired by paid-order reconciliation.
 func (s *Service) settleVerifiedPayment(ctx context.Context, orderInfo *orderEntity.Order, tradeNo string) error {
-	if err := validateTradeNo(tradeNo); err != nil {
-		return err
-	}
-	if orderInfo.TradeNo != "" && orderInfo.TradeNo != tradeNo {
-		return errors.New("order trade number mismatch")
-	}
-
-	switch orderInfo.Status {
-	case 5: // finished
-		return nil
-	case 2: // paid
-		// A prior callback may have committed the database update but failed to
-		// contact Redis. Re-enqueue below so retries heal that partial failure.
-	case 1: // pending
-		updated, err := s.deps.Orders.MarkOrderPaid(ctx, orderInfo.OrderNo, tradeNo)
-		if err != nil {
-			return err
-		}
-		if !updated {
-			latest, err := s.deps.Orders.FindOneByOrderNo(ctx, orderInfo.OrderNo)
-			if err != nil {
-				return err
-			}
-			if latest.TradeNo != "" && latest.TradeNo != tradeNo {
-				return errors.New("order trade number mismatch")
-			}
-			if latest.Status == 5 {
-				return nil
-			}
-			if latest.Status != 2 {
-				return errors.Errorf("invalid order status transition: %d", latest.Status)
-			}
-		}
-	default:
-		return errors.Errorf("invalid order status transition: %d", orderInfo.Status)
-	}
-
-	return s.deps.Queue.EnqueueActivation(ctx, orderInfo.OrderNo)
+	return settle.VerifiedPayment(ctx, s.deps.Orders, s.deps.Queue, orderInfo, tradeNo)
 }

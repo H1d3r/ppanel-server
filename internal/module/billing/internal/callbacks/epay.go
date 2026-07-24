@@ -1,4 +1,4 @@
-package notify
+package callbacks
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/payment"
-	"github.com/perfect-panel/server/internal/svc"
+	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
@@ -17,71 +17,57 @@ import (
 	"github.com/pkg/errors"
 )
 
-type EPayNotifyLogic struct {
-	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
-	meta   EPayNotifyMeta
-}
-
+// EPayNotifyMeta carries the raw callback transport details needed to verify
+// the gateway signature.
 type EPayNotifyMeta struct {
 	Method string
 	Params map[string]string
 }
 
-// EPay notify
-func NewEPayNotifyLogic(ctx context.Context, svcCtx *svc.ServiceContext, meta EPayNotifyMeta) *EPayNotifyLogic {
+// EPayNotify authenticates and settles an EPay gateway callback.
+func (s *Service) EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error {
+	l := logger.WithContext(ctx)
 	if meta.Params == nil {
 		meta.Params = make(map[string]string)
 	}
-	return &EPayNotifyLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		svcCtx: svcCtx,
-		meta:   meta,
-	}
-}
-
-func (l *EPayNotifyLogic) EPayNotify(req *dto.EPayNotifyRequest) error {
 	if req == nil {
 		return errors.New("callback request is missing")
 	}
-	store := l.svcCtx.Store
-	data, ok := l.ctx.Value(constant.CtxKeyPayment).(*payment.Payment)
+	data, ok := ctx.Value(constant.CtxKeyPayment).(*payment.Payment)
 	if !ok {
-		l.Logger.Error("[EPayNotify] Payment not found in context")
+		l.Error("[EPayNotify] Payment not found in context")
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "payment config not found")
 	}
 
 	credentials, err := epayCredentialsForPayment(data)
 	if err != nil {
-		l.Logger.Errorw("[EPayNotify] Unmarshal config failed", logger.Field("error", err.Error()))
+		l.Errorw("[EPayNotify] Unmarshal config failed", logger.Field("error", err.Error()))
 		return err
 	}
 	client := epay.NewClient(credentials.merchantID, credentials.endpoint, credentials.key, credentials.paymentType)
-	if !client.VerifySign(l.meta.Params) {
-		l.Logger.Error("[EPayNotify] Verify sign failed",
+	if !client.VerifySign(meta.Params) {
+		l.Error("[EPayNotify] Verify sign failed",
 			logger.Field("orderNo", req.OutTradeNo),
-			logger.Field("method", l.meta.Method),
+			logger.Field("method", meta.Method),
 		)
 		return errors.New("verify sign failed")
 	}
-	callbackAmount, err := validateEPayCallback(req, l.meta.Params, credentials)
+	callbackAmount, err := validateEPayCallback(req, meta.Params, credentials)
 	if err != nil {
-		l.Logger.Error("[EPayNotify] Callback validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+		l.Error("[EPayNotify] Callback validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 		return err
 	}
 
-	orderInfo, err := store.Order().FindOneByOrderNo(l.ctx, req.OutTradeNo)
+	orderInfo, err := s.orders.FindOneByOrderNo(ctx, req.OutTradeNo)
 	if err != nil {
-		l.Logger.Error("[EPayNotify] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", req.OutTradeNo))
+		l.Error("[EPayNotify] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", req.OutTradeNo))
 		return errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", req.OutTradeNo)
 	}
 	if err := validateOrderPayment(orderInfo, data); err != nil {
-		l.Logger.Error("[EPayNotify] Order payment binding failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+		l.Error("[EPayNotify] Order payment binding failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 		return err
 	}
-	if finished, err := finishedOrderDuplicate(l.ctx, orderInfo, req.TradeNo); err != nil {
+	if finished, err := finishedOrderDuplicate(ctx, orderInfo, req.TradeNo); err != nil {
 		return err
 	} else if finished {
 		return nil
@@ -90,7 +76,7 @@ func (l *EPayNotifyLogic) EPayNotify(req *dto.EPayNotifyRequest) error {
 		return err
 	}
 	if err := validatePaymentExpectation(orderInfo, callbackAmount, "CNY"); err != nil {
-		l.Logger.Error("[EPayNotify] Payment amount validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+		l.Error("[EPayNotify] Payment amount validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 		return err
 	}
 
@@ -100,25 +86,25 @@ func (l *EPayNotifyLogic) EPayNotify(req *dto.EPayNotifyRequest) error {
 			// This gateway does not implement the order query API.
 			// The callback signature was already verified above, so it is safe
 			// to proceed without the active confirmation step.
-			l.Logger.Infow("[EPayNotify] Gateway does not support order query; accepting signature-verified callback",
+			l.Infow("[EPayNotify] Gateway does not support order query; accepting signature-verified callback",
 				logger.Field("orderNo", req.OutTradeNo),
 			)
 		} else {
-			l.Logger.Error("[EPayNotify] Gateway order query failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+			l.Error("[EPayNotify] Gateway order query failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 			return err
 		}
 	} else {
 		if err := validateQueriedEPayOrder(queried, req, credentials, callbackAmount); err != nil {
-			l.Logger.Error("[EPayNotify] Gateway order validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+			l.Error("[EPayNotify] Gateway order validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 			return err
 		}
 	}
 
-	if err := markOrderPaidAndEnqueue(l.ctx, l.svcCtx, orderInfo, req.TradeNo); err != nil {
-		l.Logger.Error("[EPayNotify] Settle order failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+	if err := s.settle(ctx, orderInfo, req.TradeNo); err != nil {
+		l.Error("[EPayNotify] Settle order failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 		return err
 	}
-	l.Logger.Info("[EPayNotify] Notify processed", logger.Field("orderNo", req.OutTradeNo))
+	l.Info("[EPayNotify] Notify processed", logger.Field("orderNo", req.OutTradeNo))
 	return nil
 }
 
@@ -176,7 +162,7 @@ func validateEPayCallback(req *dto.EPayNotifyRequest, params map[string]string, 
 	if req.OutTradeNo == "" || len(req.OutTradeNo) > 255 || strings.TrimSpace(req.OutTradeNo) != req.OutTradeNo {
 		return 0, errors.New("invalid order number")
 	}
-	if err := validateTradeNo(req.TradeNo); err != nil {
+	if err := settle.ValidateTradeNo(req.TradeNo); err != nil {
 		return 0, err
 	}
 	if req.Pid != credentials.merchantID {

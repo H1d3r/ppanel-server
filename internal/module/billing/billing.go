@@ -6,10 +6,12 @@ package billing
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminorder"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminpayment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/callbacks"
 	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/internal/module/billing/internal/coupon"
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
@@ -64,7 +66,16 @@ type Service interface {
 	// IssuePortalSession exchanges a completed guest purchase for a normal
 	// authenticated session.
 	IssuePortalSession(ctx context.Context, userID int64) (string, error)
+
+	// The gateway callback flows read the authenticated payment configuration
+	// from the request context (set by the notify handler's token lookup).
+	EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error
+	StripeNotify(ctx context.Context, payload []byte, signature string) error
+	AlipayNotify(ctx context.Context, form url.Values) error
 }
+
+// EPayNotifyMeta re-exports the callback subdomain's raw transport details.
+type EPayNotifyMeta = callbacks.EPayNotifyMeta
 
 // Order lifecycle constants shared with the V2 orchestration layer.
 const (
@@ -147,6 +158,7 @@ func New(deps Deps) Service {
 		payments:   adminpayment.NewService(deps.Payments, deps.Orders, deps.Tx, deps.Host, deps.IsGatewayMode),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders),
+		callbacks:  callbacks.NewService(deps.Orders, deps.Queue),
 		portal: portal.NewService(portal.Deps{
 			Orders:             deps.Orders,
 			Coupons:            deps.Coupons,
@@ -182,6 +194,7 @@ type service struct {
 	userOrders *userorder.Service
 	checkout   *checkout.Service
 	portal     *portal.Service
+	callbacks  *callbacks.Service
 }
 
 func (s *service) CreateOrder(ctx context.Context, req *dto.CreateOrderRequest) error {
@@ -294,4 +307,16 @@ func (s *service) GetPortalSubscription(ctx context.Context, req *dto.GetSubscri
 
 func (s *service) IssuePortalSession(ctx context.Context, userID int64) (string, error) {
 	return s.portal.IssueSession(ctx, userID)
+}
+
+func (s *service) EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error {
+	return s.callbacks.EPayNotify(ctx, meta, req)
+}
+
+func (s *service) StripeNotify(ctx context.Context, payload []byte, signature string) error {
+	return s.callbacks.StripeNotify(ctx, payload, signature)
+}
+
+func (s *service) AlipayNotify(ctx context.Context, form url.Values) error {
+	return s.callbacks.AlipayNotify(ctx, form)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 )
@@ -16,7 +17,7 @@ import (
 func TestPaymentNotifyHandler_writesErrorEnvelope_whenPlatformIsMissing(t *testing.T) {
 	// Given
 	engine := server.Default()
-	engine.POST("/payment/notify", PaymentNotifyHandler(&svc.ServiceContext{}))
+	engine.POST("/payment/notify", PaymentNotifyHandler(&svc.ServiceContext{Billing: billing.New(billing.Deps{})}))
 	ctx := engine.NewContext()
 	ctx.Request.SetRequestURI("/payment/notify")
 	ctx.Request.Header.SetMethod(http.MethodPost)
@@ -38,7 +39,7 @@ func TestPaymentNotifyHandler_preservesStripeRawPayloadAndSignature_whenPaymentI
 	ctx.Request.SetBodyString(`{"id":"evt_test","type":"payment_intent.succeeded"}`)
 
 	// When
-	PaymentNotifyHandler(&svc.ServiceContext{})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "Stripe"), ctx)
+	PaymentNotifyHandler(&svc.ServiceContext{Billing: billing.New(billing.Deps{})})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "Stripe"), ctx)
 
 	// Then
 	assertPaymentNotifyError(t, ctx, "Internal Server Error")
@@ -53,7 +54,7 @@ func TestPaymentNotifyHandler_returnsExistingErrorEnvelope_whenStripePayloadExce
 	ctx.Request.SetBody(bytes.Repeat([]byte("x"), 65_537))
 
 	// When
-	PaymentNotifyHandler(&svc.ServiceContext{})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "Stripe"), ctx)
+	PaymentNotifyHandler(&svc.ServiceContext{Billing: billing.New(billing.Deps{})})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "Stripe"), ctx)
 
 	// Then
 	assertPaymentNotifyError(t, ctx, "Internal Server Error")
@@ -69,7 +70,7 @@ func TestPaymentNotifyHandler_acknowledgesEPayFormFailure_whenPaymentIsMissing(t
 	ctx.Request.SetBodyString("out_trade_no=order-1&trade_status=TRADE_SUCCESS&sign=test")
 
 	// When
-	PaymentNotifyHandler(&svc.ServiceContext{})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "EPay"), ctx)
+	PaymentNotifyHandler(&svc.ServiceContext{Billing: billing.New(billing.Deps{})})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "EPay"), ctx)
 
 	// Then
 	if got := ctx.Response.StatusCode(); got != http.StatusBadRequest {
@@ -87,7 +88,7 @@ func TestPaymentNotifyHandlerRejectsRemovedCryptoSaaSPlatform(t *testing.T) {
 	ctx.Request.SetRequestURI("/payment/notify")
 	ctx.Request.Header.SetMethod(http.MethodPost)
 
-	PaymentNotifyHandler(&svc.ServiceContext{})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "CryptoSaaS"), ctx)
+	PaymentNotifyHandler(&svc.ServiceContext{Billing: billing.New(billing.Deps{})})(context.WithValue(context.Background(), constant.CtxKeyPlatform, "CryptoSaaS"), ctx)
 
 	if got := ctx.Response.StatusCode(); got != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, got)

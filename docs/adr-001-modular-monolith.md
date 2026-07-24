@@ -134,6 +134,10 @@ internal/module/<name>/
    `v2OrderLogic`（SSE 票据/幂等编排）暂留 legacy 层，四个建单分支、结账、会话兑换
    全部改调 billing 门面；`internal/logic/public/portal` 包已删除，logic 冻结基线的
    `public/order→portal` 边与 svc 基线的 portal 条目一并收缩。
+   **支付回调子域也已迁入 billing**（`internal/module/billing/internal/callbacks`）：
+   EPay/Stripe/Alipay 回调的验签、订单-支付方式绑定校验、支付期望（金额/币种快照）核对、
+   网关复查与结算；结算原语抽为模块内共享的 `internal/settle` 包（checkout 与 callbacks
+   共用，防止回调结算与到期结算语义漂移）。`internal/logic/notify` 已删除，svc 基线再收缩。
 4. **域优先重组**：把 `logic/admin/<域>` + `logic/public/<域>` + `queue/logic/<域>` 收拢进
    `internal/module/<域>/internal/service`，handler 变薄。试点顺序：`support`（耦合最低）
    → `billing`（刚硬化过、测试最全）→ 其余。

@@ -1,4 +1,4 @@
-package notify
+package callbacks
 
 import (
 	"context"
@@ -13,35 +13,20 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/payment"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/payment/alipay"
 )
 
-type AlipayNotifyLogic struct {
-	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
-}
-
-// Alipay notify
-func NewAlipayNotifyLogic(ctx context.Context, svcCtx *svc.ServiceContext) *AlipayNotifyLogic {
-	return &AlipayNotifyLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		svcCtx: svcCtx,
-	}
-}
-
-func (l *AlipayNotifyLogic) AlipayNotify(form url.Values) error {
-	store := l.svcCtx.Store
-	data, ok := l.ctx.Value(constant.CtxKeyPayment).(*payment.Payment)
+// AlipayNotify authenticates and settles an Alipay F2F notification.
+func (s *Service) AlipayNotify(ctx context.Context, form url.Values) error {
+	l := logger.WithContext(ctx)
+	data, ok := ctx.Value(constant.CtxKeyPayment).(*payment.Payment)
 	if !ok {
 		return fmt.Errorf("payment config not found")
 	}
 	var config payment.AlipayF2FConfig
 	if err := json.Unmarshal([]byte(data.Config), &config); err != nil {
-		l.Logger.Error("[AlipayNotify] Unmarshal config failed", logger.Field("error", err.Error()))
+		l.Error("[AlipayNotify] Unmarshal config failed", logger.Field("error", err.Error()))
 		return err
 	}
 	client := alipay.NewClient(alipay.Config{
@@ -57,34 +42,34 @@ func (l *AlipayNotifyLogic) AlipayNotify(form url.Values) error {
 	}
 	notify, err := client.DecodeNotification(form)
 	if err != nil {
-		l.Logger.Error("[AlipayNotify] Decode notification failed", logger.Field("error", err.Error()))
+		l.Error("[AlipayNotify] Decode notification failed", logger.Field("error", err.Error()))
 		return err
 	}
 	if notify.Status == alipay.Success || notify.Status == alipay.Finished {
-		orderInfo, err := store.Order().FindOneByOrderNo(l.ctx, notify.OrderNo)
+		orderInfo, err := s.orders.FindOneByOrderNo(ctx, notify.OrderNo)
 		if err != nil {
-			l.Logger.Error("[AlipayNotify] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", notify.OrderNo))
+			l.Error("[AlipayNotify] Find order failed", logger.Field("error", err.Error()), logger.Field("orderNo", notify.OrderNo))
 			return errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", notify.OrderNo)
 		}
 
-		if finished, err := validateAlipayCallback(l.ctx, orderInfo, data, &config, notify); err != nil {
+		if finished, err := validateAlipayCallback(ctx, orderInfo, data, &config, notify); err != nil {
 			return err
 		} else if finished {
 			return nil
 		}
-		status, err := client.QueryTrade(l.ctx, notify.OrderNo)
+		status, err := client.QueryTrade(ctx, notify.OrderNo)
 		if err != nil {
 			return err
 		}
 		if status != alipay.Success && status != alipay.Finished {
 			return errors.New("Alipay trade is not paid")
 		}
-		if err := markOrderPaidAndEnqueue(l.ctx, l.svcCtx, orderInfo, notify.TradeNo); err != nil {
+		if err := s.settle(ctx, orderInfo, notify.TradeNo); err != nil {
 			return err
 		}
-		l.Logger.Info("[AlipayNotify] Notify status success", logger.Field("orderNo", notify.OrderNo))
+		l.Info("[AlipayNotify] Notify status success", logger.Field("orderNo", notify.OrderNo))
 	} else {
-		l.Logger.Error("[AlipayNotify] Notify status failed", logger.Field("status", string(notify.Status)))
+		l.Error("[AlipayNotify] Notify status failed", logger.Field("status", string(notify.Status)))
 	}
 	return nil
 }
