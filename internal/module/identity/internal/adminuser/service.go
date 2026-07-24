@@ -21,7 +21,11 @@ type Deps struct {
 	Plans    repository.SubscribeRepo
 	Traffic  repository.TrafficRepo
 	Logs     repository.LogRepo
-	Store    repository.Store
+	// Wallet is the read port onto the billing domain: the admin views show
+	// wallet values from the authoritative table, not the legacy user
+	// columns (ADR-001 step 5).
+	Wallet repository.WalletRepo
+	Store  repository.Store
 	// KickDevice force-disconnects a bound device.
 	KickDevice func(userID int64, identifier string)
 }

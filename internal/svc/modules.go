@@ -225,8 +225,9 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 			}
 		},
 
-		Auths: store.Auth(),
-		Redis: srv.Redis,
+		Wallet: store.Wallet(),
+		Auths:  store.Auth(),
+		Redis:  srv.Redis,
 		EmailDomains: func() (string, bool) {
 			return srv.Config.Email.DomainSuffixList, srv.Config.Email.EnableDomainSuffix
 		},

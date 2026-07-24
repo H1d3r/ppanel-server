@@ -39,5 +39,12 @@ func (l *CurrentUserLogic) CurrentUser() (*dto.User, error) {
 
 	l.Logger.Info("current user", zap.Field{Key: "userId", Type: zapcore.Int64Type, Integer: u.Id})
 	tool.DeepCopy(resp, u)
+	// The context user is the middleware's cached identity row; wallet
+	// values come from the billing-owned table.
+	if w, err := l.deps.Wallet.FindWallet(l.ctx, u.Id); err == nil && w != nil {
+		resp.Balance = w.Balance
+		resp.GiftAmount = w.GiftAmount
+		resp.Commission = w.Commission
+	}
 	return resp, nil
 }

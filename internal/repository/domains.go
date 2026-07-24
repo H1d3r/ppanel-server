@@ -21,6 +21,12 @@ import (
 // billing transactions without exposing the rest of the identity repository.
 type WalletRepo interface {
 	FindOneForUpdate(ctx context.Context, id int64) (*user.User, error)
+	// FindWallet and FindWalletsByUserIds are the plain (non-locking) reads
+	// of the wallet table for display composition; a missing row falls back
+	// to zero values (accounts predating the backfill are seeded on their
+	// first movement).
+	FindWallet(ctx context.Context, userId int64) (*user.Wallet, error)
+	FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*user.Wallet, error)
 	UpdateBalanceFields(ctx context.Context, data *user.User, tx ...*gorm.DB) error
 	UpdateCommission(ctx context.Context, data *user.User, tx ...*gorm.DB) error
 }

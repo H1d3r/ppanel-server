@@ -41,9 +41,25 @@ func (l *GetUserListLogic) GetUserList(req *dto.GetUserListRequest) (*dto.GetUse
 
 	userRespList := make([]dto.User, 0, len(list))
 
+	// Wallet values come from the billing-owned table (batch read); the
+	// legacy user columns remain only as the dual-written fallback.
+	ids := make([]int64, 0, len(list))
+	for _, item := range list {
+		ids = append(ids, item.Id)
+	}
+	wallets, werr := l.deps.Wallet.FindWalletsByUserIds(l.ctx, ids)
+	if werr != nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetUserListLogic load wallets failed: %v", werr.Error())
+	}
+
 	for _, item := range list {
 		var u dto.User
 		tool.DeepCopy(&u, item)
+		if w, ok := wallets[item.Id]; ok {
+			u.Balance = w.Balance
+			u.GiftAmount = w.GiftAmount
+			u.Commission = w.Commission
+		}
 		if item.DeletedAt.Valid {
 			u.DeletedAt = item.DeletedAt.Time.UnixMilli()
 		}

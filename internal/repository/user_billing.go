@@ -112,3 +112,46 @@ func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, id int64) (*user
 	})
 	return result, err
 }
+
+// FindWallet reads the wallet row without locking. A nil result (no error)
+// means the account predates the backfill and has had no movement yet;
+// callers keep whatever legacy value they composed.
+func (m *userBillingRepo) FindWallet(ctx context.Context, userId int64) (*user.Wallet, error) {
+	var w *user.Wallet
+	err := m.QueryNoCacheCtx(ctx, &w, func(conn *gorm.DB, v interface{}) error {
+		var row user.Wallet
+		err := conn.Where("user_id = ?", userId).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		w = &row
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// FindWalletsByUserIds batch-reads wallet rows for display lists; missing
+// rows are absent from the map (treat as zero values).
+func (m *userBillingRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*user.Wallet, error) {
+	result := make(map[int64]*user.Wallet, len(userIds))
+	if len(userIds) == 0 {
+		return result, nil
+	}
+	var rows []*user.Wallet
+	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
+		return conn.Where("user_id IN ?", userIds).Find(v).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range rows {
+		result[w.UserId] = w
+	}
+	return result, nil
+}

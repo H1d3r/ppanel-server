@@ -115,6 +115,10 @@ type Deps struct {
 	// KickDevice force-disconnects a bound device.
 	KickDevice func(userID int64, identifier string)
 
+	// Wallet is the read port onto the billing domain's wallet table for
+	// the admin and self-service account views.
+	Wallet repository.WalletRepo
+
 	// Profile-specific dependencies.
 	Auths repository.AuthRepo
 	Redis *redis.Client
@@ -160,6 +164,7 @@ func New(deps Deps) Service {
 	return &service{
 		authn: authSvc,
 		adminUsers: adminuser.NewService(adminuser.Deps{
+			Wallet:     deps.Wallet,
 			Users:      deps.Users,
 			UserAuths:  deps.UserAuths,
 			Devices:    deps.Devices,
