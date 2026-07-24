@@ -70,6 +70,9 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 			}
 		}
 
+		walletChanged := userInfo.Balance != req.Balance ||
+			userInfo.GiftAmount != req.GiftAmount ||
+			userInfo.Commission != req.Commission
 		userInfo.Balance = req.Balance
 		userInfo.GiftAmount = req.GiftAmount
 		userInfo.Commission = req.Commission
@@ -88,7 +91,21 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 			userInfo.Algo = tool.PasswordAlgoArgon2id
 			userInfo.Salt = ""
 		}
-		return store.User().Update(l.ctx, userInfo)
+		if err := store.User().Update(l.ctx, userInfo); err != nil {
+			return err
+		}
+		// The profile save skips the billing-owned money columns; the
+		// admin's wallet adjustment goes through the wallet view under the
+		// same row lock (their audit logs are recorded above).
+		if walletChanged {
+			if err := store.Wallet().UpdateBalanceFields(l.ctx, userInfo); err != nil {
+				return err
+			}
+			if err := store.Wallet().UpdateCommission(l.ctx, userInfo); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		l.Errorw("[UpdateUserBasicInfoLogic] Update User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))

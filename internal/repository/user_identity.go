@@ -92,7 +92,10 @@ func (m *userRepo) Update(ctx context.Context, data *user.User, tx ...*gorm.DB) 
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Save(data).Error
+		// The money columns belong to the billing domain (WalletRepo): a
+		// full-row save from a stale in-memory user must never clobber a
+		// concurrent wallet movement (ADR-001 step 5).
+		return conn.Omit("balance", "gift_amount", "commission").Save(data).Error
 	}, m.getCacheKeys(old)...)
 	return err
 }
