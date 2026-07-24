@@ -151,8 +151,21 @@ internal/module/<name>/
    验证码原语抽为中立包 `internal/verification`；trafficagg 去 svc 化后由 queue 与
    network 模块各自组装。`queue/logic/*` 与 handler/initialize/scheduler 仍持 svcCtx，
    属组装根性质，其收缩并入第 5 步。
-5. **数据所有权清算**：表→模块归属表定稿，清理附录 A.4 的跨模块 JOIN/Preload，
-   并把 identity 与 subscription 共用的 `*userRepo` 实现物理分家（见附录 A 开头说明）。
+5. **数据所有权清算**（进行中，2026-07-24 起）：表→模块归属定稿如下，
+   清理附录 A.4 的跨模块 JOIN/Preload，并把 identity 与 subscription 共用的
+   `*userRepo` 实现物理分家（见附录 A 开头说明）。
+
+   | 模块 | 表 |
+   |---|---|
+   | identity | `user`（除钱包列）、`user_auth_methods`、`user_device`、`user_device_online_record`、`auth_method` |
+   | billing | `order`、`order_event`、`payment`、`coupon`、`user_withdrawal`、user 表的钱包列（Balance/GiftAmount/Commission，待拆 `user_wallet` 表） |
+   | subscription | `subscribe`、`subscribe_group`、`subscribe_application`、`user_subscribe` |
+   | network | `servers`、`nodes`、`server_config_overrides`、`traffic_log` |
+   | support | `ticket`、`ticket_follow`、`announcement`、`ads`、`document` |
+   | notification | （暂无自有表；模板常量随代码） |
+   | platform（共享内核） | `system`、`system_logs`、`task`、`domain_event_inbox`、`client` |
+
+   审计日志（`system_logs`）与收件箱（`domain_event_inbox`）保持豁免：任何域事务可写。
 6. **拆分就绪**：门面换 gRPC 实现（`api/` 已有 protobuf 基建）、事件换消息队列、搬表。
 
 过渡期约定：模块实现**暂时允许** import `internal/repository`（包装存量 repo 起步），

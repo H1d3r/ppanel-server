@@ -8,6 +8,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/entity/node"
 	"github.com/perfect-panel/server/internal/model/entity/subscribe"
+	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -105,7 +106,7 @@ func (m *subscribeRepo) getCacheKeys(data *subscribe.Subscribe) []string {
 func (m *subscribeRepo) getUserSubscribeCacheKeys(ctx context.Context, subscribeId int64) ([]string, error) {
 	var userIds []int64
 	err := m.QueryNoCacheCtx(ctx, &userIds, func(conn *gorm.DB, v interface{}) error {
-		return conn.Table("user_subscribe").
+		return conn.Model(&user.Subscribe{}).
 			Where("subscribe_id = ?", subscribeId).
 			Distinct("user_id").
 			Pluck("user_id", &userIds).Error
