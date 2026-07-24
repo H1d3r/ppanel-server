@@ -77,42 +77,259 @@ func NewActivateOrderLogic(svc *svc.ServiceContext) *ActivateOrderLogic {
 	}
 }
 
-// ProcessTask is the main entry point for processing order activation tasks.
-// It handles the complete workflow of activating a paid order including validation,
-// processing based on order type, and finalization.
+// Inbox consumers for the activation stages (ADR-001 step 2). Each stage runs
+// in its own single-domain transaction and marks itself processed in the
+// idempotent inbox, keyed by order number.
+const (
+	inboxGuestAccount = "identity.guest_account"
+	inboxFulfillment  = "subscription.fulfillment"
+	inboxRecharge     = "identity.balance_recharge"
+	inboxCommission   = "identity.commission"
+)
+
+// ProcessTask activates a paid order as a sequence of single-domain
+// transactions instead of one cross-domain transaction (ADR-001 step 2):
+//
+//  1. identity: create the guest account (subscribe orders without a user)
+//  2. subscription/identity: fulfill (open/extend/reset subscription, or
+//     credit the recharge balance)
+//  3. identity: settle referral commission
+//  4. billing: coupon accounting + the Paid -> Finished transition, which
+//     also appends the order.fulfilled outbox event
+//
+// Idempotency: every stage marks itself in the domain event inbox inside its
+// own transaction, so Asynq's at-least-once delivery and the paid-order
+// reconciler can replay the task safely — completed stages are skipped, the
+// remaining ones run. The order stays Paid until stage 4 commits, so a crash
+// between stages leaves a durable signal that the reconciler re-drives.
 func (l *ActivateOrderLogic) ProcessTask(ctx context.Context, task *asynq.Task) error {
 	payload, err := l.parsePayload(ctx, task.Payload())
 	if err != nil {
 		return err
 	}
+	orderInfo, err := l.svc.Store.Order().FindOneByOrderNo(ctx, payload.OrderNo)
+	if err != nil {
+		return err
+	}
+	if orderInfo.Status == OrderStatusFinished {
+		return nil
+	}
+	if orderInfo.Status != OrderStatusPaid {
+		return ErrInvalidOrderStatus
+	}
 
-	var result *activationResult
-	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
-		// The Paid -> Finished transition, user/subscription mutations and coupon
-		// accounting share one transaction.  This is the idempotency boundary for
-		// Asynq's at-least-once delivery: a committed activation is never run
-		// again, while a rolled-back activation has no partial database effects.
-		orderInfo, err := store.Order().FindOneByOrderNoForUpdate(ctx, payload.OrderNo)
+	if orderInfo.Type == OrderTypeSubscribe && orderInfo.UserId == 0 {
+		if err := l.ensureGuestAccount(ctx, orderInfo); err != nil {
+			logger.WithContext(ctx).Error("[ActivateOrderLogic] Guest account stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
+			return err
+		}
+	}
+
+	result, err := l.fulfillOrder(ctx, orderInfo)
+	if err != nil {
+		logger.WithContext(ctx).Error("[ActivateOrderLogic] Fulfillment stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
+		return err
+	}
+
+	if orderInfo.Type == OrderTypeSubscribe || orderInfo.Type == OrderTypeRenewal {
+		result.commissionRecipient, err = l.settleCommission(ctx, result.user, orderInfo)
+		if err != nil {
+			logger.WithContext(ctx).Error("[ActivateOrderLogic] Commission stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
+			return err
+		}
+	}
+
+	if err := l.finalizeOrder(ctx, orderInfo); err != nil {
+		logger.WithContext(ctx).Error("[ActivateOrderLogic] Finalize stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
+		return err
+	}
+
+	l.afterActivationCommit(ctx, result)
+	return nil
+}
+
+// ensureGuestAccount creates the guest's account in an identity-domain
+// transaction, then binds it to the order in a billing write. The inbox
+// marker stores the created user id so a replay re-binds the same account
+// instead of creating a second one.
+func (l *ActivateOrderLogic) ensureGuestAccount(ctx context.Context, orderInfo *order.Order) error {
+	var userID int64
+	mark, err := l.svc.Store.Inbox().Find(ctx, inboxGuestAccount, orderInfo.OrderNo)
+	if err != nil {
+		return err
+	}
+	if mark != nil {
+		userID, err = strconv.ParseInt(mark.Result, 10, 64)
+		if err != nil {
+			return fmt.Errorf("corrupt guest account marker %q: %w", mark.Result, err)
+		}
+	} else {
+		tempOrder, err := l.getGuestOrderInfo(ctx, orderInfo)
 		if err != nil {
 			return err
 		}
-		if orderInfo.Status == OrderStatusFinished {
-			return nil
+		passwordHash := tempOrder.PasswordHash
+		if passwordHash == "" {
+			// Compatibility for an already-created guest checkout from an older
+			// release. New records only retain PasswordHash in Redis.
+			passwordHash = tool.EncodePassWord(tempOrder.Password)
 		}
-		if orderInfo.Status != OrderStatusPaid {
-			return ErrInvalidOrderStatus
+		if passwordHash == "" {
+			return fmt.Errorf("guest order password hash is missing")
 		}
-
-		result, err = l.processOrderByTypeInTx(ctx, store, orderInfo)
-		if err != nil {
-			return err
-		}
-		if orderInfo.Type == OrderTypeSubscribe || orderInfo.Type == OrderTypeRenewal {
-			result.commissionRecipient, err = l.handleCommissionTx(ctx, store, result.user, orderInfo)
-			if err != nil {
+		userInfo := &user.User{Password: passwordHash, Algo: tool.PasswordAlgoForHash(passwordHash)}
+		err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
+			if err := store.User().Insert(ctx, userInfo); err != nil {
 				return err
 			}
+			userInfo.ReferCode = uuidx.UserInviteCode(userInfo.Id)
+			if err := store.User().Update(ctx, userInfo); err != nil {
+				return err
+			}
+			if err := store.UserAuth().InsertUserAuthMethods(ctx, &user.AuthMethods{
+				UserId:         userInfo.Id,
+				AuthType:       tempOrder.AuthType,
+				AuthIdentifier: tempOrder.Identifier,
+			}); err != nil {
+				return err
+			}
+			if tempOrder.InviteCode != "" {
+				if referer, findErr := store.User().FindOneByReferCode(ctx, tempOrder.InviteCode); findErr == nil {
+					userInfo.RefererId = referer.Id
+					if err := store.User().Update(ctx, userInfo); err != nil {
+						return err
+					}
+				} else {
+					logger.WithContext(ctx).Error("Find referer failed", logger.Field("error", findErr.Error()), logger.Field("refer_code", tempOrder.InviteCode))
+				}
+			}
+			return store.Inbox().Insert(ctx, inboxGuestAccount, orderInfo.OrderNo, strconv.FormatInt(userInfo.Id, 10))
+		})
+		if err != nil {
+			return err
 		}
+		userID = userInfo.Id
+	}
+	// Billing write: bind the account to the order. Replays write the same
+	// value, so this needs no transaction with the identity mutations above.
+	orderInfo.UserId = userID
+	return l.svc.Store.Order().Update(ctx, orderInfo)
+}
+
+// fulfillOrder applies the order's business effect in the owning domain's
+// transaction. A replayed delivery whose fulfillment already committed only
+// rebuilds the in-memory context for the post-commit side effects.
+func (l *ActivateOrderLogic) fulfillOrder(ctx context.Context, orderInfo *order.Order) (*activationResult, error) {
+	consumer := inboxFulfillment
+	if orderInfo.Type == OrderTypeRecharge {
+		consumer = inboxRecharge
+	}
+	mark, err := l.svc.Store.Inbox().Find(ctx, consumer, orderInfo.OrderNo)
+	if err != nil {
+		return nil, err
+	}
+	if mark != nil {
+		return l.loadActivationResult(ctx, orderInfo)
+	}
+	var result *activationResult
+	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
+		var txErr error
+		result, txErr = l.processOrderByTypeInTx(ctx, store, orderInfo)
+		if txErr != nil {
+			return txErr
+		}
+		// A duplicate key here means a concurrent delivery fulfilled first;
+		// this transaction rolls back and the retry takes the replay path.
+		return store.Inbox().Insert(ctx, consumer, orderInfo.OrderNo, "")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// loadActivationResult rebuilds the post-commit context (caches,
+// notifications) for a replayed delivery whose fulfillment already committed.
+func (l *ActivateOrderLogic) loadActivationResult(ctx context.Context, orderInfo *order.Order) (*activationResult, error) {
+	userInfo, err := l.svc.Store.User().FindOne(ctx, orderInfo.UserId)
+	if err != nil {
+		return nil, err
+	}
+	result := &activationResult{order: orderInfo, user: userInfo}
+	switch orderInfo.Type {
+	case OrderTypeRecharge:
+		return result, nil
+	case OrderTypeSubscribe, OrderTypeRenewal, OrderTypeResetTraffic:
+		token := orderInfo.SubscribeToken
+		if orderInfo.Type == OrderTypeSubscribe {
+			// New-purchase tokens are derived from the order number.
+			token = uuidx.SubscribeToken(orderInfo.OrderNo)
+		}
+		userSub, err := l.svc.Store.UserSubscription().FindOneSubscribeByToken(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		subID := orderInfo.SubscribeId
+		if orderInfo.Type == OrderTypeResetTraffic {
+			subID = userSub.SubscribeId
+		}
+		sub, err := l.svc.Store.Subscribe().FindOne(ctx, subID)
+		if err != nil {
+			return nil, err
+		}
+		result.subscribe, result.userSub = sub, userSub
+		switch orderInfo.Type {
+		case OrderTypeSubscribe:
+			result.notifyType = telegram.PurchaseNotify
+		case OrderTypeRenewal:
+			result.notifyType = telegram.RenewalNotify
+		case OrderTypeResetTraffic:
+			result.notifyType = telegram.ResetTrafficNotify
+		}
+		return result, nil
+	default:
+		return nil, ErrInvalidOrderType
+	}
+}
+
+// settleCommission credits the referral commission in an identity-domain
+// transaction. The inbox marker also covers the "no commission applies"
+// outcome so replays skip the referer lock entirely.
+func (l *ActivateOrderLogic) settleCommission(ctx context.Context, userInfo *user.User, orderInfo *order.Order) (*user.User, error) {
+	mark, err := l.svc.Store.Inbox().Find(ctx, inboxCommission, orderInfo.OrderNo)
+	if err != nil {
+		return nil, err
+	}
+	if mark != nil {
+		return nil, nil
+	}
+	var recipient *user.User
+	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
+		var txErr error
+		recipient, txErr = l.handleCommissionTx(ctx, store, userInfo, orderInfo)
+		if txErr != nil {
+			return txErr
+		}
+		return store.Inbox().Insert(ctx, inboxCommission, orderInfo.OrderNo, "")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return recipient, nil
+}
+
+// finalizeOrder is the billing-domain settlement: coupon accounting and the
+// Paid -> Finished transition (which appends the order.fulfilled outbox
+// event) commit atomically. Losing the status CAS rolls the coupon count
+// back, so it stays exactly-once.
+//
+// Known transitional window: an admin closing a Paid order between the
+// fulfillment stage and this CAS leaves the fulfillment committed while the
+// order ends Closed. The pre-split code had the same conflict resolved by row
+// locks; compensation for admin closes of paid orders is a billing concern
+// tracked in ADR-001 step 2.
+func (l *ActivateOrderLogic) finalizeOrder(ctx context.Context, orderInfo *order.Order) error {
+	return l.svc.Store.InTx(ctx, func(store repository.Store) error {
 		if orderInfo.Coupon != "" && !orderInfo.CouponReserved {
 			if err := store.Coupon().UpdateCount(ctx, orderInfo.Coupon); err != nil {
 				return err
@@ -127,15 +344,6 @@ func (l *ActivateOrderLogic) ProcessTask(ctx context.Context, task *asynq.Task) 
 		}
 		return nil
 	})
-	if err != nil {
-		logger.WithContext(ctx).Error("[ActivateOrderLogic] Process task failed", logger.Field("error", err.Error()))
-		return err
-	}
-	if result == nil {
-		return nil
-	}
-	l.afterActivationCommit(ctx, result)
-	return nil
 }
 
 func (l *ActivateOrderLogic) processOrderByTypeInTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*activationResult, error) {
@@ -154,59 +362,13 @@ func (l *ActivateOrderLogic) processOrderByTypeInTx(ctx context.Context, store r
 }
 
 func (l *ActivateOrderLogic) activateNewPurchaseTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*activationResult, error) {
-	var (
-		userInfo *user.User
-		err      error
-	)
-	if orderInfo.UserId != 0 {
-		// Serialise quota checks and subscription creation for a single user.
-		userInfo, err = store.User().FindOneForUpdate(ctx, orderInfo.UserId)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		tempOrder, err := l.getGuestOrderInfo(ctx, orderInfo)
-		if err != nil {
-			return nil, err
-		}
-		passwordHash := tempOrder.PasswordHash
-		if passwordHash == "" {
-			// Compatibility for an already-created guest checkout from an older
-			// release. New records only retain PasswordHash in Redis.
-			passwordHash = tool.EncodePassWord(tempOrder.Password)
-		}
-		if passwordHash == "" {
-			return nil, fmt.Errorf("guest order password hash is missing")
-		}
-		userInfo = &user.User{Password: passwordHash, Algo: tool.PasswordAlgoForHash(passwordHash)}
-		if err := store.User().Insert(ctx, userInfo); err != nil {
-			return nil, err
-		}
-		userInfo.ReferCode = uuidx.UserInviteCode(userInfo.Id)
-		if err := store.User().Update(ctx, userInfo); err != nil {
-			return nil, err
-		}
-		if err := store.UserAuth().InsertUserAuthMethods(ctx, &user.AuthMethods{
-			UserId:         userInfo.Id,
-			AuthType:       tempOrder.AuthType,
-			AuthIdentifier: tempOrder.Identifier,
-		}); err != nil {
-			return nil, err
-		}
-		if tempOrder.InviteCode != "" {
-			if referer, findErr := store.User().FindOneByReferCode(ctx, tempOrder.InviteCode); findErr == nil {
-				userInfo.RefererId = referer.Id
-				if err := store.User().Update(ctx, userInfo); err != nil {
-					return nil, err
-				}
-			} else {
-				logger.WithContext(ctx).Error("Find referer failed", logger.Field("error", findErr.Error()), logger.Field("refer_code", tempOrder.InviteCode))
-			}
-		}
-		orderInfo.UserId = userInfo.Id
-		if err := store.Order().Update(ctx, orderInfo); err != nil {
-			return nil, err
-		}
+	// Guest accounts are created by ensureGuestAccount before this stage, so
+	// UserId is always set here. The user row lock is a transitional
+	// serialisation point for per-user quota checks; the subscription module
+	// takes over that concern once it owns its data (ADR-001 step 5).
+	userInfo, err := store.User().FindOneForUpdate(ctx, orderInfo.UserId)
+	if err != nil {
+		return nil, err
 	}
 
 	sub, err := store.Subscribe().FindOne(ctx, orderInfo.SubscribeId)

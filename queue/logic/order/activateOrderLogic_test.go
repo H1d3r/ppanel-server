@@ -3,11 +3,13 @@ package orderLogic
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/config"
+	inboxEntity "github.com/perfect-panel/server/internal/model/entity/inbox"
 	logEntity "github.com/perfect-panel/server/internal/model/entity/log"
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
@@ -24,6 +26,7 @@ type activationStore struct {
 	users      *activationUserRepo
 	subscribes *activationSubscribeRepo
 	logs       *activationLogRepo
+	inbox      *activationInboxRepo
 }
 
 func (s *activationStore) InTx(_ context.Context, fn func(repository.Store) error) error {
@@ -37,18 +40,50 @@ func (s *activationStore) UserSubscription() repository.UserSubscriptionRepo {
 func (s *activationStore) UserCache() repository.UserCacheRepo { return s.users }
 func (s *activationStore) Log() repository.LogRepo             { return s.logs }
 func (s *activationStore) Subscribe() repository.SubscribeRepo { return s.subscribes }
+func (s *activationStore) Inbox() repository.InboxRepo         { return s.inbox }
+
+type activationInboxRepo struct {
+	repository.InboxRepo
+	records map[string]*inboxEntity.Record
+}
+
+func newActivationInboxRepo() *activationInboxRepo {
+	return &activationInboxRepo{records: map[string]*inboxEntity.Record{}}
+}
+
+func (r *activationInboxRepo) Find(_ context.Context, consumer, eventKey string) (*inboxEntity.Record, error) {
+	record, ok := r.records[consumer+"|"+eventKey]
+	if !ok {
+		return nil, nil
+	}
+	copy := *record
+	return &copy, nil
+}
+
+func (r *activationInboxRepo) Insert(_ context.Context, consumer, eventKey, result string) error {
+	key := consumer + "|" + eventKey
+	if _, ok := r.records[key]; ok {
+		return fmt.Errorf("duplicate inbox record %s", key)
+	}
+	r.records[key] = &inboxEntity.Record{Consumer: consumer, EventKey: eventKey, Result: result}
+	return nil
+}
 
 type activationOrderRepo struct {
 	repository.OrderRepo
 	order *orderEntity.Order
 }
 
-func (r *activationOrderRepo) FindOneByOrderNoForUpdate(_ context.Context, orderNo string) (*orderEntity.Order, error) {
+func (r *activationOrderRepo) FindOneByOrderNo(_ context.Context, orderNo string) (*orderEntity.Order, error) {
 	if r.order.OrderNo != orderNo {
 		return nil, gorm.ErrRecordNotFound
 	}
 	copy := *r.order
 	return &copy, nil
+}
+
+func (r *activationOrderRepo) FindOneByOrderNoForUpdate(ctx context.Context, orderNo string) (*orderEntity.Order, error) {
+	return r.FindOneByOrderNo(ctx, orderNo)
 }
 
 func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo string, from, to uint8, _ ...*gorm.DB) (bool, error) {
@@ -170,6 +205,7 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 		}},
 		users: &activationUserRepo{user: &userEntity.User{Id: 7, Balance: 500}},
 		logs:  &activationLogRepo{},
+		inbox: newActivationInboxRepo(),
 	}
 	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
 	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "recharge-order"})
@@ -192,6 +228,95 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 	}
 	if len(store.logs.logs) != 1 {
 		t.Fatalf("recharge logs = %d, want 1", len(store.logs.logs))
+	}
+}
+
+// TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit simulates a
+// crash between the fulfillment and finalize stages: the balance credit
+// committed but the order is still Paid, so the reconciler replays the task.
+// The inbox marker must prevent a second credit.
+func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
+	store := &activationStore{
+		orders: &activationOrderRepo{order: &orderEntity.Order{
+			OrderNo: "recharge-replay", UserId: 7, Type: OrderTypeRecharge, Price: 1250, Status: OrderStatusPaid,
+		}},
+		users: &activationUserRepo{user: &userEntity.User{Id: 7, Balance: 500}},
+		logs:  &activationLogRepo{},
+		inbox: newActivationInboxRepo(),
+	}
+	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
+	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "recharge-replay"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	task := asynq.NewTask(types.ForthwithActivateOrder, payload)
+
+	if err := logic.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("first activation: %v", err)
+	}
+	// Simulate the finalize stage having been lost: the order is Paid again.
+	store.orders.order.Status = OrderStatusPaid
+
+	if err := logic.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("replayed activation: %v", err)
+	}
+	if store.users.user.Balance != 1750 {
+		t.Fatalf("balance = %d, want 1750 (credited exactly once)", store.users.user.Balance)
+	}
+	if len(store.logs.logs) != 1 {
+		t.Fatalf("balance logs = %d, want 1", len(store.logs.logs))
+	}
+	if store.orders.order.Status != OrderStatusFinished {
+		t.Fatalf("order status = %d, want finished after replay", store.orders.order.Status)
+	}
+}
+
+// TestActivateRenewalReplayExtendsSubscriptionOnce guards the most dangerous
+// replay: extending a renewal twice would silently gift subscription time.
+func TestActivateRenewalReplayExtendsSubscriptionOnce(t *testing.T) {
+	expire := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+	store := &activationStore{
+		orders: &activationOrderRepo{order: &orderEntity.Order{
+			OrderNo: "renewal-replay", UserId: 7, Type: OrderTypeRenewal, Status: OrderStatusPaid,
+			SubscribeId: 9, SubscribeToken: "renewal-token", Quantity: 1,
+		}},
+		users: &activationUserRepo{
+			user: &userEntity.User{Id: 7},
+			subscription: &userEntity.Subscribe{
+				Id: 11, UserId: 7, SubscribeId: 9, Token: "renewal-token",
+				ExpireTime: expire, Status: userEntity.SubscribeStatusActive,
+			},
+		},
+		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9, UnitTime: "Month"}},
+		logs:       &activationLogRepo{},
+		inbox:      newActivationInboxRepo(),
+	}
+	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
+	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "renewal-replay"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	task := asynq.NewTask(types.ForthwithActivateOrder, payload)
+
+	if err := logic.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("first activation: %v", err)
+	}
+	extendedOnce := store.users.subscription.ExpireTime
+	if !extendedOnce.After(expire) {
+		t.Fatalf("first activation must extend the subscription: %v -> %v", expire, extendedOnce)
+	}
+
+	// Simulate the finalize stage having been lost: the order is Paid again.
+	store.orders.order.Status = OrderStatusPaid
+
+	if err := logic.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("replayed activation: %v", err)
+	}
+	if !store.users.subscription.ExpireTime.Equal(extendedOnce) {
+		t.Fatalf("replay extended the subscription twice: %v -> %v", extendedOnce, store.users.subscription.ExpireTime)
+	}
+	if store.orders.order.Status != OrderStatusFinished {
+		t.Fatalf("order status = %d, want finished after replay", store.orders.order.Status)
 	}
 }
 

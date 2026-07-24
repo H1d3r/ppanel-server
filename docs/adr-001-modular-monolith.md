@@ -69,9 +69,22 @@ internal/module/<name>/
 每步独立可交付、可上线，不长期分叉：
 
 1. ✅ **立规矩**：本 ADR + `internal/arch` 边界测试（存量豁免、新增即拦截）。
-2. **拆 Store**：为每个模块定义窄 store 接口（如 billing 只见 Order/OrderEvent/Payment/Coupon），
+2. **拆 Store**（进行中）：为每个模块定义窄 store 接口（如 billing 只见 Order/OrderEvent/Payment/Coupon），
    `InTx` 收窄为模块作用域；按附录 A.1 逐个把跨域事务改为"本模块事务 + outbox 事件 + 对账"
-   （审计 Log 按 A.1 结论豁免为横切关注点）；顺手移除已无调用者的 `Store.DB()` 逃生口。
+   （审计 Log 按 A.1 结论豁免为横切关注点）。已落地的机制与改造：
+   - ✅ `Store.DB()` 逃生口已移除（零调用者）。
+   - ✅ **幂等收件箱**（idempotent-consumer/inbox 模式）：`domain_event_inbox` 表 +
+     `repository.InboxRepo`。每个域步骤在自己的事务内插入 `(consumer, event_key)` 标记，
+     使 at-least-once 投递与对账重放天然安全；唯一约束同时解决并发竞争（输者回滚）。
+     拆分为微服务时各消费方带走自己的 consumer 行，成为其私有 inbox 表。
+   - ✅ **首个改造完成：`queue/logic/order/activateOrderLogic`**。原单一跨 4 域事务拆为
+     四个单域事务：① identity 访客建号（inbox 存 userId 供重放重绑）→ ② subscription/identity
+     履约（开通/续费/重置/充值）→ ③ identity 佣金 → ④ billing 结算（优惠券计数 + Paid→Finished
+     CAS + `order.fulfilled` outbox 事件原子提交）。订单在 ④ 之前保持 Paid，
+     崩溃由既有 `SchedulerReconcilePaidOrders` 重新驱动，已完成阶段被 inbox 跳过。
+     过渡期保留：新购事务内的 user 行锁（按用户串行化配额检查，第 5 步移交 subscription 模块）；
+     已知窗口：管理员在履约后、结算前关闭 Paid 订单会留下已履约的 Closed 订单（改造前由行锁互斥），
+     补偿属 billing 关单流程的后续工作。
 3. **拆 ServiceContext**：延续现有 DI 重构，每模块一个 deps 结构，`ServiceContext` 只在组装根出现。
 4. **域优先重组**：把 `logic/admin/<域>` + `logic/public/<域>` + `queue/logic/<域>` 收拢进
    `internal/module/<域>/internal/service`，handler 变薄。试点顺序：`support`（耦合最低）
@@ -144,7 +157,7 @@ identity 与 subscription 的 repo 实现需要先物理分家。
 | `internal/logic/public/user/commissionWithdrawLogic.go:45` | billing+identity+platform | 佣金提现 |
 | `internal/logic/public/user/unsubscribeLogic.go:73` | billing+subscription+identity+platform | 退订并退款 |
 | `internal/logic/admin/user/updateUserBasicInfoLogic.go:37` | identity+platform | 管理员改资料（仅审计 Log 跨域） |
-| `queue/logic/order/activateOrderLogic.go:90,518,687,971` | billing+subscription+identity+platform | 异步订单激活/开通（耦合最深） |
+| ~~`queue/logic/order/activateOrderLogic.go`~~ | ~~billing+subscription+identity+platform~~ | ✅ 已拆为四个单域事务 + 幂等收件箱（见第 2 步），旧版非事务路径已删除 |
 | `queue/logic/subscription/checkSubscriptionLogic.go:31,71` | subscription+identity | 订阅检查 + 清用户缓存（仅缓存失效跨域） |
 | `queue/logic/traffic/trafficStatLogic.go:33` | network+platform | 流量统计 + 审计 |
 | `internal/trafficagg/aggregator.go:445` | network+subscription | 流量聚合写回订阅用量 |
