@@ -30,7 +30,7 @@ func (l *StatLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	start := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, timeutil.Location())
 	end := start.Add(24 * time.Hour)
 
-	err := l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	err := l.svc.Store.InNetworkTx(ctx, func(store repository.NetworkStore) error {
 		// 查询用户流量统计, 按用户和订阅分组
 		userTraffic, err := store.TrafficLog().QueryUserTrafficRanking(ctx, start, end)
 		if err != nil {

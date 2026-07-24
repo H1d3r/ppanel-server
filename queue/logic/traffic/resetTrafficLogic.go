@@ -181,7 +181,7 @@ func (l *ResetTrafficLogic) ProcessTask(ctx context.Context, _ *asynq.Task) erro
 func (l *ResetTrafficLogic) resetMonth(ctx context.Context) error {
 	now := timeutil.Now()
 
-	err := l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	err := l.svc.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		// Get all subscriptions that reset monthly based on start date
 		resetMonthSubIds, err := store.Subscribe().QueryResetCycleSubscribeIds(ctx, 2)
 		if err != nil {
@@ -252,7 +252,7 @@ func (l *ResetTrafficLogic) reset1st(ctx context.Context, cache resetTrafficCach
 		return nil
 	}
 
-	err := l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	err := l.svc.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		// Get all subscriptions that reset on 1st of month
 		reset1stSubIds, err := store.Subscribe().QueryResetCycleSubscribeIds(ctx, 1)
 		if err != nil {
@@ -317,7 +317,7 @@ func firstDayResetAlreadyProcessed(now time.Time, cache resetTrafficCache) bool 
 func (l *ResetTrafficLogic) resetYear(ctx context.Context) error {
 	now := timeutil.Now()
 
-	err := l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	err := l.svc.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		// Get all subscriptions that reset yearly
 		resetYearSubIds, err := store.Subscribe().QueryResetCycleSubscribeIds(ctx, 3)
 		if err != nil {
