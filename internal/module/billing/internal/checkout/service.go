@@ -72,7 +72,7 @@ type Deps struct {
 	Plans    PlanReader
 	UserSubs UserSubscriptionReader
 	Store    Store
-	Queue OrderQueue
+	Queue    OrderQueue
 	// SingleModel forbids holding more than one blocking subscription;
 	// read per request because the admin can change it at runtime.
 	SingleModel func() bool

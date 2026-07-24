@@ -86,7 +86,6 @@ func TestWalletRepoUpdateBalanceFieldsWritesWalletTable(t *testing.T) {
 	}
 }
 
-
 func TestFindDeviceOnlineRecordUsesCreatedAt(t *testing.T) {
 	var logs bytes.Buffer
 	db, err := gorm.Open(mysql.New(mysql.Config{

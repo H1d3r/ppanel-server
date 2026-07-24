@@ -207,9 +207,13 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 
 		if sub.Quota > 0 {
 			// The quota re-check reads the subscription domain through the
-			// module port. The wallet row lock held above serialises
-			// concurrent purchases by the same user, so a fresh (non-tx)
-			// read is race-safe here.
+			// module port. The wallet row lock above serialises concurrent
+			// purchases by the same user; it does NOT serialise against the
+			// activation worker fulfilling an earlier paid order (that lock
+			// moved off the user row with the wallet split), so a
+			// concurrently fulfilled subscription can be missed here. The
+			// authoritative gate is fulfillment's own re-check under its
+			// user-row lock, which rejects over-quota activation.
 			count, e := s.deps.UserSubs.CountQuotaConsumingSubscriptions(ctx, u.Id, req.SubscribeId)
 			if e != nil {
 				log.Errorw("[Purchase] Database query error", logger.Field("error", e.Error()), logger.Field("user_id", u.Id), logger.Field("subscribe_id", req.SubscribeId))

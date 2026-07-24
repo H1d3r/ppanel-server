@@ -22,7 +22,7 @@ import (
 
 type activationStore struct {
 	repository.Store
-	wallet *activationWalletRepo
+	wallet     *activationWalletRepo
 	orders     *activationOrderRepo
 	users      *activationUserRepo
 	subscribes *activationSubscribeRepo
@@ -236,8 +236,8 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 		}},
 		users:  &activationUserRepo{user: &userEntity.User{Id: 7}},
 		wallet: &activationWalletRepo{wallet: &userEntity.Wallet{UserId: 7, Balance: 500}},
-		logs:  &activationLogRepo{},
-		inbox: newActivationInboxRepo(),
+		logs:   &activationLogRepo{},
+		inbox:  newActivationInboxRepo(),
 	}
 	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
 	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "recharge-order"})
@@ -274,8 +274,8 @@ func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
 		}},
 		users:  &activationUserRepo{user: &userEntity.User{Id: 7}},
 		wallet: &activationWalletRepo{wallet: &userEntity.Wallet{UserId: 7, Balance: 500}},
-		logs:  &activationLogRepo{},
-		inbox: newActivationInboxRepo(),
+		logs:   &activationLogRepo{},
+		inbox:  newActivationInboxRepo(),
 	}
 	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
 	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "recharge-replay"})

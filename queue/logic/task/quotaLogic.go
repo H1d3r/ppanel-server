@@ -166,6 +166,10 @@ func (l *QuotaTaskLogic) getSubscribes(ctx context.Context, subscriberIDs []int6
 }
 
 func (l *QuotaTaskLogic) processSubscribes(ctx context.Context, subscribes []*user.Subscribe, content task.QuotaContent, taskInfo *task.Task) error {
+	// Deliberate cross-domain transaction: the scheduled gift grant reads
+	// subscription state and moves billing money atomically with its task
+	// bookkeeping; it splits into an event-driven flow when the domains
+	// become services.
 	return l.svcCtx.Store.InTx(ctx, func(store repository.Store) error {
 		var errors []ErrorInfo
 		now := timeutil.Now()

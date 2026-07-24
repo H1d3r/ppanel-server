@@ -89,7 +89,7 @@ func (l *BindDeviceLogic) createDeviceForUser(identifier, ip, userAgent string, 
 		logger.Field("user_id", userId),
 	)
 
-	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
+	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		// Create device auth method
 		authMethod := &user.AuthMethods{
 			UserId:         userId,
@@ -188,7 +188,7 @@ func (l *BindDeviceLogic) createDeviceForUser(identifier, ip, userAgent string, 
 func (l *BindDeviceLogic) rebindDeviceToNewUser(deviceInfo *user.Device, ip, userAgent string, newUserId int64) error {
 	oldUserId := deviceInfo.UserId
 
-	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
+	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		// Check if old user has other auth methods besides device
 		authMethods, err := store.UserAuth().FindUserAuthMethods(l.ctx, oldUserId)
 		if err != nil {

@@ -42,7 +42,7 @@ func (s *closeOrderStore) Order() repository.OrderRepo   { return s.orders }
 func (s *closeOrderStore) Subscribe() repository.SubscribeRepo {
 	return s.subscribes
 }
-func (s *closeOrderStore) Log() repository.LogRepo   { return s.logs }
+func (s *closeOrderStore) Log() repository.LogRepo { return s.logs }
 func (s *closeOrderStore) Inbox() repository.InboxRepo {
 	if s.inbox == nil {
 		s.inbox = &closeInboxRepo{records: map[string]string{}}

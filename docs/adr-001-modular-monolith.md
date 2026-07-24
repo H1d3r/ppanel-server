@@ -99,8 +99,10 @@ internal/module/<name>/
      `InBillingTx` 等作用域事务，闭包只拿到本域仓储，跨域写**编译失败**。
      `WalletRepo` 把"钱包归 billing"落到代码（billing 事务经 `Wallet()` 而非 `User()`
      动钱包列）。已迁移的调用点：库存预留/回补、订阅检查、退订两段、流量聚合两段、
-     激活的建号/充值/佣金/结算段、关单主事务、portal 补偿。仍留在通用 `InTx` 的例外：
-     订阅履约段（过渡期 user 行锁）与新购主事务（订阅配额跨域读），均有注释标记。
+     激活的建号/充值/佣金/结算段、关单主事务、portal 补偿。仍留在通用 `InTx` 的例外（均有注释标记）：
+     订阅履约段（过渡期 user 行锁）；注册送试用 ×4（email/telephone/oauth/device 建号 +
+     试用订阅同事务）；管理员用户编辑与建号（identity 资料 + billing 钱包的双域管理流）；
+     定时赠金任务（订阅状态读 + 钱包变动 + 任务簿记）。新购主事务已收窄为 InBillingTx。
    - ✅ **退订两段化**（`unsubscribeLogic`）：subscription 事务翻转状态并在取消标记中持久化
      "orderID|应退金额"，billing 事务按标记退款（赠金优先）并写退款标记；两段之间崩溃时，
      用户重试会命中"已扣减但未退款"分支直接续跑退款段。

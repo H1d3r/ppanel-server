@@ -12,7 +12,7 @@ type BindDeviceStore interface {
 	User() repository.UserRepo
 	UserAuth() repository.UserAuthRepo
 	UserDevice() repository.UserDeviceRepo
-	InTx(ctx context.Context, fn func(repository.Store) error) error
+	InIdentityTx(ctx context.Context, fn func(repository.IdentityStore) error) error
 }
 
 // BindDeviceDependencies explicitly declares the collaborators of device
