@@ -2,13 +2,16 @@ package order
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	inboxEntity "github.com/perfect-panel/server/internal/model/entity/inbox"
 	logEntity "github.com/perfect-panel/server/internal/model/entity/log"
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/orderflow"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
 	"gorm.io/gorm"
@@ -20,6 +23,7 @@ type closeOrderStore struct {
 	subscribes *closeSubscribeRepo
 	users      *closeUserRepo
 	logs       *closeLogRepo
+	inbox      *closeInboxRepo
 }
 
 func (s *closeOrderStore) InTx(_ context.Context, fn func(repository.Store) error) error {
@@ -31,6 +35,43 @@ func (s *closeOrderStore) Subscribe() repository.SubscribeRepo {
 }
 func (s *closeOrderStore) User() repository.UserRepo { return s.users }
 func (s *closeOrderStore) Log() repository.LogRepo   { return s.logs }
+func (s *closeOrderStore) Inbox() repository.InboxRepo {
+	if s.inbox == nil {
+		s.inbox = &closeInboxRepo{records: map[string]string{}}
+	}
+	return s.inbox
+}
+
+type closeInboxRepo struct {
+	repository.InboxRepo
+	records map[string]string
+}
+
+func (r *closeInboxRepo) Find(_ context.Context, consumer, key string) (*inboxEntity.Record, error) {
+	result, ok := r.records[consumer+"|"+key]
+	if !ok {
+		return nil, nil
+	}
+	return &inboxEntity.Record{Consumer: consumer, EventKey: key, Result: result}, nil
+}
+
+func (r *closeInboxRepo) Insert(_ context.Context, consumer, key, result string) error {
+	k := consumer + "|" + key
+	if _, ok := r.records[k]; ok {
+		return fmt.Errorf("duplicate inbox record %s", k)
+	}
+	r.records[k] = result
+	return nil
+}
+
+// markReserved seeds the inbox as if the purchase flow had reserved inventory
+// for the order (the new-flow invariant for pending subscribe orders).
+func (s *closeOrderStore) markReserved(t *testing.T, orderNo string) {
+	t.Helper()
+	if err := s.Inbox().Insert(context.Background(), orderflow.InventoryReserveConsumer, orderNo, ""); err != nil {
+		t.Fatalf("seed reserve marker: %v", err)
+	}
+}
 
 type closeOrderRepo struct {
 	repository.OrderRepo
@@ -159,7 +200,9 @@ func TestCloseOrderRetainsGuestOrderAndRestoresInventory(t *testing.T) {
 		transition: true,
 	}
 	subscribes := &closeSubscribeRepo{sub: &subscribeEntity.Subscribe{Id: 99, Inventory: 2}}
-	logic := NewCloseOrderLogic(context.Background(), &svc.ServiceContext{Store: &closeOrderStore{orders: orders, subscribes: subscribes}})
+	store := &closeOrderStore{orders: orders, subscribes: subscribes}
+	store.markReserved(t, "guest-order")
+	logic := NewCloseOrderLogic(context.Background(), &svc.ServiceContext{Store: store})
 
 	if err := logic.CloseOrder(&dto.CloseOrderRequest{OrderNo: "guest-order"}); err != nil {
 		t.Fatalf("CloseOrder: %v", err)
@@ -183,9 +226,9 @@ func TestCloseOrderRefundsGiftAndRestoresInventory(t *testing.T) {
 	subscribes := &closeSubscribeRepo{sub: &subscribeEntity.Subscribe{Id: 99, Inventory: 2}}
 	users := &closeUserRepo{user: &userEntity.User{Id: 7, GiftAmount: 10}}
 	logs := &closeLogRepo{}
-	logic := NewCloseOrderLogic(context.Background(), &svc.ServiceContext{Store: &closeOrderStore{
-		orders: orders, subscribes: subscribes, users: users, logs: logs,
-	}})
+	store := &closeOrderStore{orders: orders, subscribes: subscribes, users: users, logs: logs}
+	store.markReserved(t, "gift-order")
+	logic := NewCloseOrderLogic(context.Background(), &svc.ServiceContext{Store: store})
 
 	if err := logic.CloseOrder(&dto.CloseOrderRequest{OrderNo: "gift-order"}); err != nil {
 		t.Fatalf("CloseOrder: %v", err)

@@ -281,14 +281,6 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 			}
 		}
 
-		reservedInventory, e := txStore.Subscribe().ReserveInventory(l.ctx, sub.Id)
-		if e != nil {
-			return e
-		}
-		if !reservedInventory {
-			return errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
-		}
-
 		// insert order
 		return txStore.Order().Insert(l.ctx, orderInfo)
 	})
@@ -299,6 +291,19 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 			return nil, err
 		}
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert order error: %v", err.Error())
+	}
+	// Reserve plan inventory in its own subscription-domain transaction
+	// (ADR-001 step 2). On failure the just-created order is closed, which
+	// releases the coupon reservation and refunds the gift deduction; the
+	// restore step no-ops because nothing was reserved.
+	if err := orderflow.ReserveInventoryOnce(l.ctx, l.svcCtx.Store, orderInfo.OrderNo, sub.Id); err != nil {
+		if closeErr := NewCloseOrderLogic(l.ctx, l.svcCtx).CloseOrder(&dto.CloseOrderRequest{OrderNo: orderInfo.OrderNo}); closeErr != nil {
+			l.Errorw("[Purchase] Close order after reservation failure failed", logger.Field("error", closeErr.Error()), logger.Field("orderNo", orderInfo.OrderNo))
+		}
+		if errors.Is(err, orderflow.ErrOutOfStock) {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
+		}
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "reserve inventory error: %v", err.Error())
 	}
 	// Deferred task
 	payload := queue.DeferCloseOrderPayload{

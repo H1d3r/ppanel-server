@@ -15,8 +15,8 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/payment"
-	"github.com/perfect-panel/server/internal/model/entity/subscribe"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/orderflow"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
@@ -66,6 +66,12 @@ func (l *CloseOrderLogic) CloseOrder(req *dto.CloseOrderRequest) error {
 			logger.Field("orderNo", req.OrderNo),
 			logger.Field("status", orderInfo.Status),
 		)
+		if orderInfo.Status == 3 {
+			// Resume a restoration lost between the close commit and the
+			// inventory transaction; RestoreInventoryOnce no-ops when the
+			// order never reserved or already restored.
+			return l.restoreReservedInventory(orderInfo)
+		}
 		return nil
 	}
 	settled, err := l.settleOrCancelGatewayOrder(orderInfo)
@@ -76,26 +82,12 @@ func (l *CloseOrderLogic) CloseOrder(req *dto.CloseOrderRequest) error {
 		return nil
 	}
 
-	// Only new subscription purchases reserve plan inventory. Renewals and
-	// traffic resets reference a plan too, but do not consume its inventory, so
-	// closing them must not add stock that was never reserved.
-	var sub *subscribe.Subscribe
-	if orderInfo.Type == orderTypeSubscribe && orderInfo.SubscribeId > 0 {
-		sub, err = store.Subscribe().FindOne(l.ctx, orderInfo.SubscribeId)
-		if err != nil {
-			l.Errorw("[CloseOrder] Find subscribe info failed",
-				logger.Field("error", err.Error()),
-				logger.Field("subscribeId", orderInfo.SubscribeId),
-			)
-			return nil
-		}
-	}
-
+	var closed bool
 	err = store.InTx(l.ctx, func(txStore repository.Store) error {
 		// Only the still-pending order may be closed.  A payment callback can
 		// race this task, so an unconditional status write would otherwise turn
 		// a paid order back into a closed order.
-		closed, err := txStore.Order().UpdateOrderStatusFrom(l.ctx, req.OrderNo, 1, 3)
+		closed, err = txStore.Order().UpdateOrderStatusFrom(l.ctx, req.OrderNo, 1, 3)
 		if err != nil {
 			l.Errorw("[CloseOrder] Update order status failed",
 				logger.Field("error", err.Error()),
@@ -164,21 +156,36 @@ func (l *CloseOrderLogic) CloseOrder(req *dto.CloseOrderRequest) error {
 				return err
 			}
 		}
-		// Restore subscribe inventory if subscribe exists
-		if sub != nil {
-			if e := txStore.Subscribe().RestoreInventory(l.ctx, sub.Id); e != nil {
-				l.Errorw("[CloseOrder] Restore subscribe inventory failed",
-					logger.Field("error", e.Error()),
-					logger.Field("subscribeId", sub.Id),
-				)
-				return e
-			}
-		}
-
 		return nil
 	})
 	if err != nil {
 		logger.Errorf("[CloseOrder] Transaction failed: %v", err.Error())
+		return err
+	}
+	if !closed {
+		return nil
+	}
+	// The reserved plan inventory returns in its own subscription-domain
+	// transaction (ADR-001 step 2). A crash before this point is resumed by
+	// the retried close task via the status==3 branch above.
+	return l.restoreReservedInventory(orderInfo)
+}
+
+// restoreReservedInventory returns the closed order's reserved inventory
+// unit. Only new subscription purchases reserve plan inventory; renewals and
+// traffic resets reference a plan too, but never consumed stock, and the
+// reserve marker check inside RestoreInventoryOnce keeps them (and stock-out
+// compensation closes) from adding stock that was never taken.
+func (l *CloseOrderLogic) restoreReservedInventory(orderInfo *order.Order) error {
+	if orderInfo.Type != orderTypeSubscribe || orderInfo.SubscribeId <= 0 {
+		return nil
+	}
+	if err := orderflow.RestoreInventoryOnce(l.ctx, l.svcCtx.Store, orderInfo.OrderNo, orderInfo.SubscribeId); err != nil {
+		l.Errorw("[CloseOrder] Restore subscribe inventory failed",
+			logger.Field("error", err.Error()),
+			logger.Field("subscribeId", orderInfo.SubscribeId),
+			logger.Field("orderNo", orderInfo.OrderNo),
+		)
 		return err
 	}
 	return nil

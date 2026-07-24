@@ -163,14 +163,6 @@ func (l *PurchaseLogic) Purchase(req *dto.PortalPurchaseRequest) (resp *dto.Port
 			}
 			orderInfo.CouponReserved = true
 		}
-		reservedInventory, reserveErr := store.Subscribe().ReserveInventory(l.ctx, sub.Id)
-		if reserveErr != nil {
-			return reserveErr
-		}
-		if !reservedInventory {
-			return errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
-		}
-
 		// save guest order
 		if err = store.Order().Insert(l.ctx, orderInfo); err != nil {
 			return err
@@ -180,6 +172,29 @@ func (l *PurchaseLogic) Purchase(req *dto.PortalPurchaseRequest) (resp *dto.Port
 	if err != nil {
 		l.Errorw("[Purchase] Database transaction error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "transaction error: %v", err.Error())
+	}
+	// Reserve plan inventory in its own subscription-domain transaction
+	// (ADR-001 step 2). On failure the guest order is closed inline — this
+	// package cannot reuse the public order close logic without an import
+	// cycle, and guest pre-orders only hold a coupon reservation.
+	if err := orderflow.ReserveInventoryOnce(l.ctx, l.svcCtx.Store, orderInfo.OrderNo, sub.Id); err != nil {
+		closeErr := l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
+			closed, e := store.Order().UpdateOrderStatusFrom(l.ctx, orderInfo.OrderNo, 1, 3)
+			if e != nil {
+				return e
+			}
+			if closed && orderInfo.CouponReserved {
+				return store.Coupon().ReleaseUsage(l.ctx, orderInfo.Coupon)
+			}
+			return nil
+		})
+		if closeErr != nil {
+			l.Errorw("[Purchase] Close order after reservation failure failed", logger.Field("error", closeErr.Error()), logger.Field("orderNo", orderInfo.OrderNo))
+		}
+		if errors.Is(err, orderflow.ErrOutOfStock) {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
+		}
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "reserve inventory error: %v", err.Error())
 	}
 	// Deferred task
 	payload := queue.DeferCloseOrderPayload{

@@ -86,6 +86,14 @@ internal/module/<name>/
      （network 统计 + 审计）。
    - ✅ **checkSubscriptionLogic（2 处）**：事务收窄为纯 subscription 域写（查询 + 批量置状态），
      邮件通知与用户/服务器缓存失效移到提交后执行（可重试副作用）。
+   - ✅ **套餐库存生命周期事件化**（`internal/orderflow/inventory.go`）：库存预留/回补是
+     subscription 域写，从 purchase/portal purchase/closeOrder 的 billing 事务中拆出，
+     以订单号为键做幂等（`subscription.inventory_reserve/restore`）。下单流程：billing 事务
+     建单 → subscription 事务预留（缺货则同步关单补偿，回补因无预留标记而自动跳过）；
+     关单流程：billing 事务 CAS 关单 → subscription 事务回补（断点由重试的关单任务经
+     status==3 分支续跑）。已知窗口：①建单提交后、预留前进程崩溃且用户在 30 分钟内完成网关
+     支付 → 单件超卖（极小概率双重巧合）；②部署切换时刻处于 Pending 的新购订单（旧流程无
+     预留标记）关单时不回补 → 建议低峰部署或部署后跑一次库存核对。
    - ✅ **首个改造完成：`queue/logic/order/activateOrderLogic`**。原单一跨 4 域事务拆为
      四个单域事务：① identity 访客建号（inbox 存 userId 供重放重绑）→ ② subscription/identity
      履约（开通/续费/重置/充值）→ ③ identity 佣金 → ④ billing 结算（优惠券计数 + Paid→Finished
