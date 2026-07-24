@@ -30,7 +30,6 @@ const importPrefix = "github.com/perfect-panel/server/"
 // each new edge makes the future module split harder.
 var legacyLogicImports = map[string][]string{
 	"internal/logic/admin/server": {"internal/logic/nodeconfig"},
-	"internal/logic/auth":         {"internal/logic/common"},
 	"internal/logic/server":       {"internal/logic/nodeconfig"},
 }
 
@@ -61,7 +60,7 @@ var svcImporters = map[string]bool{
 	"internal/logic/admin/console": true,
 	"internal/logic/admin/server":  true,
 	"internal/logic/admin/tool":    true, "internal/logic/admin/user": true,
-	"internal/logic/auth/registerpolicy": true, "internal/logic/common": true,
+	"internal/logic/common":         true,
 	"internal/logic/edge":           true,
 	"internal/logic/public/payment": true,
 	"internal/logic/server":         true,

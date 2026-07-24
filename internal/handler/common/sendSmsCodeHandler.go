@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/logic/common"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
@@ -43,7 +42,7 @@ func SendSmsCodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 				VerifyCodeLimit:    svcCtx.Config.VerifyCode.Limit,
 				VerifyCodeExpire:   svcCtx.Config.VerifyCode.ExpireTime,
 			},
-			Policy: registerpolicy.NewServicePolicy(svcCtx),
+			Policy: svcCtx.Identity.AuthPolicy(),
 		})
 		resp, err := l.SendSmsCode(&req)
 		result.HttpResult(c, resp, err)

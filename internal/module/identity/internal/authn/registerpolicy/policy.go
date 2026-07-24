@@ -1,3 +1,5 @@
+// Package registerpolicy enforces the administrator-configured account
+// policies shared by every authentication and registration path.
 package registerpolicy
 
 import (
@@ -7,12 +9,13 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/svc"
+	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/limit"
 	"github.com/perfect-panel/server/pkg/turnstile"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -21,51 +24,57 @@ const (
 	MethodDevice = authmethod.Device
 )
 
-// ServicePolicy adapts the application service context to a use case policy
-// port. Use cases should depend on its small method set rather than on
-// ServiceContext directly.
+// Snapshot is the per-request view of the runtime-mutable policy settings.
+type Snapshot struct {
+	EmailEnabled  bool
+	MobileEnabled bool
+	DeviceEnabled bool
+
+	StopRegister            bool
+	RegisterVerify          bool
+	TurnstileSecret         string
+	EnableIpRegisterLimit   bool
+	IpRegisterLimit         int64
+	IpRegisterLimitDuration int64
+}
+
+// Deps declares the policy's collaborators; the identity facade provides
+// them.
+type Deps struct {
+	Auths repository.AuthRepo
+	Redis *redis.Client
+	// Config snapshots the runtime-mutable policy settings per call.
+	Config func() Snapshot
+}
+
+// ServicePolicy is the use-case policy port implementation.
 type ServicePolicy struct {
-	svcCtx *svc.ServiceContext
+	deps Deps
 }
 
-func NewServicePolicy(svcCtx *svc.ServiceContext) ServicePolicy {
-	return ServicePolicy{svcCtx: svcCtx}
-}
-
-func (p ServicePolicy) EnsureMethodEnabled(ctx context.Context, method string) error {
-	return EnsureMethodEnabled(ctx, p.svcCtx, method)
-}
-
-func (p ServicePolicy) EnsureRegistrationOpen(ctx context.Context, method string) error {
-	return EnsureRegistrationOpen(ctx, p.svcCtx, method)
-}
-
-func (p ServicePolicy) VerifyHuman(ctx context.Context, token, ip string) error {
-	return VerifyHuman(ctx, p.svcCtx, token, ip)
-}
-
-func (p ServicePolicy) TakeIPPermit(ctx context.Context, ip string) error {
-	return TakeIPPermit(ctx, p.svcCtx, ip)
+func New(deps Deps) ServicePolicy {
+	return ServicePolicy{deps: deps}
 }
 
 // EnsureMethodEnabled rejects direct calls to authentication methods disabled
 // by the administrator. OAuth methods are loaded from the auth_method table.
-func EnsureMethodEnabled(ctx context.Context, svcCtx *svc.ServiceContext, method string) error {
+func (p ServicePolicy) EnsureMethodEnabled(ctx context.Context, method string) error {
+	cfg := p.deps.Config()
 	switch method {
 	case MethodEmail:
-		if svcCtx.Config.Email.Enable {
+		if cfg.EmailEnabled {
 			return nil
 		}
 	case MethodMobile:
-		if svcCtx.Config.Mobile.Enable {
+		if cfg.MobileEnabled {
 			return nil
 		}
 	case MethodDevice:
-		if svcCtx.Config.Device.Enable {
+		if cfg.DeviceEnabled {
 			return nil
 		}
 	default:
-		configured, err := svcCtx.Store.Auth().FindOneByMethod(ctx, method)
+		configured, err := p.deps.Auths.FindOneByMethod(ctx, method)
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.GetAuthenticatorError), "load auth method %q: %v", method, err)
 		}
@@ -77,23 +86,24 @@ func EnsureMethodEnabled(ctx context.Context, svcCtx *svc.ServiceContext, method
 }
 
 // EnsureRegistrationOpen applies policies shared by every new-account path.
-func EnsureRegistrationOpen(ctx context.Context, svcCtx *svc.ServiceContext, method string) error {
-	if svcCtx.Config.Register.StopRegister {
+func (p ServicePolicy) EnsureRegistrationOpen(ctx context.Context, method string) error {
+	if p.deps.Config().StopRegister {
 		return errors.Wrap(xerr.NewErrCode(xerr.StopRegister), "registration is disabled")
 	}
-	return EnsureMethodEnabled(ctx, svcCtx, method)
+	return p.EnsureMethodEnabled(ctx, method)
 }
 
 // VerifyHuman enforces the configured registration Turnstile challenge.
-func VerifyHuman(ctx context.Context, svcCtx *svc.ServiceContext, token, ip string) error {
-	if !svcCtx.Config.Verify.RegisterVerify {
+func (p ServicePolicy) VerifyHuman(ctx context.Context, token, ip string) error {
+	cfg := p.deps.Config()
+	if !cfg.RegisterVerify {
 		return nil
 	}
-	if strings.TrimSpace(token) == "" || strings.TrimSpace(svcCtx.Config.Verify.TurnstileSecret) == "" {
+	if strings.TrimSpace(token) == "" || strings.TrimSpace(cfg.TurnstileSecret) == "" {
 		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "registration verification failed")
 	}
 	verifier := turnstile.New(turnstile.Config{
-		Secret:  svcCtx.Config.Verify.TurnstileSecret,
+		Secret:  cfg.TurnstileSecret,
 		Timeout: 3 * time.Second,
 	})
 	ok, err := verifier.Verify(ctx, token, ip)
@@ -108,12 +118,12 @@ func VerifyHuman(ctx context.Context, svcCtx *svc.ServiceContext, token, ip stri
 
 // TakeIPPermit atomically reserves one registration from the configured IP
 // quota. The duration is configured in minutes.
-func TakeIPPermit(ctx context.Context, svcCtx *svc.ServiceContext, ip string) error {
-	cfg := svcCtx.Config.Register
+func (p ServicePolicy) TakeIPPermit(ctx context.Context, ip string) error {
+	cfg := p.deps.Config()
 	if !cfg.EnableIpRegisterLimit {
 		return nil
 	}
-	if svcCtx.Redis == nil || cfg.IpRegisterLimit <= 0 || cfg.IpRegisterLimitDuration <= 0 {
+	if p.deps.Redis == nil || cfg.IpRegisterLimit <= 0 || cfg.IpRegisterLimitDuration <= 0 {
 		return errors.Wrap(xerr.NewErrCode(xerr.ERROR), "invalid IP registration limit configuration")
 	}
 	parsedIP := net.ParseIP(strings.TrimSpace(ip))
@@ -128,7 +138,7 @@ func TakeIPPermit(ctx context.Context, svcCtx *svc.ServiceContext, ip string) er
 	limiter := limit.NewPeriodLimit(
 		int(cfg.IpRegisterLimitDuration*60),
 		int(cfg.IpRegisterLimit),
-		svcCtx.Redis,
+		p.deps.Redis,
 		config.RegisterIPLimitKeyPrefix,
 	)
 	permit, err := limiter.TakeCtx(ctx, parsedIP.String())

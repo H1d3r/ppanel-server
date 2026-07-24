@@ -200,9 +200,8 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 			}
 		},
 
-		Auths:  store.Auth(),
-		Redis:  srv.Redis,
-		Policy: authMethodPolicy{svc: srv},
+		Auths: store.Auth(),
+		Redis: srv.Redis,
 		EmailDomains: func() (string, bool) {
 			return srv.Config.Email.DomainSuffixList, srv.Config.Email.EnableDomainSuffix
 		},
@@ -210,16 +209,38 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 		NotifyTelegramUnbind: func(userID, chatID int64) error {
 			return srv.NotifyTelegramUnbind(userID, chatID)
 		},
+		AuthConfig: func() identity.AuthSnapshot {
+			c := srv.Config
+			return identity.AuthSnapshot{
+				JWTAccessSecret: c.JwtAuth.AccessSecret,
+				JWTAccessExpire: c.JwtAuth.AccessExpire,
+
+				EmailEnabled:            c.Email.Enable,
+				EmailVerifyEnabled:      c.Email.EnableVerify,
+				EmailDomainSuffixList:   c.Email.DomainSuffixList,
+				EmailEnableDomainSuffix: c.Email.EnableDomainSuffix,
+				MobileEnabled:           c.Mobile.Enable,
+				DeviceEnabled:           c.Device.Enable,
+				DeviceOnlyReal:          c.Device.OnlyRealDevice,
+
+				InviteForced:      c.Invite.ForcedInvite,
+				OnlyFirstPurchase: c.Invite.OnlyFirstPurchase,
+				TrialEnabled:      c.Register.EnableTrial,
+				TrialSubscribeID:  c.Register.TrialSubscribe,
+				TrialTime:         c.Register.TrialTime,
+				TrialTimeUnit:     c.Register.TrialTimeUnit,
+
+				StopRegister:            c.Register.StopRegister,
+				RegisterVerify:          c.Verify.RegisterVerify,
+				TurnstileSecret:         c.Verify.TurnstileSecret,
+				EnableIpRegisterLimit:   c.Register.EnableIpRegisterLimit,
+				IpRegisterLimit:         c.Register.IpRegisterLimit,
+				IpRegisterLimitDuration: c.Register.IpRegisterLimitDuration,
+
+				SiteHost: c.Site.Host,
+			}
+		},
 	})
-}
-
-// authMethodPolicy adapts the identity module's policy port to the
-// late-bound register-policy hook assigned by the transport server (the
-// register policy package imports this one).
-type authMethodPolicy struct{ svc *ServiceContext }
-
-func (p authMethodPolicy) EnsureMethodEnabled(ctx context.Context, method string) error {
-	return p.svc.EnsureAuthMethodEnabled(ctx, method)
 }
 
 // newSupportModule wires the support module against the legacy store. The

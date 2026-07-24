@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/auth"
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -50,17 +48,7 @@ func TelephoneLoginHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 				return
 			}
 		}
-		l := auth.NewTelephoneLoginLogic(c, auth.TelephoneLoginDependencies{
-			Store: svcCtx.Store,
-			Redis: svcCtx.Redis,
-			Config: auth.TelephoneLoginConfig{
-				JWTAccessSecret: svcCtx.Config.JwtAuth.AccessSecret,
-				JWTAccessExpire: svcCtx.Config.JwtAuth.AccessExpire,
-			},
-			Policy:       registerpolicy.NewServicePolicy(svcCtx),
-			DeviceBinder: auth.NewBindDeviceLogic(c, auth.BindDeviceDependencies{Store: svcCtx.Store}),
-		})
-		resp, err := l.TelephoneLogin(&req, ctx.ClientIP(), string(ctx.UserAgent()))
+		resp, err := svcCtx.Identity.TelephoneLogin(c, &req, ctx.ClientIP(), string(ctx.UserAgent()))
 		result.HttpResult(ctx, resp, err)
 	}
 }

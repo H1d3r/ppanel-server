@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/auth/oauth"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -30,11 +29,7 @@ func AppleLoginCallbackHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request data"})
 			return
 		}
-		l := oauth.NewAppleLoginCallbackLogic(c, oauth.AppleLoginCallbackDependencies{
-			Redis:            svcCtx.Redis,
-			FallbackRedirect: svcCtx.Config.Site.Host,
-		})
-		redirect, err := l.AppleLoginCallback(&req)
+		redirect, err := svcCtx.Identity.AppleLoginCallback(c, &req)
 		if err != nil {
 			result.HttpResult(ctx, nil, err)
 			return

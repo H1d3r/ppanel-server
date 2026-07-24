@@ -45,12 +45,11 @@ type ServiceContext struct {
 	// configuration changed; assigned by the transport server alongside
 	// Restart (the initialize package cannot be imported here).
 	ReinitSubsystem func(subsystem string)
-	// EnsureAuthMethodEnabled and NotifyTelegramUnbind are assigned by the
-	// transport server alongside Restart: their implementations live in
-	// legacy logic packages that import this package. Modules reach them
-	// through late-binding closures wired in modules.go.
-	EnsureAuthMethodEnabled func(ctx context.Context, method string) error
-	NotifyTelegramUnbind    func(userID, chatID int64) error
+	// NotifyTelegramUnbind is assigned by the transport server alongside
+	// Restart: its implementation lives in the legacy telegram logic package,
+	// which imports this package. Modules reach it through a late-binding
+	// closure wired in modules.go.
+	NotifyTelegramUnbind  func(userID, chatID int64) error
 	TelegramBot           *tgbotapi.BotAPI
 	NodeMultiplierManager *nodeMultiplier.Manager
 	AuthLimiter           *limit.PeriodLimit

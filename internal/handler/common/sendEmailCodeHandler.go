@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/logic/common"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
@@ -47,7 +46,7 @@ func SendEmailCodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 				SiteLogo:           svcCtx.Config.Site.SiteLogo,
 				SiteName:           svcCtx.Config.Site.SiteName,
 			},
-			Policy: registerpolicy.NewServicePolicy(svcCtx),
+			Policy: svcCtx.Identity.AuthPolicy(),
 		})
 		resp, err := l.SendEmailCode(&req)
 		result.HttpResult(c, resp, err)

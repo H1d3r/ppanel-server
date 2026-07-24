@@ -11,13 +11,12 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/perfect-panel/server/initialize"
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/logic/telegram"
-	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/internal/report"
 	"github.com/perfect-panel/server/internal/transport/httpserver"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/pkg/tool"
 
 	"github.com/perfect-panel/server/pkg/proc"
 	"github.com/perfect-panel/server/pkg/trace"
@@ -121,9 +120,6 @@ func (m *Service) Start() {
 		case "subscribe":
 			initialize.Subscribe(m.svc)
 		}
-	}
-	m.svc.EnsureAuthMethodEnabled = func(ctx context.Context, method string) error {
-		return registerpolicy.EnsureMethodEnabled(ctx, m.svc, method)
 	}
 	m.svc.NotifyTelegramUnbind = func(userID, chatID int64) error {
 		text, err := tool.RenderTemplateToString(telegram.UnbindNotify, map[string]string{
