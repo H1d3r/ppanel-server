@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/module/billing/internal/activation"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminorder"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminpayment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/callbacks"
@@ -96,6 +97,13 @@ type Service interface {
 	QueryWithdrawalLog(ctx context.Context, req *dto.QueryWithdrawalLogListRequest) (*dto.QueryWithdrawalLogListResponse, error)
 	QueryUserAffiliate(ctx context.Context) (*dto.QueryUserAffiliateCountResponse, error)
 	QueryUserAffiliateList(ctx context.Context, req *dto.QueryUserAffiliateListRequest) (*dto.QueryUserAffiliateListResponse, error)
+
+	// The paid-order activation stages sequenced by the queue shell:
+	// recharge credit, referral commission and final settlement. Each is
+	// idempotent.
+	ActivateRecharge(ctx context.Context, orderNo string) (balance int64, err error)
+	SettleOrderCommission(ctx context.Context, orderNo string, buyerID int64) error
+	FinalizeOrder(ctx context.Context, orderNo string) error
 }
 
 // ErrIdempotencyKeyReused is handled as HTTP 409 by the V2 handler. It is a
@@ -181,6 +189,12 @@ type Deps struct {
 	// IsGatewayMode reports whether notify URLs must use the gateway prefix.
 	IsGatewayMode func() bool
 
+	// InvitePolicy snapshots the runtime-mutable site-wide referral
+	// fallback for the commission stage; UserProfiles resolves referral
+	// settings from the identity domain.
+	InvitePolicy func() (percentage uint8, onlyFirstPurchase bool)
+	UserProfiles activation.ProfileReader
+
 	// Wallet-specific dependencies: audit-log statements, user cache
 	// invalidation and the identity-domain read ports.
 	Logs        repository.LogRepo
@@ -232,6 +246,12 @@ func New(deps Deps) Service {
 		callbacks:  callbacks.NewService(deps.Orders, deps.Queue),
 		portal:     portalSvc,
 		checkout:   checkoutSvc,
+		activation: activation.NewService(activation.Deps{
+			Orders:       deps.Orders,
+			Store:        deps.Store,
+			Profiles:     deps.UserProfiles,
+			InvitePolicy: deps.InvitePolicy,
+		}),
 		wallet: wallet.NewService(wallet.Deps{
 			Logs:        deps.Logs,
 			Cache:       deps.UserCache,
@@ -259,6 +279,7 @@ type service struct {
 	callbacks  *callbacks.Service
 	v2         *v2orch.Service
 	wallet     *wallet.Service
+	activation *activation.Service
 }
 
 func (s *service) CreateOrder(ctx context.Context, req *dto.CreateOrderRequest) error {
@@ -431,4 +452,16 @@ func (s *service) QueryUserAffiliate(ctx context.Context) (*dto.QueryUserAffilia
 
 func (s *service) QueryUserAffiliateList(ctx context.Context, req *dto.QueryUserAffiliateListRequest) (*dto.QueryUserAffiliateListResponse, error) {
 	return s.wallet.QueryUserAffiliateList(ctx, req)
+}
+
+func (s *service) ActivateRecharge(ctx context.Context, orderNo string) (int64, error) {
+	return s.activation.ActivateRecharge(ctx, orderNo)
+}
+
+func (s *service) SettleOrderCommission(ctx context.Context, orderNo string, buyerID int64) error {
+	return s.activation.SettleOrderCommission(ctx, orderNo, buyerID)
+}
+
+func (s *service) FinalizeOrder(ctx context.Context, orderNo string) error {
+	return s.activation.FinalizeOrder(ctx, orderNo)
 }

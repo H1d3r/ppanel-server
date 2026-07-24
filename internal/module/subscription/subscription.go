@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/application"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/delivery"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/fulfillment"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/quotatask"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
@@ -28,6 +29,10 @@ type Service interface {
 	// ProcessQuotaTask executes an admin-scheduled quota grant (time
 	// extension / gift credit) for the task's subscription scope.
 	ProcessQuotaTask(ctx context.Context, taskID int64) error
+	// FulfillPaidOrder applies a paid order's business effect (new
+	// subscription, renewal or traffic reset) exactly once and returns the
+	// notification context.
+	FulfillPaidOrder(ctx context.Context, orderNo string) (*FulfillmentOutcome, error)
 
 	// The client-application management for subscription delivery.
 	CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
@@ -136,6 +141,14 @@ type Deps struct {
 
 func New(deps Deps) Service {
 	return &service{
+		fulfil: fulfillment.NewService(fulfillment.Deps{
+			Orders:      deps.Orders,
+			Store:       deps.FullStore,
+			UserSubs:    deps.UserSubs,
+			Plans:       deps.Plans,
+			Cache:       deps.Cache,
+			SingleModel: deps.SingleModel,
+		}),
 		quota: quotatask.NewService(quotatask.Deps{
 			Store: deps.FullStore,
 		}),
@@ -199,6 +212,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	fulfil     *fulfillment.Service
 	quota      *quotatask.Service
 	sweeper    *sweep.Service
 	apps       *application.Service
@@ -384,3 +398,17 @@ func (s *service) ProcessQuotaTask(ctx context.Context, taskID int64) error {
 // ErrQuotaTaskUnretryable re-exports the quota subdomain's skip-retry
 // sentinel for the queue shell.
 var ErrQuotaTaskUnretryable = quotatask.ErrUnretryable
+
+// FulfillmentOutcome re-exports the fulfillment subdomain's notification
+// context, and the NotifyKind* constants label which notice applies.
+type FulfillmentOutcome = fulfillment.Outcome
+
+const (
+	NotifyKindPurchase     = fulfillment.NotifyPurchase
+	NotifyKindRenewal      = fulfillment.NotifyRenewal
+	NotifyKindResetTraffic = fulfillment.NotifyResetTraffic
+)
+
+func (s *service) FulfillPaidOrder(ctx context.Context, orderNo string) (*FulfillmentOutcome, error) {
+	return s.fulfil.FulfillPaidOrder(ctx, orderNo)
+}

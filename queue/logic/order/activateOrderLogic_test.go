@@ -8,17 +8,41 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/perfect-panel/server/internal/config"
 	inboxEntity "github.com/perfect-panel/server/internal/model/entity/inbox"
 	logEntity "github.com/perfect-panel/server/internal/model/entity/log"
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/module/billing"
+	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/queue/types"
 	"gorm.io/gorm"
 )
+
+// newActivationSvc wires the real subscription/billing modules over the fake
+// store so the saga tests exercise the same facade path production uses.
+func newActivationSvc(store *activationStore, singleModel bool) *svc.ServiceContext {
+	subMod := subscription.New(subscription.Deps{
+		Plans:       store.subscribes,
+		UserSubs:    store.users,
+		Cache:       store.users,
+		Orders:      store.orders,
+		FullStore:   store,
+		SingleModel: func() bool { return singleModel },
+	})
+	bilMod := billing.New(billing.Deps{
+		Orders:       store.orders,
+		Store:        store,
+		Tx:           store,
+		UserProfiles: store.users,
+		InvitePolicy: func() (uint8, bool) { return 0, false },
+		SingleModel:  func() bool { return false },
+		CurrencyUnit: func() string { return "CNY" },
+	})
+	return &svc.ServiceContext{Store: store, Subscription: subMod, Billing: bilMod}
+}
 
 type activationStore struct {
 	repository.Store
@@ -112,6 +136,14 @@ func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo s
 type activationWalletRepo struct {
 	repository.WalletRepo
 	wallet *userEntity.Wallet
+}
+
+func (r *activationWalletRepo) FindWallet(_ context.Context, userId int64) (*userEntity.Wallet, error) {
+	if r.wallet == nil || r.wallet.UserId != userId {
+		return nil, nil
+	}
+	copy := *r.wallet
+	return &copy, nil
 }
 
 func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
@@ -239,7 +271,7 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 		logs:   &activationLogRepo{},
 		inbox:  newActivationInboxRepo(),
 	}
-	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
+	logic := NewActivateOrderLogic(newActivationSvc(store, false))
 	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "recharge-order"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -277,7 +309,7 @@ func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
 		logs:   &activationLogRepo{},
 		inbox:  newActivationInboxRepo(),
 	}
-	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
+	logic := NewActivateOrderLogic(newActivationSvc(store, false))
 	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "recharge-replay"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -324,7 +356,7 @@ func TestActivateRenewalReplayExtendsSubscriptionOnce(t *testing.T) {
 		logs:       &activationLogRepo{},
 		inbox:      newActivationInboxRepo(),
 	}
-	logic := NewActivateOrderLogic(&svc.ServiceContext{Store: store})
+	logic := NewActivateOrderLogic(newActivationSvc(store, false))
 	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: "renewal-replay"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -353,12 +385,17 @@ func TestActivateRenewalReplayExtendsSubscriptionOnce(t *testing.T) {
 	}
 }
 
-func TestCreateUserSubscriptionTxEnforcesQuota(t *testing.T) {
-	users := &activationUserRepo{quotaCount: 1}
-	store := &activationStore{users: users}
-	logic := NewActivateOrderLogic(&svc.ServiceContext{})
+func TestFulfillmentEnforcesQuota(t *testing.T) {
+	users := &activationUserRepo{quotaCount: 1, user: &userEntity.User{Id: 7}}
+	store := &activationStore{
+		users:      users,
+		orders:     &activationOrderRepo{order: &orderEntity.Order{OrderNo: "quota-order", UserId: 7, SubscribeId: 9, Type: OrderTypeSubscribe, Status: OrderStatusPaid}},
+		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9, Quota: 1}},
+		inbox:      newActivationInboxRepo(),
+	}
+	svcCtx := newActivationSvc(store, false)
 
-	_, err := logic.createUserSubscriptionTx(context.Background(), store, &orderEntity.Order{UserId: 7, SubscribeId: 9}, &subscribeEntity.Subscribe{Quota: 1})
+	_, err := svcCtx.Subscription.FulfillPaidOrder(context.Background(), "quota-order")
 	if err == nil {
 		t.Fatal("activation created a subscription after quota was exhausted")
 	}
@@ -367,12 +404,17 @@ func TestCreateUserSubscriptionTxEnforcesQuota(t *testing.T) {
 	}
 }
 
-func TestCreateUserSubscriptionTxEnforcesSingleModel(t *testing.T) {
-	users := &activationUserRepo{blocking: true}
-	store := &activationStore{users: users}
-	logic := NewActivateOrderLogic(&svc.ServiceContext{Config: config.Config{Subscribe: config.SubscribeConfig{SingleModel: true}}})
+func TestFulfillmentEnforcesSingleModel(t *testing.T) {
+	users := &activationUserRepo{blocking: true, user: &userEntity.User{Id: 7}}
+	store := &activationStore{
+		users:      users,
+		orders:     &activationOrderRepo{order: &orderEntity.Order{OrderNo: "single-order", UserId: 7, SubscribeId: 9, Type: OrderTypeSubscribe, Status: OrderStatusPaid}},
+		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9}},
+		inbox:      newActivationInboxRepo(),
+	}
+	svcCtx := newActivationSvc(store, true)
 
-	_, err := logic.createUserSubscriptionTx(context.Background(), store, &orderEntity.Order{UserId: 7, SubscribeId: 9}, &subscribeEntity.Subscribe{})
+	_, err := svcCtx.Subscription.FulfillPaidOrder(context.Background(), "single-order")
 	if err == nil {
 		t.Fatal("activation created a subscription despite a blocking subscription")
 	}
@@ -381,28 +423,7 @@ func TestCreateUserSubscriptionTxEnforcesSingleModel(t *testing.T) {
 	}
 }
 
-func TestActivateResetTrafficTxClearsFinishedAt(t *testing.T) {
-	logic, store := newResetTrafficTestLogic(t)
-
-	result, err := logic.activateResetTrafficTx(context.Background(), store, &orderEntity.Order{
-		OrderNo: "reset-order", UserId: 7, SubscribeToken: "subscription-token",
-	})
-	if err != nil {
-		t.Fatalf("activate reset traffic: %v", err)
-	}
-	if store.users.subscription.FinishedAt != nil {
-		t.Fatal("reset traffic left FinishedAt set")
-	}
-	if result.userSub.FinishedAt != nil {
-		t.Fatal("activation result left FinishedAt set")
-	}
-	if store.users.subscription.Status != userEntity.SubscribeStatusActive {
-		t.Fatalf("status = %d, want active", store.users.subscription.Status)
-	}
-}
-
-func newResetTrafficTestLogic(t *testing.T) (*ActivateOrderLogic, *activationStore) {
-	t.Helper()
+func TestFulfillResetTrafficClearsFinishedAt(t *testing.T) {
 	finishedAt := time.Now().Add(-time.Hour)
 	store := &activationStore{
 		users: &activationUserRepo{
@@ -412,10 +433,22 @@ func newResetTrafficTestLogic(t *testing.T) (*ActivateOrderLogic, *activationSto
 				Download: 100, Upload: 200, Status: userEntity.SubscribeStatusFinished, FinishedAt: &finishedAt,
 			},
 		},
+		orders:     &activationOrderRepo{order: &orderEntity.Order{OrderNo: "reset-order", UserId: 7, SubscribeToken: "subscription-token", Type: OrderTypeResetTraffic, Status: OrderStatusPaid}},
 		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9}},
 		logs:       &activationLogRepo{},
+		inbox:      newActivationInboxRepo(),
 	}
-	return NewActivateOrderLogic(&svc.ServiceContext{Store: store}), store
+	svcCtx := newActivationSvc(store, false)
+
+	if _, err := svcCtx.Subscription.FulfillPaidOrder(context.Background(), "reset-order"); err != nil {
+		t.Fatalf("activate reset traffic: %v", err)
+	}
+	if store.users.subscription.FinishedAt != nil {
+		t.Fatal("reset traffic left FinishedAt set")
+	}
+	if store.users.subscription.Status != userEntity.SubscribeStatusActive {
+		t.Fatalf("status = %d, want active", store.users.subscription.Status)
+	}
 }
 
 func (s *activationStore) walletRepo() *activationWalletRepo {

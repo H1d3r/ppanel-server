@@ -52,6 +52,11 @@ func newBillingModule(c config.Config, store repository.Store, queue *asynq.Clie
 		Affiliates:  store.User(),
 		AuthMethods: store.UserAuth(),
 
+		UserProfiles: store.User(),
+		InvitePolicy: func() (uint8, bool) {
+			return uint8(srv.Config.Invite.ReferralPercentage), srv.Config.Invite.OnlyFirstPurchase
+		},
+
 		PortalPlans:        store.Subscribe(),
 		GuestAccounts:      store.UserAuth(),
 		Sessions:           rds,
