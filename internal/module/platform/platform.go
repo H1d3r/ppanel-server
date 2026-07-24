@@ -10,8 +10,10 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/platform/internal/auditlog"
 	"github.com/perfect-panel/server/internal/module/platform/internal/dashboard"
+	"github.com/perfect-panel/server/internal/module/platform/internal/publicinfo"
 	"github.com/perfect-panel/server/internal/module/platform/internal/systemsetting"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Service is the only surface other code may depend on; the implementation
@@ -68,7 +70,19 @@ type Service interface {
 	QueryServerTotalData(ctx context.Context) (*dto.ServerTotalDataResponse, error)
 	QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelpyResponse, error)
 	QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsResponse, error)
+
+	// Unauthenticated site-level reads for the public portal.
+	GetGlobalConfig(ctx context.Context) (*dto.GetGlobalConfigResponse, error)
+	GetTos(ctx context.Context) (*dto.GetTosResponse, error)
+	GetPrivacyPolicy(ctx context.Context) (*dto.PrivacyPolicyConfig, error)
+	GetStat(ctx context.Context) (*dto.GetStatResponse, error)
+	GetClient(ctx context.Context) (*dto.GetSubscribeClientResponse, error)
+	Heartbeat(ctx context.Context) (*dto.HeartbeatResponse, error)
 }
+
+// GlobalConfigSnapshot re-exports the public-info subdomain's per-request
+// view of the public runtime configuration for the composition root.
+type GlobalConfigSnapshot = publicinfo.GlobalConfigSnapshot
 
 // Deps declares everything the module needs; the composition root
 // (internal/svc) provides them.
@@ -96,6 +110,12 @@ type Deps struct {
 	Tickets dashboard.TicketStatsReader
 	Nodes   dashboard.NodeStatsReader
 	Cache   dashboard.Cache
+
+	// Public-info dependencies: the full read surface, the shared Redis
+	// cache and the runtime-mutable public configuration snapshot.
+	FullStore    repository.Store
+	Redis        *redis.Client
+	PublicConfig func() GlobalConfigSnapshot
 }
 
 func New(deps Deps) Service {
@@ -118,6 +138,11 @@ func New(deps Deps) Service {
 			Logs:    deps.Logs,
 			Cache:   deps.Cache,
 		}),
+		public: publicinfo.NewService(publicinfo.Deps{
+			Store:  deps.FullStore,
+			Redis:  deps.Redis,
+			Config: deps.PublicConfig,
+		}),
 		logs: auditlog.NewService(auditlog.Deps{
 			Logs:                deps.Logs,
 			System:              deps.System,
@@ -133,6 +158,7 @@ type service struct {
 	logs      *auditlog.Service
 	settings  *systemsetting.Service
 	dashboard *dashboard.Service
+	public    *publicinfo.Service
 }
 
 func (s *service) FilterBalanceLog(ctx context.Context, req *dto.FilterBalanceLogRequest) (*dto.FilterBalanceLogResponse, error) {
@@ -309,4 +335,28 @@ func (s *service) QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelp
 
 func (s *service) QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsResponse, error) {
 	return s.dashboard.QueryUserStatistics(ctx)
+}
+
+func (s *service) GetGlobalConfig(ctx context.Context) (*dto.GetGlobalConfigResponse, error) {
+	return s.public.GetGlobalConfig(ctx)
+}
+
+func (s *service) GetTos(ctx context.Context) (*dto.GetTosResponse, error) {
+	return s.public.GetTos(ctx)
+}
+
+func (s *service) GetPrivacyPolicy(ctx context.Context) (*dto.PrivacyPolicyConfig, error) {
+	return s.public.GetPrivacyPolicy(ctx)
+}
+
+func (s *service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
+	return s.public.GetStat(ctx)
+}
+
+func (s *service) GetClient(ctx context.Context) (*dto.GetSubscribeClientResponse, error) {
+	return s.public.GetClient(ctx)
+}
+
+func (s *service) Heartbeat(ctx context.Context) (*dto.HeartbeatResponse, error) {
+	return s.public.Heartbeat(ctx)
 }

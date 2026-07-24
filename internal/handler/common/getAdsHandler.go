@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/common"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -33,8 +32,7 @@ func GetAdsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := common.NewGetAdsLogic(ctx, svcCtx)
-		resp, err := l.GetAds(&req)
+		resp, err := svcCtx.Support.GetPublicAds(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }

@@ -60,7 +60,6 @@ var svcImporters = map[string]bool{
 	"internal/logic/admin/console": true,
 	"internal/logic/admin/server":  true,
 	"internal/logic/admin/tool":    true, "internal/logic/admin/user": true,
-	"internal/logic/common":         true,
 	"internal/logic/edge":           true,
 	"internal/logic/public/payment": true,
 	"internal/logic/server":         true,

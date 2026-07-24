@@ -1,4 +1,4 @@
-package common
+package publicinfo
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -20,21 +19,21 @@ import (
 
 type GetStatLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get Tos
-func NewGetStatLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetStatLogic {
+func newGetStatLogic(ctx context.Context, deps Deps) *GetStatLogic {
 	return &GetStatLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetStatLogic) GetStat() (resp *dto.GetStatResponse, err error) {
-	respJson, err := l.svcCtx.Redis.Get(l.ctx, config.CommonStatCacheKey).Result()
+	respJson, err := l.deps.Redis.Get(l.ctx, config.CommonStatCacheKey).Result()
 	if err == nil {
 		cachedResp := &dto.GetStatResponse{}
 		err = json.Unmarshal([]byte(respJson), cachedResp)
@@ -42,8 +41,8 @@ func (l *GetStatLogic) GetStat() (resp *dto.GetStatResponse, err error) {
 			return cachedResp, nil
 		}
 	}
-	userStore := l.svcCtx.Store.User()
-	nodeStore := l.svcCtx.Store.Node()
+	userStore := l.deps.Store.User()
+	nodeStore := l.deps.Store.Node()
 	u, err := userStore.CountEnabledUsers(l.ctx)
 	if err != nil {
 		l.Logger.Error("[GetStatLogic] get user count failed: ", logger.Field("error", err.Error()))
@@ -135,6 +134,6 @@ func (l *GetStatLogic) GetStat() (resp *dto.GetStatResponse, err error) {
 		Protocol: protocol,
 	}
 	val, _ := json.Marshal(*resp)
-	_ = l.svcCtx.Redis.Set(l.ctx, config.CommonStatCacheKey, string(val), time.Duration(3600)*time.Second).Err()
+	_ = l.deps.Redis.Set(l.ctx, config.CommonStatCacheKey, string(val), time.Duration(3600)*time.Second).Err()
 	return resp, nil
 }

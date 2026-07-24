@@ -35,6 +35,8 @@ type Service interface {
 	DeleteAds(ctx context.Context, req *dto.DeleteAdsRequest) error
 	GetAdsDetail(ctx context.Context, req *dto.GetAdsDetailRequest) (*dto.Ads, error)
 	GetAdsList(ctx context.Context, req *dto.GetAdsListRequest) (*dto.GetAdsListResponse, error)
+	// GetPublicAds lists the active ads for the public site.
+	GetPublicAds(ctx context.Context, req *dto.GetAdsRequest) (*dto.GetAdsResponse, error)
 
 	CreateDocument(ctx context.Context, req *dto.CreateDocumentRequest) error
 	UpdateDocument(ctx context.Context, req *dto.UpdateDocumentRequest) error
@@ -288,4 +290,8 @@ func (s *service) QueryQuotaTaskPreCount(ctx context.Context, req *dto.QueryQuot
 
 func (s *service) QueryQuotaTaskStatus(ctx context.Context, req *dto.QueryQuotaTaskStatusRequest) (*dto.QueryQuotaTaskStatusResponse, error) {
 	return s.marketing.QueryQuotaTaskStatus(ctx, req)
+}
+
+func (s *service) GetPublicAds(ctx context.Context, req *dto.GetAdsRequest) (*dto.GetAdsResponse, error) {
+	return s.ads.GetPublicAds(ctx, req)
 }

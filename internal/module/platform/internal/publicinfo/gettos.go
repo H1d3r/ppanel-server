@@ -1,10 +1,9 @@
-package common
+package publicinfo
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -13,23 +12,23 @@ import (
 
 type GetTosLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get Tos
-func NewGetTosLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetTosLogic {
+func newGetTosLogic(ctx context.Context, deps Deps) *GetTosLogic {
 	return &GetTosLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetTosLogic) GetTos() (resp *dto.GetTosResponse, err error) {
 	resp = &dto.GetTosResponse{}
 	// get Tos config from db
-	configs, err := l.svcCtx.Store.System().GetTosConfig(l.ctx)
+	configs, err := l.deps.Store.System().GetTosConfig(l.ctx)
 	if err != nil {
 		l.Errorw("[GetTosLogic] GetTos error: ", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetTos error: %v", err.Error())

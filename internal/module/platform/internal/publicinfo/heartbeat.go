@@ -1,26 +1,25 @@
-package common
+package publicinfo
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
 type HeartbeatLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewHeartbeatLogic Heartbeat
-func NewHeartbeatLogic(ctx context.Context, svcCtx *svc.ServiceContext) *HeartbeatLogic {
+func newHeartbeatLogic(ctx context.Context, deps Deps) *HeartbeatLogic {
 	return &HeartbeatLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
