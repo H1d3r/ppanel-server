@@ -41,8 +41,8 @@ func (l *GetUserListLogic) GetUserList(req *dto.GetUserListRequest) (*dto.GetUse
 
 	userRespList := make([]dto.User, 0, len(list))
 
-	// Wallet values come from the billing-owned table (batch read); the
-	// legacy user columns remain only as the dual-written fallback.
+	// Wallet values come from the billing-owned table (batch read);
+	// accounts without a wallet row read as zero.
 	ids := make([]int64, 0, len(list))
 	for _, item := range list {
 		ids = append(ids, item.Id)

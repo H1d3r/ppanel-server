@@ -11,8 +11,8 @@ import (
 )
 
 // OAuthMethodPolicy checks whether a requested authentication method is
-// enabled; the composition root adapts the legacy register policy until the
-// auth flows join the module.
+// enabled; the sibling authentication subdomain's register policy satisfies
+// it.
 type OAuthMethodPolicy interface {
 	EnsureMethodEnabled(ctx context.Context, method string) error
 }

@@ -164,8 +164,9 @@ type Deps struct {
 	Coupons  repository.CouponRepo
 	Plans    PlanReader
 	UserSubs UserSubscriptionReader
-	// Store is the checkout subdomain's transitional full-store dependency
-	// (documented inside internal/checkout).
+	// Store carries the scoped transactions, wallet view and inbox the
+	// checkout/portal subdomains need; it narrows further when modules own
+	// their persistence (ADR-001 step 6).
 	Store repository.Store
 	Tx    Transactor
 	Queue OrderQueue

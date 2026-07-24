@@ -31,8 +31,8 @@ func (l *GetUserDetailLogic) GetUserDetail(req *dto.GetDetailRequest) (*dto.User
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get user detail error: %v", err.Error())
 	}
 	tool.DeepCopy(&resp, userInfo)
-	// Wallet values come from the billing-owned table; the legacy user
-	// columns remain only as the dual-written fallback.
+	// Wallet values come from the billing-owned table; an account without
+	// a wallet row reads as zero.
 	if w, err := l.deps.Wallet.FindWallet(l.ctx, userInfo.Id); err == nil && w != nil {
 		resp.Balance = w.Balance
 		resp.GiftAmount = w.GiftAmount

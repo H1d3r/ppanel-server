@@ -33,10 +33,10 @@ func newUpdateUserBasicInfoLogic(ctx context.Context, deps Deps) *UpdateUserBasi
 
 func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasiceInfoRequest) error {
 	isDemo := strings.ToLower(os.Getenv("PPANEL_MODE")) == "demo"
-	// The generic transaction is a documented transitional exception: the
-	// admin edit updates identity profile fields and wallet columns (billing
-	// money movement) on the same user row until the wallet table splits out
-	// (ADR-001 step 5).
+	// The admin edit spans two domains by design — identity profile fields
+	// and a billing money adjustment — so it stays on the generic
+	// transaction; when the domains split into services this becomes two
+	// calls without cross-entity atomicity.
 	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		// Financial adjustments must compare and write the latest values
 		// under a lock, with their audit logs in the same transaction.

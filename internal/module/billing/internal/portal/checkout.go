@@ -112,7 +112,7 @@ type checkoutStore struct {
 }
 
 type checkoutTransaction struct {
-	store repository.Store
+	store repository.BillingStore
 }
 
 // NewCheckoutStore adapts the application's repository facade at the
@@ -150,7 +150,9 @@ func (s checkoutStore) ClearUserCache(ctx context.Context, users ...*user.User) 
 }
 
 func (s checkoutStore) InTx(ctx context.Context, fn func(CheckoutTransaction) error) error {
-	return s.store.InTx(ctx, func(store repository.Store) error {
+	// The balance payment touches orders, the wallet and audit logs only, so
+	// the transaction is billing-scoped.
+	return s.store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		return fn(checkoutTransaction{store: store})
 	})
 }
