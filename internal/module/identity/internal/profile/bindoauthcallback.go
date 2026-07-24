@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -28,11 +28,11 @@ const telegramBindAuthExpire = 86400
 type BindOAuthCallbackLogic struct {
 	logger.Logger
 	ctx  context.Context
-	deps BindOAuthCallbackDependencies
+	deps Deps
 }
 
 // Bind OAuth Callback
-func NewBindOAuthCallbackLogic(ctx context.Context, deps BindOAuthCallbackDependencies) *BindOAuthCallbackLogic {
+func newBindOAuthCallbackLogic(ctx context.Context, deps Deps) *BindOAuthCallbackLogic {
 	return &BindOAuthCallbackLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,

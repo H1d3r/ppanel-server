@@ -1,11 +1,10 @@
-package user
+package profile
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/model/entity/auth"
 	githuboauth "github.com/perfect-panel/server/pkg/oauth/github"
 	"github.com/perfect-panel/server/pkg/oauth/google"
@@ -16,27 +15,26 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type BindOAuthLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Bind OAuth
-func NewBindOAuthLogic(ctx context.Context, svcCtx *svc.ServiceContext) *BindOAuthLogic {
+func newBindOAuthLogic(ctx context.Context, deps Deps) *BindOAuthLogic {
 	return &BindOAuthLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *BindOAuthLogic) BindOAuth(req *dto.BindOAuthRequest) (resp *dto.BindOAuthResponse, err error) {
-	if err := registerpolicy.EnsureMethodEnabled(l.ctx, l.svcCtx, req.Method); err != nil {
+	if err := l.deps.Policy.EnsureMethodEnabled(l.ctx, req.Method); err != nil {
 		return nil, err
 	}
 	var uri string
@@ -65,7 +63,7 @@ func (l *BindOAuthLogic) BindOAuth(req *dto.BindOAuthRequest) (resp *dto.BindOAu
 }
 
 func (l *BindOAuthLogic) google(req *dto.BindOAuthRequest) (string, error) {
-	authMethod, err := l.svcCtx.Store.Auth().FindOneByMethod(l.ctx, "google")
+	authMethod, err := l.deps.Auth.FindOneByMethod(l.ctx, "google")
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +81,7 @@ func (l *BindOAuthLogic) google(req *dto.BindOAuthRequest) (string, error) {
 	// generate the state code
 	code := random.KeyNew(32, 1)
 	// save the state code
-	err = l.svcCtx.Redis.Set(l.ctx, fmt.Sprintf("google:%s", code), req.Redirect, 5*60*time.Second).Err()
+	err = l.deps.Redis.Set(l.ctx, fmt.Sprintf("google:%s", code), req.Redirect, 5*60*time.Second).Err()
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +93,7 @@ func (l *BindOAuthLogic) facebook() (string, error) {
 	return "", nil
 }
 func (l *BindOAuthLogic) apple(req *dto.BindOAuthRequest) (string, error) {
-	authMethod, err := l.svcCtx.Store.Auth().FindOneByMethod(l.ctx, "apple")
+	authMethod, err := l.deps.Auth.FindOneByMethod(l.ctx, "apple")
 	if err != nil {
 		return "", err
 	}
@@ -109,14 +107,14 @@ func (l *BindOAuthLogic) apple(req *dto.BindOAuthRequest) (string, error) {
 	// generate the state code
 	code := random.KeyNew(32, 1)
 	// save the state code
-	err = l.svcCtx.Redis.Set(l.ctx, fmt.Sprintf("apple:%s", code), req.Redirect, 5*60*time.Second).Err()
+	err = l.deps.Redis.Set(l.ctx, fmt.Sprintf("apple:%s", code), req.Redirect, 5*60*time.Second).Err()
 	if err != nil {
 		l.Errorw("error save state code to redis", logger.Field("error", err.Error()))
 	}
 	return fmt.Sprintf(uri, cfg.ClientId, fmt.Sprintf("%s/v1/auth/oauth/callback/apple", cfg.RedirectURL), code), nil
 }
 func (l *BindOAuthLogic) github(req *dto.BindOAuthRequest) (string, error) {
-	authMethod, err := l.svcCtx.Store.Auth().FindOneByMethod(l.ctx, "github")
+	authMethod, err := l.deps.Auth.FindOneByMethod(l.ctx, "github")
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +132,7 @@ func (l *BindOAuthLogic) github(req *dto.BindOAuthRequest) (string, error) {
 	// generate the state code
 	code := random.KeyNew(32, 1)
 	// save the state code
-	err = l.svcCtx.Redis.Set(l.ctx, fmt.Sprintf("github:%s", code), req.Redirect, 5*60*time.Second).Err()
+	err = l.deps.Redis.Set(l.ctx, fmt.Sprintf("github:%s", code), req.Redirect, 5*60*time.Second).Err()
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +141,7 @@ func (l *BindOAuthLogic) github(req *dto.BindOAuthRequest) (string, error) {
 }
 
 func (l *BindOAuthLogic) telegram(req *dto.BindOAuthRequest) (string, error) {
-	authMethod, err := l.svcCtx.Store.Auth().FindOneByMethod(l.ctx, "telegram")
+	authMethod, err := l.deps.Auth.FindOneByMethod(l.ctx, "telegram")
 	if err != nil {
 		return "", err
 	}

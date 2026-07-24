@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -11,22 +11,21 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type UpdateUserPasswordLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Update User Password
-func NewUpdateUserPasswordLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateUserPasswordLogic {
+func newUpdateUserPasswordLogic(ctx context.Context, deps Deps) *UpdateUserPasswordLogic {
 	return &UpdateUserPasswordLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -38,7 +37,7 @@ func (l *UpdateUserPasswordLogic) UpdateUserPassword(req *dto.UpdateUserPassword
 	// would keep verifying the new hash with the old legacy algorithm.
 	userInfo.Algo = tool.PasswordAlgoArgon2id
 	userInfo.Salt = ""
-	if err := l.svcCtx.Store.User().Update(l.ctx, userInfo); err != nil {
+	if err := l.deps.Users.Update(l.ctx, userInfo); err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update user password error")
 	}
 	return nil

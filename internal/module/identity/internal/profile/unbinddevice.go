@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -17,22 +16,22 @@ import (
 
 type UnbindDeviceLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Unbind Device
-func NewUnbindDeviceLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UnbindDeviceLogic {
+func newUnbindDeviceLogic(ctx context.Context, deps Deps) *UnbindDeviceLogic {
 	return &UnbindDeviceLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *UnbindDeviceLogic) UnbindDevice(req *dto.UnbindDeviceRequest) error {
 	userInfo := l.ctx.Value(constant.CtxKeyUser).(*user.User)
-	device, err := l.svcCtx.Store.UserDevice().FindOneDevice(l.ctx, req.Id)
+	device, err := l.deps.Devices.FindOneDevice(l.ctx, req.Id)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DeviceNotExist), "find device")
 	}
@@ -41,7 +40,7 @@ func (l *UnbindDeviceLogic) UnbindDevice(req *dto.UnbindDeviceRequest) error {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "device not belong to user")
 	}
 
-	return l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
+	return l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		if err = store.UserDevice().DeleteDevice(l.ctx, req.Id); err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseDeletedError), "delete device err: %v", err)
 		}
@@ -51,7 +50,7 @@ func (l *UnbindDeviceLogic) UnbindDevice(req *dto.UnbindDeviceRequest) error {
 		}
 		sessionId := l.ctx.Value(constant.CtxKeySessionID)
 		sessionIdCacheKey := fmt.Sprintf("%v:%v", config.SessionIdKey, sessionId)
-		l.svcCtx.Redis.Del(l.ctx, sessionIdCacheKey)
+		l.deps.Redis.Del(l.ctx, sessionIdCacheKey)
 		return nil
 	})
 }

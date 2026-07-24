@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -15,16 +14,16 @@ import (
 
 type UnbindOAuthLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Unbind OAuth
-func NewUnbindOAuthLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UnbindOAuthLogic {
+func newUnbindOAuthLogic(ctx context.Context, deps Deps) *UnbindOAuthLogic {
 	return &UnbindOAuthLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -37,7 +36,7 @@ func (l *UnbindOAuthLogic) UnbindOAuth(req *dto.UnbindOAuthRequest) error {
 	if !l.validator(req) {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid parameter")
 	}
-	err := l.svcCtx.Store.UserAuth().DeleteUserAuthMethods(l.ctx, u.Id, req.Method)
+	err := l.deps.UserAuth.DeleteUserAuthMethods(l.ctx, u.Id, req.Method)
 	if err != nil {
 		l.Errorw("delete user auth methods failed:", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseDeletedError), "delete user auth methods failed: %v", err.Error())

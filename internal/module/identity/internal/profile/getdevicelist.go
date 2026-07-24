@@ -1,11 +1,10 @@
-package user
+package profile
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -13,22 +12,22 @@ import (
 
 type GetDeviceListLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get Device List
-func NewGetDeviceListLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetDeviceListLogic {
+func newGetDeviceListLogic(ctx context.Context, deps Deps) *GetDeviceListLogic {
 	return &GetDeviceListLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetDeviceListLogic) GetDeviceList() (resp *dto.GetDeviceListResponse, err error) {
 	userInfo := l.ctx.Value(constant.CtxKeyUser).(*user.User)
-	list, count, err := l.svcCtx.Store.UserDevice().QueryDeviceList(l.ctx, userInfo.Id)
+	list, count, err := l.deps.Devices.QueryDeviceList(l.ctx, userInfo.Id)
 	userRespList := make([]dto.UserDevice, 0)
 	tool.DeepCopy(&userRespList, list)
 	resp = &dto.GetDeviceListResponse{

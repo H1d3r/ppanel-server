@@ -1,9 +1,8 @@
-package user
+package profile
 
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/constant"
 
@@ -13,30 +12,30 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type UpdateBindEmailLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewUpdateBindEmailLogic Update Bind Email
-func NewUpdateBindEmailLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateBindEmailLogic {
+func newUpdateBindEmailLogic(ctx context.Context, deps Deps) *UpdateBindEmailLogic {
 	return &UpdateBindEmailLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) error {
-	if err := registerpolicy.EnsureMethodEnabled(l.ctx, l.svcCtx, registerpolicy.MethodEmail); err != nil {
+	if err := l.deps.Policy.EnsureMethodEnabled(l.ctx, authmethod.Email); err != nil {
 		return err
 	}
-	email, err := authmethod.ValidateEmail(req.Email, l.svcCtx.Config.Email.DomainSuffixList, l.svcCtx.Config.Email.EnableDomainSuffix)
+	domainList, restrict := l.deps.EmailDomains()
+	email, err := authmethod.ValidateEmail(req.Email, domainList, restrict)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid email: %v", err)
 	}
@@ -46,11 +45,11 @@ func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) 
 		logger.Error("current user is not found in context")
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
-	method, err := l.svcCtx.Store.UserAuth().FindUserAuthMethodByUserId(l.ctx, "email", u.Id)
+	method, err := l.deps.UserAuth.FindUserAuthMethodByUserId(l.ctx, "email", u.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindUserAuthMethodByOpenID error")
 	}
-	m, err := l.svcCtx.Store.UserAuth().FindUserAuthMethodByOpenID(l.ctx, "email", req.Email)
+	m, err := l.deps.UserAuth.FindUserAuthMethodByOpenID(l.ctx, "email", req.Email)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindUserAuthMethodByOpenID error")
 	}
@@ -65,13 +64,13 @@ func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) 
 			AuthIdentifier: req.Email,
 			Verified:       false,
 		}
-		if err := l.svcCtx.Store.UserAuth().InsertUserAuthMethods(l.ctx, method); err != nil {
+		if err := l.deps.UserAuth.InsertUserAuthMethods(l.ctx, method); err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "InsertUserAuthMethods error")
 		}
 	} else {
 		method.Verified = false
 		method.AuthIdentifier = req.Email
-		if err := l.svcCtx.Store.UserAuth().UpdateUserAuthMethods(l.ctx, method); err != nil {
+		if err := l.deps.UserAuth.UpdateUserAuthMethods(l.ctx, method); err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "UpdateUserAuthMethods error")
 		}
 	}

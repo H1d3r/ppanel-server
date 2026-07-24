@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/public/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UpdateUserNotifyHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := user.NewUpdateUserNotifyLogic(c, svcCtx)
-		err := l.UpdateUserNotify(&req)
+		err := svcCtx.Identity.UpdateUserNotify(c, &req)
 		result.HttpResult(ctx, nil, err)
 	}
 }

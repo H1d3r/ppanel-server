@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func (p *fakeBindOAuthMethodPolicy) EnsureMethodEnabled(_ context.Context, metho
 func TestBindOAuthCallbackUsesInjectedMethodPolicy(t *testing.T) {
 	policy := &fakeBindOAuthMethodPolicy{}
 	ctx := context.WithValue(context.Background(), constant.CtxKeyUser, &usermodel.User{Id: 7})
-	logic := NewBindOAuthCallbackLogic(ctx, BindOAuthCallbackDependencies{Policy: policy})
+	logic := newBindOAuthCallbackLogic(ctx, Deps{Policy: policy})
 
 	err := logic.BindOAuthCallback(&dto.BindOAuthCallbackRequest{
 		Method:   "google",

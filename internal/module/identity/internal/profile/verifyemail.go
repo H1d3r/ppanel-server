@@ -1,14 +1,12 @@
-package user
+package profile
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/logic/auth/registerpolicy"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/internal/verification"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/constant"
@@ -19,29 +17,30 @@ import (
 
 type VerifyEmailLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Verify Email
-func NewVerifyEmailLogic(ctx context.Context, svcCtx *svc.ServiceContext) *VerifyEmailLogic {
+func newVerifyEmailLogic(ctx context.Context, deps Deps) *VerifyEmailLogic {
 	return &VerifyEmailLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *VerifyEmailLogic) VerifyEmail(req *dto.VerifyEmailRequest) error {
-	if err := registerpolicy.EnsureMethodEnabled(l.ctx, l.svcCtx, registerpolicy.MethodEmail); err != nil {
+	if err := l.deps.Policy.EnsureMethodEnabled(l.ctx, authmethod.Email); err != nil {
 		return err
 	}
-	email, err := authmethod.ValidateEmail(req.Email, l.svcCtx.Config.Email.DomainSuffixList, l.svcCtx.Config.Email.EnableDomainSuffix)
+	domainList, restrict := l.deps.EmailDomains()
+	email, err := authmethod.ValidateEmail(req.Email, domainList, restrict)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid email: %v", err)
 	}
 	cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, constant.Security, email)
-	if err := verification.ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, false); err != nil {
+	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
 	}
 
@@ -50,18 +49,18 @@ func (l *VerifyEmailLogic) VerifyEmail(req *dto.VerifyEmailRequest) error {
 		logger.Error("current user is not found in context")
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
-	method, err := l.svcCtx.Store.UserAuth().FindUserAuthMethodByOpenID(l.ctx, authmethod.Email, email)
+	method, err := l.deps.UserAuth.FindUserAuthMethodByOpenID(l.ctx, authmethod.Email, email)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindUserAuthMethodByOpenID error")
 	}
 	if method.UserId != u.Id {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "invalid access")
 	}
-	if err := verification.ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, true); err != nil {
+	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
 	}
 	method.Verified = true
-	err = l.svcCtx.Store.UserAuth().UpdateUserAuthMethods(l.ctx, method)
+	err = l.deps.UserAuth.UpdateUserAuthMethods(l.ctx, method)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "UpdateUserAuthMethods error")
 	}

@@ -31,7 +31,6 @@ const importPrefix = "github.com/perfect-panel/server/"
 var legacyLogicImports = map[string][]string{
 	"internal/logic/admin/server": {"internal/logic/nodeconfig"},
 	"internal/logic/auth":         {"internal/logic/common"},
-	"internal/logic/public/user":  {"internal/logic/auth/registerpolicy", "internal/logic/common", "internal/logic/telegram"},
 	"internal/logic/server":       {"internal/logic/nodeconfig"},
 }
 
@@ -65,9 +64,9 @@ var svcImporters = map[string]bool{
 	"internal/logic/auth/registerpolicy": true, "internal/logic/common": true,
 	"internal/logic/edge":           true,
 	"internal/logic/public/payment": true,
-	"internal/logic/public/user":    true, "internal/logic/server": true,
-	"internal/logic/telegram": true,
-	"internal/middleware":     true, "internal/route": true,
+	"internal/logic/server":         true,
+	"internal/logic/telegram":       true,
+	"internal/middleware":           true, "internal/route": true,
 	"internal/trafficagg": true, "internal/transport/httpserver": true,
 	"queue": true, "queue/handler": true,
 	"queue/logic/email": true, "queue/logic/order": true, "queue/logic/sms": true,

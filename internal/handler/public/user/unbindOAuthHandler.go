@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/public/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UnbindOAuthHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := user.NewUnbindOAuthLogic(c, svcCtx)
-		err := l.UnbindOAuth(&req)
+		err := svcCtx.Identity.UnbindOAuth(c, &req)
 		result.HttpResult(ctx, nil, err)
 	}
 }

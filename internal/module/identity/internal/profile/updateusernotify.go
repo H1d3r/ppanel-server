@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -15,16 +14,16 @@ import (
 
 type UpdateUserNotifyLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Update User Notify
-func NewUpdateUserNotifyLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateUserNotifyLogic {
+func newUpdateUserNotifyLogic(ctx context.Context, deps Deps) *UpdateUserNotifyLogic {
 	return &UpdateUserNotifyLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -41,7 +40,7 @@ func (l *UpdateUserNotifyLogic) UpdateUserNotify(req *dto.UpdateUserNotifyReques
 	u.EnableBalanceNotify = req.EnableBalanceNotify
 	u.EnableSubscribeNotify = req.EnableSubscribeNotify
 	u.EnableTradeNotify = req.EnableTradeNotify
-	if err := l.svcCtx.Store.User().Update(l.ctx, u); err != nil {
+	if err := l.deps.Users.Update(l.ctx, u); err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "update user notify error: %v", err.Error())
 	}
 	return nil

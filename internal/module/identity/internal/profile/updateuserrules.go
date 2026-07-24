@@ -1,4 +1,4 @@
-package user
+package profile
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -15,16 +14,16 @@ import (
 
 type UpdateUserRulesLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewUpdateUserRulesLogic Update User Rules
-func NewUpdateUserRulesLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateUserRulesLogic {
+func newUpdateUserRulesLogic(ctx context.Context, deps Deps) *UpdateUserRulesLogic {
 	return &UpdateUserRulesLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -41,7 +40,7 @@ func (l *UpdateUserRulesLogic) UpdateUserRules(req *dto.UpdateUserRulesRequest) 
 			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "json marshal rules failed: %v", err.Error())
 		}
 		u.Rules = string(bytes)
-		err = l.svcCtx.Store.User().Update(l.ctx, u)
+		err = l.deps.Users.Update(l.ctx, u)
 		if err != nil {
 			l.Logger.Errorf("UpdateUserRulesLogic UpdateUserRules error: %v", err)
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update user rules failed: %v", err.Error())

@@ -199,7 +199,27 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 				srv.DeviceManager.KickDevice(userID, identifier)
 			}
 		},
+
+		Auths:  store.Auth(),
+		Redis:  srv.Redis,
+		Policy: authMethodPolicy{svc: srv},
+		EmailDomains: func() (string, bool) {
+			return srv.Config.Email.DomainSuffixList, srv.Config.Email.EnableDomainSuffix
+		},
+		TelegramBotName: func() string { return srv.Config.Telegram.BotName },
+		NotifyTelegramUnbind: func(userID, chatID int64) error {
+			return srv.NotifyTelegramUnbind(userID, chatID)
+		},
 	})
+}
+
+// authMethodPolicy adapts the identity module's policy port to the
+// late-bound register-policy hook assigned by the transport server (the
+// register policy package imports this one).
+type authMethodPolicy struct{ svc *ServiceContext }
+
+func (p authMethodPolicy) EnsureMethodEnabled(ctx context.Context, method string) error {
+	return p.svc.EnsureAuthMethodEnabled(ctx, method)
 }
 
 // newSupportModule wires the support module against the legacy store. The

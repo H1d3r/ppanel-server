@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/public/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UpdateBindEmailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := user.NewUpdateBindEmailLogic(c, svcCtx)
-		err := l.UpdateBindEmail(&req)
+		err := svcCtx.Identity.UpdateBindEmail(c, &req)
 		result.HttpResult(ctx, nil, err)
 	}
 }
