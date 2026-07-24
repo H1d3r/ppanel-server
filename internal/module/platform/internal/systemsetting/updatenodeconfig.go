@@ -1,37 +1,35 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
-	"github.com/perfect-panel/server/initialize"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 )
 
 type UpdateNodeConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewUpdateNodeConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateNodeConfigLogic {
+func newUpdateNodeConfigLogic(ctx context.Context, deps Deps) *UpdateNodeConfigLogic {
 	return &UpdateNodeConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *UpdateNodeConfigLogic) UpdateNodeConfig(req *dto.NodeConfig) error {
-	err := updateConfigFields(l.ctx, l.svcCtx, "server", convertedConfigFields(*req))
+	err := updateConfigFields(l.ctx, l.deps, "server", convertedConfigFields(*req))
 	if err != nil {
 		l.Errorw("[UpdateNodeConfig] update node config error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update server config error: %v", err)
 	}
-	initialize.Node(l.svcCtx)
+	l.deps.reinit("node")
 	return nil
 }

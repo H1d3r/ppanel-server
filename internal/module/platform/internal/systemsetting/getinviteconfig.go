@@ -1,10 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -13,22 +12,22 @@ import (
 
 type GetInviteConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewGetInviteConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetInviteConfigLogic {
+func newGetInviteConfigLogic(ctx context.Context, deps Deps) *GetInviteConfigLogic {
 	return &GetInviteConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetInviteConfigLogic) GetInviteConfig() (*dto.InviteConfig, error) {
 	resp := &dto.InviteConfig{}
 	// get invite config from db
-	configs, err := l.svcCtx.Store.System().GetInviteConfig(l.ctx)
+	configs, err := l.deps.System.GetInviteConfig(l.ctx)
 	if err != nil {
 		l.Errorw("[GetInviteConfigLogic] get invite config error: ", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get invite config error: %v", err.Error())

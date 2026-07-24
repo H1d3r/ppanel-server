@@ -1,11 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
-	"github.com/perfect-panel/server/initialize"
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -13,36 +11,35 @@ import (
 
 type UpdateSubscribeConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewUpdateSubscribeConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateSubscribeConfigLogic {
+func newUpdateSubscribeConfigLogic(ctx context.Context, deps Deps) *UpdateSubscribeConfigLogic {
 	return &UpdateSubscribeConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *UpdateSubscribeConfigLogic) UpdateSubscribeConfig(req *dto.SubscribeConfig) error {
-	err := updateConfigFields(l.ctx, l.svcCtx, "subscribe", convertedConfigFields(*req))
+	err := updateConfigFields(l.ctx, l.deps, "subscribe", convertedConfigFields(*req))
 
 	if err != nil {
 		l.Errorw("[UpdateSubscribeConfigLogic] update subscribe config error: ", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update subscribe config error: %v", err)
 	}
 
-	if l.svcCtx.Config.Subscribe.SubscribePath != req.SubscribePath {
-		go func(svc *svc.ServiceContext) {
-			err = svc.Restart()
-			if err != nil {
+	if l.deps.subscribePath() != req.SubscribePath {
+		go func() {
+			if err := l.deps.restart(); err != nil {
 				l.Errorw("[UpdateSubscribeConfigLogic] restart error: ", logger.Field("error", err.Error()))
 			}
-		}(l.svcCtx)
+		}()
 		return nil
 	}
 
-	initialize.Subscribe(l.svcCtx)
+	l.deps.reinit("subscribe")
 	return nil
 }

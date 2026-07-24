@@ -1,4 +1,4 @@
-package system
+package systemsetting
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -15,21 +14,21 @@ import (
 
 type GetNodeConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewGetNodeConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetNodeConfigLogic {
+func newGetNodeConfigLogic(ctx context.Context, deps Deps) *GetNodeConfigLogic {
 	return &GetNodeConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetNodeConfigLogic) GetNodeConfig() (*dto.NodeConfig, error) {
 	// get server config from db
-	configs, err := l.svcCtx.Store.System().GetNodeConfig(l.ctx)
+	configs, err := l.deps.System.GetNodeConfig(l.ctx)
 	if err != nil {
 		l.Errorw("[GetNodeConfigLogic] GetNodeConfig get server config error: ", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetNodeConfig get server config error: %v", err.Error())

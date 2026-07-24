@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/system"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UpdateVerifyCodeConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := system.NewUpdateVerifyCodeConfigLogic(ctx, svcCtx)
-		err := l.UpdateVerifyCodeConfig(&req)
+		err := svcCtx.Platform.UpdateVerifyCodeConfig(ctx, &req)
 		result.HttpResult(c, nil, err)
 	}
 }

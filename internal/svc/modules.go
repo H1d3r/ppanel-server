@@ -9,6 +9,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -17,6 +18,7 @@ import (
 	emailworker "github.com/perfect-panel/server/internal/worker/email"
 	"github.com/perfect-panel/server/pkg/exchangeRate"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/tool"
 	queuetypes "github.com/perfect-panel/server/queue/types"
 	"github.com/redis/go-redis/v9"
 )
@@ -102,6 +104,24 @@ func newPlatformModule(store repository.Store, srv *ServiceContext) platform.Ser
 		},
 		LogRetention: func() (bool, int64) {
 			return srv.Config.Log.AutoClear, srv.Config.Log.ClearDays
+		},
+		Reinitialize: func(subsystem string) {
+			if srv.ReinitSubsystem != nil {
+				srv.ReinitSubsystem(subsystem)
+			}
+		},
+		Restart: func() error {
+			if srv.Restart == nil {
+				return nil
+			}
+			return srv.Restart()
+		},
+		SubscribePath: func() string { return srv.Config.Subscribe.SubscribePath },
+		ApplyVerifyConfig: func(req *dto.VerifyConfig) {
+			tool.DeepCopy(&srv.Config.Verify, req)
+		},
+		Multiplier: func(at time.Time) float32 {
+			return srv.NodeMultiplierManager.GetMultiplier(at)
 		},
 	})
 }

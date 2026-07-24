@@ -9,6 +9,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/platform/internal/auditlog"
+	"github.com/perfect-panel/server/internal/module/platform/internal/systemsetting"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
@@ -32,6 +33,34 @@ type Service interface {
 	// the running configuration.
 	UpdateLogSetting(ctx context.Context, req *dto.LogSetting) error
 	GetMessageLogList(ctx context.Context, req *dto.GetMessageLogListRequest) (*dto.GetMessageLogListResponse, error)
+
+	// System configuration management; updates persist the settings and
+	// re-initialize the owning subsystem through injected callbacks.
+	GetCurrencyConfig(ctx context.Context) (*dto.CurrencyConfig, error)
+	GetInviteConfig(ctx context.Context) (*dto.InviteConfig, error)
+	GetModuleConfig(ctx context.Context) (*dto.ModuleConfig, error)
+	GetNodeConfig(ctx context.Context) (*dto.NodeConfig, error)
+	GetNodeMultiplier(ctx context.Context) (*dto.GetNodeMultiplierResponse, error)
+	GetPrivacyPolicyConfig(ctx context.Context) (*dto.PrivacyPolicyConfig, error)
+	GetRegisterConfig(ctx context.Context) (*dto.RegisterConfig, error)
+	GetSiteConfig(ctx context.Context) (*dto.SiteConfig, error)
+	GetSubscribeConfig(ctx context.Context) (*dto.SubscribeConfig, error)
+	GetTosConfig(ctx context.Context) (*dto.TosConfig, error)
+	GetVerifyCodeConfig(ctx context.Context) (*dto.VerifyCodeConfig, error)
+	GetVerifyConfig(ctx context.Context) (*dto.VerifyConfig, error)
+	PreViewNodeMultiplier(ctx context.Context) (*dto.PreViewNodeMultiplierResponse, error)
+	SetNodeMultiplier(ctx context.Context, req *dto.SetNodeMultiplierRequest) error
+	SettingTelegramBot(ctx context.Context) error
+	UpdateCurrencyConfig(ctx context.Context, req *dto.CurrencyConfig) error
+	UpdateInviteConfig(ctx context.Context, req *dto.InviteConfig) error
+	UpdateNodeConfig(ctx context.Context, req *dto.NodeConfig) error
+	UpdatePrivacyPolicyConfig(ctx context.Context, req *dto.PrivacyPolicyConfig) error
+	UpdateRegisterConfig(ctx context.Context, req *dto.RegisterConfig) error
+	UpdateSiteConfig(ctx context.Context, req *dto.SiteConfig) error
+	UpdateSubscribeConfig(ctx context.Context, req *dto.SubscribeConfig) error
+	UpdateTosConfig(ctx context.Context, req *dto.TosConfig) error
+	UpdateVerifyCodeConfig(ctx context.Context, req *dto.VerifyCodeConfig) error
+	UpdateVerifyConfig(ctx context.Context, req *dto.VerifyConfig) error
 }
 
 // Deps declares everything the module needs; the composition root
@@ -46,10 +75,26 @@ type Deps struct {
 	OnLogSettingChanged func(autoClear bool, clearDays int64)
 	// LogRetention reads the current (mutable) retention configuration.
 	LogRetention func() (autoClear bool, clearDays int64)
+
+	// System-setting dependencies (see internal/systemsetting).
+	Reinitialize      func(subsystem string)
+	Restart           func() error
+	SubscribePath     func() string
+	ApplyVerifyConfig func(req *dto.VerifyConfig)
+	Multiplier        systemsetting.MultiplierFunc
 }
 
 func New(deps Deps) Service {
 	return &service{
+		settings: systemsetting.NewService(systemsetting.Deps{
+			System:            deps.System,
+			Store:             deps.Store,
+			Reinitialize:      deps.Reinitialize,
+			Restart:           deps.Restart,
+			SubscribePath:     deps.SubscribePath,
+			ApplyVerifyConfig: deps.ApplyVerifyConfig,
+			Multiplier:        deps.Multiplier,
+		}),
 		logs: auditlog.NewService(auditlog.Deps{
 			Logs:                deps.Logs,
 			System:              deps.System,
@@ -62,7 +107,8 @@ func New(deps Deps) Service {
 }
 
 type service struct {
-	logs *auditlog.Service
+	logs     *auditlog.Service
+	settings *systemsetting.Service
 }
 
 func (s *service) FilterBalanceLog(ctx context.Context, req *dto.FilterBalanceLogRequest) (*dto.FilterBalanceLogResponse, error) {
@@ -123,4 +169,104 @@ func (s *service) UpdateLogSetting(ctx context.Context, req *dto.LogSetting) err
 
 func (s *service) GetMessageLogList(ctx context.Context, req *dto.GetMessageLogListRequest) (*dto.GetMessageLogListResponse, error) {
 	return s.logs.GetMessageLogList(ctx, req)
+}
+
+func (s *service) GetCurrencyConfig(ctx context.Context) (*dto.CurrencyConfig, error) {
+	return s.settings.GetCurrencyConfig(ctx)
+}
+
+func (s *service) GetInviteConfig(ctx context.Context) (*dto.InviteConfig, error) {
+	return s.settings.GetInviteConfig(ctx)
+}
+
+func (s *service) GetModuleConfig(ctx context.Context) (*dto.ModuleConfig, error) {
+	return s.settings.GetModuleConfig(ctx)
+}
+
+func (s *service) GetNodeConfig(ctx context.Context) (*dto.NodeConfig, error) {
+	return s.settings.GetNodeConfig(ctx)
+}
+
+func (s *service) GetNodeMultiplier(ctx context.Context) (*dto.GetNodeMultiplierResponse, error) {
+	return s.settings.GetNodeMultiplier(ctx)
+}
+
+func (s *service) GetPrivacyPolicyConfig(ctx context.Context) (*dto.PrivacyPolicyConfig, error) {
+	return s.settings.GetPrivacyPolicyConfig(ctx)
+}
+
+func (s *service) GetRegisterConfig(ctx context.Context) (*dto.RegisterConfig, error) {
+	return s.settings.GetRegisterConfig(ctx)
+}
+
+func (s *service) GetSiteConfig(ctx context.Context) (*dto.SiteConfig, error) {
+	return s.settings.GetSiteConfig(ctx)
+}
+
+func (s *service) GetSubscribeConfig(ctx context.Context) (*dto.SubscribeConfig, error) {
+	return s.settings.GetSubscribeConfig(ctx)
+}
+
+func (s *service) GetTosConfig(ctx context.Context) (*dto.TosConfig, error) {
+	return s.settings.GetTosConfig(ctx)
+}
+
+func (s *service) GetVerifyCodeConfig(ctx context.Context) (*dto.VerifyCodeConfig, error) {
+	return s.settings.GetVerifyCodeConfig(ctx)
+}
+
+func (s *service) GetVerifyConfig(ctx context.Context) (*dto.VerifyConfig, error) {
+	return s.settings.GetVerifyConfig(ctx)
+}
+
+func (s *service) PreViewNodeMultiplier(ctx context.Context) (*dto.PreViewNodeMultiplierResponse, error) {
+	return s.settings.PreViewNodeMultiplier(ctx)
+}
+
+func (s *service) SetNodeMultiplier(ctx context.Context, req *dto.SetNodeMultiplierRequest) error {
+	return s.settings.SetNodeMultiplier(ctx, req)
+}
+
+func (s *service) SettingTelegramBot(ctx context.Context) error {
+	return s.settings.SettingTelegramBot(ctx)
+}
+
+func (s *service) UpdateCurrencyConfig(ctx context.Context, req *dto.CurrencyConfig) error {
+	return s.settings.UpdateCurrencyConfig(ctx, req)
+}
+
+func (s *service) UpdateInviteConfig(ctx context.Context, req *dto.InviteConfig) error {
+	return s.settings.UpdateInviteConfig(ctx, req)
+}
+
+func (s *service) UpdateNodeConfig(ctx context.Context, req *dto.NodeConfig) error {
+	return s.settings.UpdateNodeConfig(ctx, req)
+}
+
+func (s *service) UpdatePrivacyPolicyConfig(ctx context.Context, req *dto.PrivacyPolicyConfig) error {
+	return s.settings.UpdatePrivacyPolicyConfig(ctx, req)
+}
+
+func (s *service) UpdateRegisterConfig(ctx context.Context, req *dto.RegisterConfig) error {
+	return s.settings.UpdateRegisterConfig(ctx, req)
+}
+
+func (s *service) UpdateSiteConfig(ctx context.Context, req *dto.SiteConfig) error {
+	return s.settings.UpdateSiteConfig(ctx, req)
+}
+
+func (s *service) UpdateSubscribeConfig(ctx context.Context, req *dto.SubscribeConfig) error {
+	return s.settings.UpdateSubscribeConfig(ctx, req)
+}
+
+func (s *service) UpdateTosConfig(ctx context.Context, req *dto.TosConfig) error {
+	return s.settings.UpdateTosConfig(ctx, req)
+}
+
+func (s *service) UpdateVerifyCodeConfig(ctx context.Context, req *dto.VerifyCodeConfig) error {
+	return s.settings.UpdateVerifyCodeConfig(ctx, req)
+}
+
+func (s *service) UpdateVerifyConfig(ctx context.Context, req *dto.VerifyConfig) error {
+	return s.settings.UpdateVerifyConfig(ctx, req)
 }

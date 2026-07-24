@@ -1,10 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -13,22 +12,22 @@ import (
 
 type GetTosConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewGetTosConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetTosConfigLogic {
+func newGetTosConfigLogic(ctx context.Context, deps Deps) *GetTosConfigLogic {
 	return &GetTosConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetTosConfigLogic) GetTosConfig() (resp *dto.TosConfig, err error) {
 	resp = &dto.TosConfig{}
 	// get tos config from db
-	configs, err := l.svcCtx.Store.System().GetTosConfig(l.ctx)
+	configs, err := l.deps.System.GetTosConfig(l.ctx)
 	if err != nil {
 		l.Errorw("[GetTosConfig] GetTosConfig error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetTosConfig error: %v", err.Error())

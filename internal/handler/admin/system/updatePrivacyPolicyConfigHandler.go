@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/system"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UpdatePrivacyPolicyConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFun
 			return
 		}
 
-		l := system.NewUpdatePrivacyPolicyConfigLogic(ctx, svcCtx)
-		err := l.UpdatePrivacyPolicyConfig(&req)
+		err := svcCtx.Platform.UpdatePrivacyPolicyConfig(ctx, &req)
 		result.HttpResult(c, nil, err)
 	}
 }

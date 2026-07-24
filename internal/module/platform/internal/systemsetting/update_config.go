@@ -1,11 +1,10 @@
-package system
+package systemsetting
 
 import (
 	"context"
 	"reflect"
 
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/tool"
 )
 
@@ -56,8 +55,8 @@ func configFieldType(value reflect.Value) string {
 	}
 }
 
-func updateConfigFields(ctx context.Context, svcCtx *svc.ServiceContext, category string, fields []configFieldValue) error {
-	return svcCtx.Store.InTx(ctx, func(store repository.Store) error {
+func updateConfigFields(ctx context.Context, deps Deps, category string, fields []configFieldValue) error {
+	return deps.Store.InPlatformTx(ctx, func(store repository.PlatformStore) error {
 		systemStore := store.System()
 		for _, field := range fields {
 			if err := systemStore.UpdateValueByCategoryKey(ctx, category, field.key, field.value, field.valueType); err != nil {

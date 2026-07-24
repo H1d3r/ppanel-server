@@ -1,11 +1,10 @@
-package system
+package systemsetting
 
 import (
 	"context"
 	"encoding/json"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -13,21 +12,21 @@ import (
 
 type GetNodeMultiplierLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get Node Multiplier
-func NewGetNodeMultiplierLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetNodeMultiplierLogic {
+func newGetNodeMultiplierLogic(ctx context.Context, deps Deps) *GetNodeMultiplierLogic {
 	return &GetNodeMultiplierLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetNodeMultiplierLogic) GetNodeMultiplier() (resp *dto.GetNodeMultiplierResponse, err error) {
-	data, err := l.svcCtx.Store.System().FindNodeMultiplierConfig(l.ctx)
+	data, err := l.deps.System.FindNodeMultiplierConfig(l.ctx)
 	if err != nil {
 		l.Logger.Error("Get Node Multiplier Config Error: ", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Get Node Multiplier Config Error: %s", err.Error())

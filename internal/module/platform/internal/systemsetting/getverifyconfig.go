@@ -1,11 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
-	"github.com/perfect-panel/server/initialize"
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -14,28 +12,28 @@ import (
 
 type GetVerifyConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewGetVerifyConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetVerifyConfigLogic {
+func newGetVerifyConfigLogic(ctx context.Context, deps Deps) *GetVerifyConfigLogic {
 	return &GetVerifyConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetVerifyConfigLogic) GetVerifyConfig() (*dto.VerifyConfig, error) {
 	resp := &dto.VerifyConfig{}
 	// get verify config from db
-	verifyConfigs, err := l.svcCtx.Store.System().GetVerifyConfig(l.ctx)
+	verifyConfigs, err := l.deps.System.GetVerifyConfig(l.ctx)
 	if err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get verify config failed: %v", err.Error())
 	}
 	// reflect to response
 	tool.SystemConfigSliceReflectToStruct(verifyConfigs, resp)
 	// update verify config to system
-	initialize.Verify(l.svcCtx)
+	l.deps.reinit("verify")
 	return resp, nil
 }

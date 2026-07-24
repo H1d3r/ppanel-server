@@ -1,10 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -12,23 +11,23 @@ import (
 )
 
 type GetSiteConfigLogic struct {
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 	logger.Logger
 }
 
-func NewGetSiteConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetSiteConfigLogic {
+func newGetSiteConfigLogic(ctx context.Context, deps Deps) *GetSiteConfigLogic {
 	return &GetSiteConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetSiteConfigLogic) GetSiteConfig() (resp *dto.SiteConfig, err error) {
 	resp = &dto.SiteConfig{}
 	// get site config from db
-	siteConfigs, err := l.svcCtx.Store.System().GetSiteConfig(l.ctx)
+	siteConfigs, err := l.deps.System.GetSiteConfig(l.ctx)
 	if err != nil {
 		l.Logger.Error("[GetSiteConfig] Database query error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get site config failed: %v", err.Error())

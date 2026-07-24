@@ -1,10 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -13,15 +12,15 @@ import (
 
 type GetRegisterConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
-func NewGetRegisterConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetRegisterConfigLogic {
+func newGetRegisterConfigLogic(ctx context.Context, deps Deps) *GetRegisterConfigLogic {
 	return &GetRegisterConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -29,7 +28,7 @@ func (l *GetRegisterConfigLogic) GetRegisterConfig() (*dto.RegisterConfig, error
 	resp := &dto.RegisterConfig{}
 
 	// get register config from database
-	configs, err := l.svcCtx.Store.System().GetRegisterConfig(l.ctx)
+	configs, err := l.deps.System.GetRegisterConfig(l.ctx)
 	if err != nil {
 		l.Errorw("[GetRegisterConfig] Database query error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get register config error: %v", err.Error())

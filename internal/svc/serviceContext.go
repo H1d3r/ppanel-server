@@ -36,7 +36,11 @@ type ServiceContext struct {
 	Platform platform.Service
 
 	//NodeCache   *cache.NodeCacheClient
-	Restart               func() error
+	Restart func() error
+	// ReinitSubsystem re-runs a subsystem's initialization after its
+	// configuration changed; assigned by the transport server alongside
+	// Restart (the initialize package cannot be imported here).
+	ReinitSubsystem       func(subsystem string)
 	TelegramBot           *tgbotapi.BotAPI
 	NodeMultiplierManager *nodeMultiplier.Manager
 	AuthLimiter           *limit.PeriodLimit

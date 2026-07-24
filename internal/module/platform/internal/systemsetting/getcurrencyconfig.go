@@ -1,10 +1,9 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -13,21 +12,21 @@ import (
 
 type GetCurrencyConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get Currency Config
-func NewGetCurrencyConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetCurrencyConfigLogic {
+func newGetCurrencyConfigLogic(ctx context.Context, deps Deps) *GetCurrencyConfigLogic {
 	return &GetCurrencyConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetCurrencyConfigLogic) GetCurrencyConfig() (resp *dto.CurrencyConfig, err error) {
-	configs, err := l.svcCtx.Store.System().GetCurrencyConfig(l.ctx)
+	configs, err := l.deps.System.GetCurrencyConfig(l.ctx)
 	if err != nil {
 		l.Errorw("[GetCurrencyConfigLogic] GetCurrencyConfig error: ", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetCurrencyConfig error: %v", err.Error())

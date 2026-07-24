@@ -1,30 +1,27 @@
-package system
+package systemsetting
 
 import (
 	"context"
 
-	"github.com/perfect-panel/server/initialize"
-
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type SettingTelegramBotLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewSettingTelegramBotLogic setting telegram bot
-func NewSettingTelegramBotLogic(ctx context.Context, svcCtx *svc.ServiceContext) *SettingTelegramBotLogic {
+func newSettingTelegramBotLogic(ctx context.Context, deps Deps) *SettingTelegramBotLogic {
 	return &SettingTelegramBotLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *SettingTelegramBotLogic) SettingTelegramBot() error {
-	initialize.Telegram(l.svcCtx)
+	l.deps.reinit("telegram")
 	return nil
 }
