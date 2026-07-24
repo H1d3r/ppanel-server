@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/oschwald/geoip2-golang"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing"
@@ -136,6 +137,27 @@ func newPlatformModule(store repository.Store, srv *ServiceContext) platform.Ser
 		},
 		Multiplier: func(at time.Time) float32 {
 			return srv.NodeMultiplierManager.GetMultiplier(at)
+		},
+		FullStore: store,
+		Redis:     srv.Redis,
+		PublicConfig: func() platform.GlobalConfigSnapshot {
+			c := srv.Config
+			return platform.GlobalConfigSnapshot{
+				Site:      c.Site,
+				Subscribe: c.Subscribe,
+				Email:     c.Email,
+				Mobile:    c.Mobile,
+				Register:  c.Register,
+				Verify:    c.Verify,
+				Invite:    c.Invite,
+			}
+		},
+		LogPath: srv.Config.Logger.Path,
+		GeoIP: func() *geoip2.Reader {
+			if srv.GeoIP == nil {
+				return nil
+			}
+			return srv.GeoIP.DB
 		},
 	})
 }

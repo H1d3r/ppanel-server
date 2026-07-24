@@ -8,27 +8,26 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type GetSystemLogLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewGetSystemLogLogic Get System Log
-func NewGetSystemLogLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetSystemLogLogic {
+func newGetSystemLogLogic(ctx context.Context, deps Deps) *GetSystemLogLogic {
 	return &GetSystemLogLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetSystemLogLogic) GetSystemLog() (resp *dto.LogResponse, err error) {
-	lines, err := logger.ReadLastNLines(l.svcCtx.Config.Logger.Path, 50)
+	lines, err := logger.ReadLastNLines(l.deps.LogPath, 50)
 	if err != nil {
 		l.Error(err)
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "get system log error: %v", err.Error())

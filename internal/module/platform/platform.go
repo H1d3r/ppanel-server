@@ -7,11 +7,13 @@ package platform
 import (
 	"context"
 
+	"github.com/oschwald/geoip2-golang"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/platform/internal/auditlog"
 	"github.com/perfect-panel/server/internal/module/platform/internal/dashboard"
 	"github.com/perfect-panel/server/internal/module/platform/internal/publicinfo"
 	"github.com/perfect-panel/server/internal/module/platform/internal/systemsetting"
+	"github.com/perfect-panel/server/internal/module/platform/internal/tool"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 )
@@ -71,6 +73,13 @@ type Service interface {
 	QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelpyResponse, error)
 	QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsResponse, error)
 
+	// Admin utility tools: system log tail, version, IP geolocation and
+	// process restart.
+	GetSystemLog(ctx context.Context) (*dto.LogResponse, error)
+	GetVersion(ctx context.Context) (*dto.VersionResponse, error)
+	QueryIPLocation(ctx context.Context, req *dto.QueryIPLocationRequest) (*dto.QueryIPLocationResponse, error)
+	RestartSystem(ctx context.Context) error
+
 	// Unauthenticated site-level reads for the public portal.
 	GetGlobalConfig(ctx context.Context) (*dto.GetGlobalConfigResponse, error)
 	GetTos(ctx context.Context) (*dto.GetTosResponse, error)
@@ -116,6 +125,10 @@ type Deps struct {
 	FullStore    repository.Store
 	Redis        *redis.Client
 	PublicConfig func() GlobalConfigSnapshot
+
+	// Tool dependencies: the logger output path and the GeoIP reader.
+	LogPath string
+	GeoIP   func() *geoip2.Reader
 }
 
 func New(deps Deps) Service {
@@ -138,6 +151,11 @@ func New(deps Deps) Service {
 			Logs:    deps.Logs,
 			Cache:   deps.Cache,
 		}),
+		tools: tool.NewService(tool.Deps{
+			LogPath: deps.LogPath,
+			GeoIP:   deps.GeoIP,
+			Restart: deps.Restart,
+		}),
 		public: publicinfo.NewService(publicinfo.Deps{
 			Store:  deps.FullStore,
 			Redis:  deps.Redis,
@@ -159,6 +177,7 @@ type service struct {
 	settings  *systemsetting.Service
 	dashboard *dashboard.Service
 	public    *publicinfo.Service
+	tools     *tool.Service
 }
 
 func (s *service) FilterBalanceLog(ctx context.Context, req *dto.FilterBalanceLogRequest) (*dto.FilterBalanceLogResponse, error) {
@@ -359,4 +378,20 @@ func (s *service) GetClient(ctx context.Context) (*dto.GetSubscribeClientRespons
 
 func (s *service) Heartbeat(ctx context.Context) (*dto.HeartbeatResponse, error) {
 	return s.public.Heartbeat(ctx)
+}
+
+func (s *service) GetSystemLog(ctx context.Context) (*dto.LogResponse, error) {
+	return s.tools.GetSystemLog(ctx)
+}
+
+func (s *service) GetVersion(ctx context.Context) (*dto.VersionResponse, error) {
+	return s.tools.GetVersion(ctx)
+}
+
+func (s *service) QueryIPLocation(ctx context.Context, req *dto.QueryIPLocationRequest) (*dto.QueryIPLocationResponse, error) {
+	return s.tools.QueryIPLocation(ctx, req)
+}
+
+func (s *service) RestartSystem(ctx context.Context) error {
+	return s.tools.RestartSystem(ctx)
 }

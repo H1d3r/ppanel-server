@@ -5,7 +5,6 @@ import (
 	"net"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -13,26 +12,26 @@ import (
 
 type QueryIPLocationLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewQueryIPLocationLogic Query IP Location
-func NewQueryIPLocationLogic(ctx context.Context, svcCtx *svc.ServiceContext) *QueryIPLocationLogic {
+func newQueryIPLocationLogic(ctx context.Context, deps Deps) *QueryIPLocationLogic {
 	return &QueryIPLocationLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *QueryIPLocationLogic) QueryIPLocation(req *dto.QueryIPLocationRequest) (resp *dto.QueryIPLocationResponse, err error) {
-	if l.svcCtx.GeoIP == nil {
+	if l.deps.GeoIP == nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), " GeoIP database not configured")
 	}
 
 	ip := net.ParseIP(req.IP)
-	record, err := l.svcCtx.GeoIP.DB.City(ip)
+	record, err := l.deps.GeoIP().City(ip)
 	if err != nil {
 		l.Errorf("Failed to query IP location: %v", err)
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Failed to query IP location")
