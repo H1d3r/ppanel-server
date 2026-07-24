@@ -151,9 +151,13 @@ internal/module/<name>/
    验证码原语抽为中立包 `internal/verification`；trafficagg 去 svc 化后由 queue 与
    network 模块各自组装。`queue/logic/*` 与 handler/initialize/scheduler 仍持 svcCtx，
    属组装根性质，其收缩并入第 5 步。
-5. **数据所有权清算**（进行中，2026-07-24 起）：表→模块归属定稿如下，
-   清理附录 A.4 的跨模块 JOIN/Preload，并把 identity 与 subscription 共用的
-   `*userRepo` 实现物理分家（见附录 A 开头说明）。
+5. **数据所有权清算**（✅ 2026-07-24 完成）：表→模块归属定稿如下；
+   附录 A.4 的跨模块 JOIN/Preload 全部清理（邮件收件人两段查询、用户统计 Go 侧合并、
+   订单计划关联改模块层 PlanReader 填充）；`*userRepo` 物理分家为 identity/
+   subscription/billing 三个结构体；**钱包拆分完成**——`user_wallet` 表落地
+   （迁移 02143 建表回填、02144 删 user 表三列），Balance/GiftAmount/Commission
+   从 user 实体移除，WalletRepo 以 wallet 实体为唯一资金事实源。
+   锁序契约：跨双域的流程一律先取 wallet 行锁再取 user 行锁。
 
    | 模块 | 表 |
    |---|---|
