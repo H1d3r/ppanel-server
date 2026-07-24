@@ -33,5 +33,13 @@ func (l *GetUserSubscribeByIdLogic) GetUserSubscribeById(req *dto.GetUserSubscri
 	}
 	var subscribeDetails dto.UserSubscribeDetail
 	tool.DeepCopy(&subscribeDetails, sub)
+	// The identity row is composed at the module layer instead of a
+	// cross-domain preload (ADR-001 step 5).
+	if owner, err := l.deps.Users.FindOne(l.ctx, sub.UserId); err == nil && owner != nil {
+		tool.DeepCopy(&subscribeDetails.User, owner)
+	} else if err != nil {
+		l.Errorw("[GetUserSubscribeByIdLogic] load subscription owner failed",
+			logger.Field("error", err.Error()), logger.Field("user_id", sub.UserId))
+	}
 	return &subscribeDetails, nil
 }

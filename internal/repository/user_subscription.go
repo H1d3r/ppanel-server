@@ -633,7 +633,8 @@ func (m *userSubscriptionRepo) FindOneSubscribeDetailsById(ctx context.Context, 
 	var data user.SubscribeDetails
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		// Subscribe is a same-domain association; the identity-domain User
-		// row is no longer preloaded (no consumer read it — ADR-001 step 5).
+		// row is composed by the consumer at the module layer instead of a
+		// cross-domain preload (ADR-001 step 5).
 		return conn.Model(&user.Subscribe{}).Preload("Subscribe").Where("id = ?", id).First(&data).Error
 	})
 	return &data, err
