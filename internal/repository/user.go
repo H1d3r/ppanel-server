@@ -718,83 +718,98 @@ func userDateBucketExpr(db *gorm.DB, column, bucket string) string {
 
 // QueryDailyUserStatisticsList Query daily user statistics list for the current month (from 1st to current date)
 func (m *userRepo) QueryDailyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error) {
-	var results []user.UserStatisticsWithDate
-
-	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
-		firstDay := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
-		orderDateExpr := userDateBucketExpr(conn, "created_at", "day")
-		userCreatedAt := userColumn(conn, "created_at")
-		userDateExpr := userDateBucketExpr(conn, userCreatedAt, "day")
-
-		// 子查询：统计每天的新用户订单数量
-		newOrderSub := conn.Model(&order.Order{}).
-			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS new_order_users", orderDateExpr)).
-			Where("is_new = ? AND created_at BETWEEN ? AND ? AND status IN ?", true, firstDay, date, []int64{2, 5}).
-			Group(orderDateExpr)
-
-		// 子查询：统计每天的续费订单数量
-		renewalOrderSub := conn.Model(&order.Order{}).
-			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS renewal_order_users", orderDateExpr)).
-			Where("is_new = ? AND created_at BETWEEN ? AND ? AND status IN ?", false, firstDay, date, []int64{2, 5}).
-			Group(orderDateExpr)
-
-		return conn.Model(&user.User{}).
-			Select(fmt.Sprintf(`
-                %s AS date,
-                COUNT(*) AS register,
-                COALESCE(MAX(n.new_order_users), 0) AS new_order_users,
-                COALESCE(MAX(r.renewal_order_users), 0) AS renewal_order_users
-            `, userDateExpr)).
-			Joins("LEFT JOIN (?) AS n ON "+userDateExpr+" = n.date", newOrderSub).
-			Joins("LEFT JOIN (?) AS r ON "+userDateExpr+" = r.date", renewalOrderSub).
-			Where(userCreatedAt+" BETWEEN ? AND ?", firstDay, date).
-			Group(userDateExpr).
-			Order("date ASC").
-			Scan(v).Error
-	})
-
-	return results, err
+	firstDay := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
+	registrations, err := m.registrationCountsByBucket(ctx, firstDay, &date, "day")
+	if err != nil {
+		return nil, err
+	}
+	newUsers, err := m.orderUserCountsByBucket(ctx, true, firstDay, &date, "day")
+	if err != nil {
+		return nil, err
+	}
+	renewalUsers, err := m.orderUserCountsByBucket(ctx, false, firstDay, &date, "day")
+	if err != nil {
+		return nil, err
+	}
+	return mergeUserStatistics(registrations, newUsers, renewalUsers), nil
 }
 
 // QueryMonthlyUserStatisticsList Query monthly user statistics list for the past 6 months
 func (m *userRepo) QueryMonthlyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error) {
-	var results []user.UserStatisticsWithDate
+	sixMonthsAgo := date.AddDate(0, -5, 0)
+	registrations, err := m.registrationCountsByBucket(ctx, sixMonthsAgo, nil, "month")
+	if err != nil {
+		return nil, err
+	}
+	newUsers, err := m.orderUserCountsByBucket(ctx, true, sixMonthsAgo, nil, "month")
+	if err != nil {
+		return nil, err
+	}
+	renewalUsers, err := m.orderUserCountsByBucket(ctx, false, sixMonthsAgo, nil, "month")
+	if err != nil {
+		return nil, err
+	}
+	return mergeUserStatistics(registrations, newUsers, renewalUsers), nil
+}
 
-	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
-		// 获取 6 个月前的日期
-		sixMonthsAgo := date.AddDate(0, -5, 0)
-		orderDateExpr := userDateBucketExpr(conn, "created_at", "month")
-		userCreatedAt := userColumn(conn, "created_at")
-		userDateExpr := userDateBucketExpr(conn, userCreatedAt, "month")
-
-		// 子查询：每月新订单用户数量
-		newOrderSub := conn.Model(&order.Order{}).
-			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS new_order_users", orderDateExpr)).
-			Where("is_new = ? AND created_at >= ? AND status IN ?", true, sixMonthsAgo, []int64{2, 5}).
-			Group(orderDateExpr)
-
-		// 子查询：每月续费订单用户数量
-		renewalOrderSub := conn.Model(&order.Order{}).
-			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS renewal_order_users", orderDateExpr)).
-			Where("is_new = ? AND created_at >= ? AND status IN ?", false, sixMonthsAgo, []int64{2, 5}).
-			Group(orderDateExpr)
-
-		return conn.Model(&user.User{}).
-			Select(fmt.Sprintf(`
-				%s AS date,
-				COUNT(*) AS register,
-				COALESCE(MAX(n.new_order_users), 0) AS new_order_users,
-				COALESCE(MAX(r.renewal_order_users), 0) AS renewal_order_users
-			`, userDateExpr)).
-			Joins("LEFT JOIN (?) AS n ON "+userDateExpr+" = n.date", newOrderSub).
-			Joins("LEFT JOIN (?) AS r ON "+userDateExpr+" = r.date", renewalOrderSub).
-			Where(userCreatedAt+" >= ?", sixMonthsAgo).
-			Group(userDateExpr).
-			Order("date ASC").
-			Scan(v).Error
+// orderUserCountsByBucket counts distinct ordering users per date bucket.
+// It runs as a standalone billing-domain query: the user statistics merge
+// happens in Go so no SQL joins identity and billing tables (ADR-001
+// step 5); when the user repository physically splits this query moves
+// behind an order-domain port unchanged.
+func (m *userRepo) orderUserCountsByBucket(ctx context.Context, isNew bool, since time.Time, until *time.Time, bucket string) (map[string]int64, error) {
+	type row struct {
+		Date  string
+		Users int64
+	}
+	var rows []row
+	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
+		orderDateExpr := userDateBucketExpr(conn, "created_at", bucket)
+		q := conn.Model(&order.Order{}).
+			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS users", orderDateExpr)).
+			Where("is_new = ? AND status IN ?", isNew, []int64{2, 5})
+		if until != nil {
+			q = q.Where("created_at BETWEEN ? AND ?", since, *until)
+		} else {
+			q = q.Where("created_at >= ?", since)
+		}
+		return q.Group(orderDateExpr).Scan(v).Error
 	})
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		counts[r.Date] = r.Users
+	}
+	return counts, nil
+}
 
+// registrationCountsByBucket aggregates new registrations per date bucket
+// (identity-domain only).
+func (m *userRepo) registrationCountsByBucket(ctx context.Context, since time.Time, until *time.Time, bucket string) ([]user.UserStatisticsWithDate, error) {
+	var results []user.UserStatisticsWithDate
+	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
+		userCreatedAt := userColumn(conn, "created_at")
+		userDateExpr := userDateBucketExpr(conn, userCreatedAt, bucket)
+		q := conn.Model(&user.User{}).
+			Select(fmt.Sprintf("%s AS date, COUNT(*) AS register", userDateExpr))
+		if until != nil {
+			q = q.Where(userCreatedAt+" BETWEEN ? AND ?", since, *until)
+		} else {
+			q = q.Where(userCreatedAt+" >= ?", since)
+		}
+		return q.Group(userDateExpr).Order("date ASC").Scan(v).Error
+	})
 	return results, err
+}
+
+func mergeUserStatistics(registrations []user.UserStatisticsWithDate, newUsers, renewalUsers map[string]int64) []user.UserStatisticsWithDate {
+	for i := range registrations {
+		registrations[i].NewOrderUsers = newUsers[registrations[i].Date]
+		registrations[i].RenewalOrderUsers = renewalUsers[registrations[i].Date]
+	}
+	return registrations
 }
 
 // --- auth methods ---
