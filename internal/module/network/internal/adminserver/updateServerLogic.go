@@ -14,7 +14,7 @@ import (
 
 type UpdateServerLogic struct {
 	logger.Logger
-	ctx    context.Context
+	ctx  context.Context
 	deps Deps
 }
 

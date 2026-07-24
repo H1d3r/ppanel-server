@@ -27,9 +27,9 @@ var ErrManifestNotFound = errors.New("edge manifest not found")
 // does not invoke adapter.NewAdapter or the legacy subscription logic.
 type ManifestLogic struct {
 	logger.Logger
-	ctx    context.Context
+	ctx  context.Context
 	deps Deps
-	now    func() time.Time
+	now  func() time.Time
 }
 
 func newManifestLogic(ctx context.Context, deps Deps) *ManifestLogic {

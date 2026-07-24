@@ -34,6 +34,8 @@ type TelegramAdminDependencies struct {
 	UserCache     repository.UserCacheRepo
 	Plans         repository.SubscribeRepo
 	Logs          repository.LogRepo
+	// Wallet is the billing-domain read port for balance display.
+	Wallet repository.WalletRepo
 }
 
 // TelegramAdmin handles administrative Telegram commands independently from

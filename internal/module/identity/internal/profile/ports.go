@@ -26,7 +26,9 @@ type Deps struct {
 	Devices   repository.UserDeviceRepo
 	UserCache repository.UserCacheRepo
 	Logs      repository.LogRepo
-	Redis     *redis.Client
+	// Wallet is the billing-domain read port for the account view.
+	Wallet repository.WalletRepo
+	Redis  *redis.Client
 	// Store carries the identity-scoped transaction for device unbinding.
 	Store  repository.Store
 	Policy OAuthMethodPolicy

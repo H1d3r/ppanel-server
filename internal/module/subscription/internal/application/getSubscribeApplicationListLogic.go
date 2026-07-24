@@ -12,7 +12,7 @@ import (
 
 type GetSubscribeApplicationListLogic struct {
 	logger.Logger
-	ctx    context.Context
+	ctx  context.Context
 	deps Deps
 }
 

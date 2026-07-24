@@ -43,7 +43,7 @@ type Deps struct {
 	// Bot returns the current bot client; the initialize subsystem recreates
 	// it when the Telegram configuration changes, so it is read per call.
 	// nil means the bot is not configured.
-	Bot func() *tgbotapi.BotAPI
+	Bot           func() *tgbotapi.BotAPI
 	Redis         *redis.Client
 	Users         repository.UserRepo
 	UserAuth      repository.UserAuthRepo
@@ -53,6 +53,8 @@ type Deps struct {
 	Subscriptions repository.UserSubscriptionRepo
 	Plans         repository.SubscribeRepo
 	Logs          repository.LogRepo
+	// Wallet is the billing-domain read port for balance display.
+	Wallet repository.WalletRepo
 }
 
 func New(deps Deps) Service {
@@ -77,6 +79,7 @@ func (s *service) HandleTelegramUpdate(ctx context.Context, update *tgbotapi.Upd
 		UserCache:     s.deps.UserCache,
 		Plans:         s.deps.Plans,
 		Logs:          s.deps.Logs,
+		Wallet:        s.deps.Wallet,
 	})
 	telegram.NewTelegramLogic(ctx, telegram.TelegramLogicDependencies{
 		Messenger: messenger,

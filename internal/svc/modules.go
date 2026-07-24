@@ -334,6 +334,7 @@ func newNotificationModule(store repository.Store, srv *ServiceContext) notifica
 		Subscriptions: store.UserSubscription(),
 		Plans:         store.Subscribe(),
 		Logs:          store.Log(),
+		Wallet:        store.Wallet(),
 	})
 }
 

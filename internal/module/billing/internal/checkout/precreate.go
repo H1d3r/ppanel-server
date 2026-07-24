@@ -134,14 +134,22 @@ func (s *Service) PreCreateOrder(ctx context.Context, req *dto.PurchaseOrderRequ
 	}
 
 	var deductionAmount int64
+	// The preview reads the authoritative wallet row: the context user is
+	// the middleware's cached identity snapshot (ADR-001 step 5).
+	giftAvailable := u.GiftAmount
+	if s.deps.Store != nil {
+		if w, err := s.deps.Store.Wallet().FindWallet(ctx, u.Id); err == nil && w != nil {
+			giftAvailable = w.GiftAmount
+		}
+	}
 	// Gift amount is deducted after payment fee, because the fee is based on the payable cash amount.
-	if u.GiftAmount > 0 && amount > 0 {
-		if u.GiftAmount >= amount {
+	if giftAvailable > 0 && amount > 0 {
+		if giftAvailable >= amount {
 			deductionAmount = amount
 			amount = 0
 		} else {
-			deductionAmount = u.GiftAmount
-			amount -= u.GiftAmount
+			deductionAmount = giftAvailable
+			amount -= giftAvailable
 		}
 	}
 

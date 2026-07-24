@@ -393,11 +393,17 @@ func (a *TelegramAdmin) userDetail(msg *tgbotapi.Message, adminUser *user.User, 
 		adminFlag = "⭐ 管理员"
 	}
 	email, _ := a.userEmail(u.Id)
+	balance := u.Balance
+	if a.deps.Wallet != nil {
+		if w, err := a.deps.Wallet.FindWallet(a.ctx, u.Id); err == nil && w != nil {
+			balance = w.Balance
+		}
+	}
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("👤 用户详情\n━━━━━━━━━━━━━━━━━━\nID：%d\n邮箱：%s\n状态：%s\n角色：%s\n余额：¥%.2f\n注册：%s\n推荐码：%s\n",
 		u.Id, email, enable, adminFlag,
-		float64(u.Balance)/100,
+		float64(balance)/100,
 		u.CreatedAt.Format("2006-01-02"),
 		u.ReferCode,
 	))

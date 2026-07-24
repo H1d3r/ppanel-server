@@ -28,7 +28,6 @@ type fakeUserRepo struct {
 	findOneUserSubscribeCalls int
 }
 
-
 // FindOneForUpdate disambiguates the embedded UserRepo/WalletRepo pair; the
 // tests exercising it stub the identity side.
 func (r *fakeUserRepo) FindOneForUpdate(ctx context.Context, id int64) (*usermodel.User, error) {

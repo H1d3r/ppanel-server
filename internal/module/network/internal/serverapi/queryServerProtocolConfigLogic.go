@@ -3,16 +3,16 @@ package serverapi
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/module/network/internal/nodeconfig"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/node"
+	"github.com/perfect-panel/server/internal/module/network/internal/nodeconfig"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 )
 
 type QueryServerProtocolConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
+	ctx  context.Context
 	deps Deps
 }
 

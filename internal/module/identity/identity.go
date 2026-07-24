@@ -189,6 +189,7 @@ func New(deps Deps) Service {
 			Config: deps.VerifyCodeConfig,
 		}),
 		profile: profile.NewService(profile.Deps{
+			Wallet:          deps.Wallet,
 			Users:           deps.Users,
 			UserAuth:        deps.UserAuths,
 			Auth:            deps.Auths,

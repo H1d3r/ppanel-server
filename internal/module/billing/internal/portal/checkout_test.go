@@ -30,7 +30,7 @@ func (s *balancePaymentStore) InTx(ctx context.Context, fn func(repository.Store
 	return fn(s)
 }
 
-func (s *balancePaymentStore) Order() repository.OrderRepo { return s.orders }
+func (s *balancePaymentStore) Order() repository.OrderRepo   { return s.orders }
 func (s *balancePaymentStore) User() repository.UserRepo     { return s.users }
 func (s *balancePaymentStore) Wallet() repository.WalletRepo { return s.users }
 func (s *balancePaymentStore) UserCache() repository.UserCacheRepo {

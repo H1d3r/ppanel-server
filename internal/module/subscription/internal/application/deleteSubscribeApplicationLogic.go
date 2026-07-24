@@ -11,7 +11,7 @@ import (
 
 type DeleteSubscribeApplicationLogic struct {
 	logger.Logger
-	ctx    context.Context
+	ctx  context.Context
 	deps Deps
 }
 

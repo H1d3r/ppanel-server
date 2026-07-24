@@ -38,6 +38,13 @@ func (l *QueryUserInfoLogic) QueryUserInfo() (resp *dto.User, err error) {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 	tool.DeepCopy(resp, u)
+	// Wallet values come from the billing-owned table; the context user is
+	// the middleware's cached identity row (ADR-001 step 5).
+	if w, err := l.deps.Wallet.FindWallet(l.ctx, u.Id); err == nil && w != nil {
+		resp.Balance = w.Balance
+		resp.GiftAmount = w.GiftAmount
+		resp.Commission = w.Commission
+	}
 
 	var userMethods []dto.UserAuthMethod
 	for _, method := range resp.AuthMethods {
