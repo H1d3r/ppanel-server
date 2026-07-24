@@ -38,12 +38,23 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 	// money movement) on the same user row until the wallet table splits out
 	// (ADR-001 step 5).
 	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
-		// Financial adjustments must compare and write the latest row under a
-		// lock, with their audit logs in the same transaction.
+		// Financial adjustments must compare and write the latest values
+		// under a lock, with their audit logs in the same transaction.
+		// Lock-ordering contract (ADR-001 step 5): the wallet lock comes
+		// before the user-row lock, matching every wallet movement's
+		// wallet-then-user write order.
+		walletInfo, err := store.Wallet().FindOneForUpdate(l.ctx, req.UserId)
+		if err != nil {
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Wallet Error")
+		}
 		userInfo, err := store.User().FindOneForUpdate(l.ctx, req.UserId)
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Error")
 		}
+		// The wallet values are authoritative from the wallet row.
+		userInfo.Balance = walletInfo.Balance
+		userInfo.GiftAmount = walletInfo.GiftAmount
+		userInfo.Commission = walletInfo.Commission
 		if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
 			return err
 		}

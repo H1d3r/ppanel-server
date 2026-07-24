@@ -160,7 +160,7 @@ func (s checkoutTransaction) FindOrderByOrderNoForUpdate(ctx context.Context, or
 }
 
 func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*user.User, error) {
-	return s.store.User().FindOneForUpdate(ctx, id)
+	return s.store.Wallet().FindOneForUpdate(ctx, id)
 }
 
 func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *user.User) error {

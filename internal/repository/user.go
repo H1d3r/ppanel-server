@@ -165,10 +165,6 @@ type userSubscriptionRepo struct {
 
 type userBillingRepo struct {
 	cache.CachedConn
-	// users provides the row lock and cache keys for the wallet columns,
-	// which still live on the identity-owned user table (recorded data
-	// debt; step 5 moves them into their own table).
-	users *userRepo
 }
 
 func newUserRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) *userRepo {
@@ -184,7 +180,7 @@ func newUserRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.Invalidat
 func newUserSubscriptionRepo(u *userRepo) *userSubscriptionRepo { return u.subs }
 
 func newUserBillingRepo(u *userRepo) *userBillingRepo {
-	return &userBillingRepo{CachedConn: u.CachedConn, users: u}
+	return &userBillingRepo{CachedConn: u.CachedConn}
 }
 
 // --- internal helpers ---

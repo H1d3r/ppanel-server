@@ -204,7 +204,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		// The request-context user is only an authentication snapshot. Lock and
 		// re-read the account before reserving gift credit so two concurrent
 		// orders cannot spend the same balance.
-		lockedUser, e := txStore.User().FindOneForUpdate(ctx, u.Id)
+		lockedUser, e := txStore.Wallet().FindOneForUpdate(ctx, u.Id)
 		if e != nil {
 			return e
 		}

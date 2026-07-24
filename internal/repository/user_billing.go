@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"github.com/perfect-panel/server/internal/model/entity/user"
 	"gorm.io/gorm"
@@ -72,9 +73,42 @@ func (m *userBillingRepo) InsertWithdrawal(ctx context.Context, data *user.Withd
 	})
 }
 
-// FindOneForUpdate locks the user row for a wallet movement. The money
-// columns still live on the identity-owned user table (recorded data debt),
-// so the lock goes through the identity repo until they move out.
+// FindOneForUpdate locks the billing-owned wallet row and composes it with
+// a plain read of the identity profile: the money values come from the
+// wallet table, everything else from the user row. Lock-ordering contract:
+// any flow touching both domains takes the wallet lock before the user row
+// (the dual-write's user-column UPDATE follows the same order), so wallet
+// movements and profile edits cannot deadlock.
 func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, id int64) (*user.User, error) {
-	return m.users.FindOneForUpdate(ctx, id)
+	var result *user.User
+	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
+		var w user.Wallet
+		werr := conn.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ?", id).First(&w).Error
+		if werr != nil && !errors.Is(werr, gorm.ErrRecordNotFound) {
+			return werr
+		}
+		var u user.User
+		if err := conn.Where("id = ?", id).First(&u).Error; err != nil {
+			return err
+		}
+		if errors.Is(werr, gorm.ErrRecordNotFound) {
+			// Account predating the wallet backfill: seed the row from the
+			// user columns, then take the lock.
+			seed := user.Wallet{UserId: id, Balance: u.Balance, GiftAmount: u.GiftAmount, Commission: u.Commission}
+			if err := conn.Clauses(clause.OnConflict{DoNothing: true}).Create(&seed).Error; err != nil {
+				return err
+			}
+			if err := conn.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("user_id = ?", id).First(&w).Error; err != nil {
+				return err
+			}
+		}
+		u.Balance = w.Balance
+		u.GiftAmount = w.GiftAmount
+		u.Commission = w.Commission
+		result = &u
+		return nil
+	})
+	return result, err
 }

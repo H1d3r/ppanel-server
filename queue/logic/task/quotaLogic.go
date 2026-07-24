@@ -284,7 +284,7 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 		return nil
 	}
 
-	userInfo, err := store.User().FindOneForUpdate(ctx, sub.UserId)
+	userInfo, err := store.Wallet().FindOneForUpdate(ctx, sub.UserId)
 	if err != nil {
 		*errors = append(*errors, ErrorInfo{
 			UserSubscribeId: sub.Id,
