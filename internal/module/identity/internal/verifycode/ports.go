@@ -1,4 +1,4 @@
-package common
+package verifycode
 
 import (
 	"context"

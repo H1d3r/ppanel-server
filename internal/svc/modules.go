@@ -240,6 +240,19 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 				SiteHost: c.Site.Host,
 			}
 		},
+		VerifyQueue: srv.Queue,
+		VerifyCodeConfig: func() identity.VerifyCodeSnapshot {
+			c := srv.Config
+			return identity.VerifyCodeSnapshot{
+				DomainSuffixList:   c.Email.DomainSuffixList,
+				EnableDomainSuffix: c.Email.EnableDomainSuffix,
+				VerifyCodeInterval: c.VerifyCode.Interval,
+				VerifyCodeLimit:    c.VerifyCode.Limit,
+				VerifyCodeExpire:   c.VerifyCode.ExpireTime,
+				SiteLogo:           c.Site.SiteLogo,
+				SiteName:           c.Site.SiteName,
+			}
+		},
 	})
 }
 

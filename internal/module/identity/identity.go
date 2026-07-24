@@ -10,8 +10,8 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/internal/adminuser"
 	authn "github.com/perfect-panel/server/internal/module/identity/internal/authn"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/oauth"
-	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
 	"github.com/perfect-panel/server/internal/module/identity/internal/profile"
+	"github.com/perfect-panel/server/internal/module/identity/internal/verifycode"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 )
@@ -73,16 +73,12 @@ type Service interface {
 	OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest, ip, userAgent string) (*dto.LoginResponse, error)
 	AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCallbackRequest) (*AppleLoginRedirect, error)
 
-	// AuthPolicy exposes the administrator-configured account policies to
-	// collaborators still outside the module (the verification-code senders
-	// in legacy common logic); it becomes module-internal once those flows
-	// migrate.
-	AuthPolicy() RegisterPolicy
+	// The verification-code flows issue and pre-check the email/SMS codes
+	// gating registration and account mutations.
+	SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (*dto.SendCodeResponse, error)
+	SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) (*dto.SendCodeResponse, error)
+	CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeRespone, error)
 }
-
-// RegisterPolicy re-exports the register-policy implementation for
-// transitional out-of-module consumers.
-type RegisterPolicy = registerpolicy.ServicePolicy
 
 // AuthSnapshot re-exports the authentication subdomain's per-request view of
 // the runtime-mutable settings; the composition root supplies the snapshot
@@ -120,7 +116,20 @@ type Deps struct {
 	// AuthConfig snapshots the runtime-mutable settings consumed by the
 	// authentication flows per request.
 	AuthConfig func() AuthSnapshot
+	// VerifyQueue publishes verification-code delivery tasks; the asynq
+	// client satisfies it structurally.
+	VerifyQueue VerificationTaskQueue
+	// VerifyCodeConfig snapshots the runtime-mutable settings consumed by
+	// the verification-code flows per request.
+	VerifyCodeConfig func() VerifyCodeSnapshot
 }
+
+// VerificationTaskQueue and VerifyCodeSnapshot re-export the
+// verification-code subdomain's ports for the composition root.
+type (
+	VerificationTaskQueue = verifycode.VerificationTaskQueue
+	VerifyCodeSnapshot    = verifycode.Snapshot
+)
 
 func New(deps Deps) Service {
 	authSvc := authn.NewService(authn.Deps{
@@ -141,6 +150,13 @@ func New(deps Deps) Service {
 			Logs:       deps.Logs,
 			Store:      deps.Store,
 			KickDevice: deps.KickDevice,
+		}),
+		verify: verifycode.NewService(verifycode.Deps{
+			Store:  deps.Store,
+			Redis:  deps.Redis,
+			Queue:  deps.VerifyQueue,
+			Policy: authSvc.Policy(),
+			Config: deps.VerifyCodeConfig,
 		}),
 		profile: profile.NewService(profile.Deps{
 			Users:           deps.Users,
@@ -163,6 +179,7 @@ type service struct {
 	adminUsers *adminuser.Service
 	profile    *profile.Service
 	authn      *authn.Service
+	verify     *verifycode.Service
 }
 
 func (s *service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) error {
@@ -341,6 +358,14 @@ func (s *service) AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCal
 	return s.authn.AppleLoginCallback(ctx, req)
 }
 
-func (s *service) AuthPolicy() RegisterPolicy {
-	return s.authn.Policy()
+func (s *service) SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (*dto.SendCodeResponse, error) {
+	return s.verify.SendEmailCode(ctx, req)
+}
+
+func (s *service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) (*dto.SendCodeResponse, error) {
+	return s.verify.SendSmsCode(ctx, req)
+}
+
+func (s *service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeRespone, error) {
+	return s.verify.CheckVerificationCode(ctx, req)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/common"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -33,8 +32,7 @@ func CheckVerificationCodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := common.NewCheckVerificationCodeLogic(ctx, svcCtx)
-		resp, err := l.CheckVerificationCode(&req)
+		resp, err := svcCtx.Identity.CheckVerificationCode(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }
