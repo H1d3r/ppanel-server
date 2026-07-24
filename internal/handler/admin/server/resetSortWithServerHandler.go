@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func ResetSortWithServerHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := server.NewResetSortWithServerLogic(c, svcCtx)
-		err := l.ResetSortWithServer(&req)
+		err := svcCtx.Network.ResetSortWithServer(c, &req)
 		result.HttpResult(ctx, nil, err)
 	}
 }

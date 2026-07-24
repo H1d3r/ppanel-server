@@ -28,10 +28,7 @@ const importPrefix = "github.com/perfect-panel/server/"
 // internal/logic, keyed by importer directory. Removing an edge here is always
 // welcome; adding one requires updating docs/adr-001-modular-monolith.md, as
 // each new edge makes the future module split harder.
-var legacyLogicImports = map[string][]string{
-	"internal/logic/admin/server": {"internal/logic/nodeconfig"},
-	"internal/logic/server":       {"internal/logic/nodeconfig"},
-}
+var legacyLogicImports = map[string][]string{}
 
 // svcImporters is the frozen baseline of package directories that may import
 // internal/svc (the legacy god object). ADR-001 step 3 shrinks this list as
@@ -58,11 +55,8 @@ var svcImporters = map[string]bool{
 	"internal/handler/server":          true,
 	"internal/logic/admin/application": true, "internal/logic/admin/authMethod": true,
 	"internal/logic/admin/console": true,
-	"internal/logic/admin/server":  true,
 	"internal/logic/admin/tool":    true, "internal/logic/admin/user": true,
-	"internal/logic/edge":           true,
 	"internal/logic/public/payment": true,
-	"internal/logic/server":         true,
 	"internal/logic/telegram":       true,
 	"internal/middleware":           true, "internal/route": true,
 	"internal/transport/httpserver": true,

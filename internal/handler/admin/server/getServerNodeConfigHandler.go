@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetServerNodeConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := server.NewGetServerNodeConfigLogic(c, svcCtx)
-		resp, err := l.GetServerNodeConfig(&req)
+		resp, err := svcCtx.Network.GetServerNodeConfig(c, &req)
 		result.HttpResult(ctx, resp, err)
 	}
 }

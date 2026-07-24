@@ -2,10 +2,10 @@ package server
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/module/network"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/perfect-panel/server/internal/logic/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -37,11 +37,10 @@ func GetServerUserListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 		}
 
 		ifNoneMatch := string(ctx.GetHeader("If-None-Match"))
-		l := server.NewGetServerUserListLogic(c, svcCtx, server.RequestMeta{
+		resp, respMeta, err := svcCtx.Network.GetServerUserList(c, &req, network.RequestMeta{
 			IfNoneMatch: ifNoneMatchForRepresentation(ifNoneMatch, acceptsProtobuf),
 		})
-		resp, err := l.GetServerUserList(&req)
-		writeHeaders(ctx, l.ResponseMeta().Headers)
+		writeHeaders(ctx, respMeta.Headers)
 		if err != nil {
 			if errors.Is(err, xerr.StatusNotModified) {
 				ctx.String(consts.StatusNotModified, "Not Modified")

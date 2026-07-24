@@ -9,7 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/perfect-panel/server/internal/edgeauth"
-	"github.com/perfect-panel/server/internal/logic/edge"
+	"github.com/perfect-panel/server/internal/module/network"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
@@ -46,10 +46,9 @@ func ManifestHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		logic := edge.NewManifestLogic(c, svcCtx)
-		response, err := logic.Manifest(token)
+		response, err := svcCtx.Network.EdgeManifest(c, token)
 		if err != nil {
-			if errors.Is(err, edge.ErrManifestNotFound) {
+			if errors.Is(err, network.ErrManifestNotFound) {
 				ctx.String(consts.StatusNotFound, "Not Found")
 				return
 			}

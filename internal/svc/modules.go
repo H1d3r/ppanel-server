@@ -12,6 +12,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
+	"github.com/perfect-panel/server/internal/module/network"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -252,6 +253,28 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 				SiteLogo:           c.Site.SiteLogo,
 				SiteName:           c.Site.SiteName,
 			}
+		},
+	})
+}
+
+// newNetworkModule wires the network module against the legacy store; the
+// node/subscribe configuration is runtime-mutable, so the module receives a
+// per-request snapshot closure.
+func newNetworkModule(store repository.Store, srv *ServiceContext) network.Service {
+	return network.New(network.Deps{
+		Store: store,
+		Redis: srv.Redis,
+		Config: func() network.Snapshot {
+			return network.Snapshot{
+				Node:      srv.Config.Node,
+				Subscribe: srv.Config.Subscribe,
+			}
+		},
+		Multiplier: func(at time.Time) float32 {
+			if srv.NodeMultiplierManager == nil {
+				return 1
+			}
+			return srv.NodeMultiplierManager.GetMultiplier(at)
 		},
 	})
 }

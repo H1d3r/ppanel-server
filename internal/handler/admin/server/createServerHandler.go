@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func CreateServerHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := server.NewCreateServerLogic(c, svcCtx)
-		err := l.CreateServer(&req)
+		err := svcCtx.Network.CreateServer(c, &req)
 		result.HttpResult(ctx, nil, err)
 	}
 }

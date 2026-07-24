@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 )
@@ -37,7 +36,6 @@ func ServerPushUserTrafficHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := server.NewServerPushUserTrafficLogic(c, svcCtx)
-		writeServerReportResult(ctx, l.ServerPushUserTraffic(&req))
+		writeServerReportResult(ctx, svcCtx.Network.ServerPushUserTraffic(c, &req))
 	}
 }

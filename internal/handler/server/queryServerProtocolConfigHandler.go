@@ -7,7 +7,6 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/perfect-panel/server/internal/logic/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -46,8 +45,7 @@ func QueryServerProtocolConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFun
 			return
 		}
 
-		l := server.NewQueryServerProtocolConfigLogic(c, svcCtx)
-		resp, err := l.QueryServerProtocolConfig(&req)
+		resp, err := svcCtx.Network.QueryServerProtocolConfig(c, &req)
 		if err != nil {
 			writeServerReportResult(ctx, err)
 			return

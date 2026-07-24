@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/server"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func DeleteNodeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := server.NewDeleteNodeLogic(c, svcCtx)
-		err := l.DeleteNode(&req)
+		err := svcCtx.Network.DeleteNode(c, &req)
 		result.HttpResult(ctx, nil, err)
 	}
 }
