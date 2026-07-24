@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/payment"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetPaymentMethodListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := payment.NewGetPaymentMethodListLogic(c, svcCtx)
-		resp, err := l.GetPaymentMethodList(&req)
+		resp, err := svcCtx.Billing.GetPaymentMethodList(c, &req)
 		result.HttpResult(ctx, resp, err)
 	}
 }

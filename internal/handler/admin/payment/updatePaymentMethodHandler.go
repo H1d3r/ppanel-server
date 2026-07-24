@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/payment"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UpdatePaymentMethodHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := payment.NewUpdatePaymentMethodLogic(c, svcCtx)
-		resp, err := l.UpdatePaymentMethod(&req)
+		resp, err := svcCtx.Billing.UpdatePaymentMethod(c, &req)
 		result.HttpResult(ctx, resp, err)
 	}
 }

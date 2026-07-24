@@ -2,16 +2,54 @@ package svc
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/support"
+	"github.com/perfect-panel/server/internal/report"
 	"github.com/perfect-panel/server/internal/repository"
 	emailworker "github.com/perfect-panel/server/internal/worker/email"
 	"github.com/perfect-panel/server/pkg/logger"
 	queuetypes "github.com/perfect-panel/server/queue/types"
 )
+
+// newBillingModule wires the billing module against the legacy store and the
+// asynq client (ADR-001 step 4).
+func newBillingModule(c config.Config, store repository.Store, queue *asynq.Client) billing.Service {
+	return billing.New(billing.Deps{
+		Orders:        store.Order(),
+		Payments:      store.Payment(),
+		Tx:            store,
+		Queue:         activationQueue{client: queue},
+		Host:          c.Host,
+		IsGatewayMode: report.IsGatewayMode,
+	})
+}
+
+// activationQueue adapts the asynq client to the billing module's activation
+// port. A task-id conflict means a delivery already exists for the order,
+// which is success, not an error.
+type activationQueue struct {
+	client *asynq.Client
+}
+
+func (q activationQueue) EnqueueActivation(ctx context.Context, orderNo string) error {
+	payload, err := json.Marshal(queuetypes.ForthwithActivateOrderPayload{OrderNo: orderNo})
+	if err != nil {
+		return err
+	}
+	task := asynq.NewTask(queuetypes.ForthwithActivateOrder, payload)
+	_, err = q.client.EnqueueContext(ctx, task, asynq.TaskID(queuetypes.ActivationTaskID(orderNo)))
+	if errors.Is(err, asynq.ErrTaskIDConflict) {
+		return nil
+	}
+	return err
+}
 
 // newSupportModule wires the support module against the legacy store. The
 // adapters below satisfy the module's ports until the owning modules exist
