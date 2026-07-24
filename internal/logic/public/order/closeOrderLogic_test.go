@@ -29,7 +29,17 @@ type closeOrderStore struct {
 func (s *closeOrderStore) InTx(_ context.Context, fn func(repository.Store) error) error {
 	return fn(s)
 }
-func (s *closeOrderStore) Order() repository.OrderRepo { return s.orders }
+
+func (s *closeOrderStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
+	return fn(s)
+}
+
+func (s *closeOrderStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
+	return fn(s)
+}
+
+func (s *closeOrderStore) Wallet() repository.WalletRepo { return s.users }
+func (s *closeOrderStore) Order() repository.OrderRepo   { return s.orders }
 func (s *closeOrderStore) Subscribe() repository.SubscribeRepo {
 	return s.subscribes
 }

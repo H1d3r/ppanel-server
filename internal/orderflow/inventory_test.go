@@ -20,6 +20,10 @@ type inventoryStore struct {
 func (s *inventoryStore) InTx(_ context.Context, fn func(repository.Store) error) error {
 	return fn(s)
 }
+
+func (s *inventoryStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
+	return fn(s)
+}
 func (s *inventoryStore) Inbox() repository.InboxRepo         { return s.inbox }
 func (s *inventoryStore) Subscribe() repository.SubscribeRepo { return s.subscribes }
 

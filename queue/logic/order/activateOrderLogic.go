@@ -178,7 +178,7 @@ func (l *ActivateOrderLogic) ensureGuestAccount(ctx context.Context, orderInfo *
 			return fmt.Errorf("guest order password hash is missing")
 		}
 		userInfo := &user.User{Password: passwordHash, Algo: tool.PasswordAlgoForHash(passwordHash)}
-		err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
+		err = l.svc.Store.InIdentityTx(ctx, func(store repository.IdentityStore) error {
 			if err := store.User().Insert(ctx, userInfo); err != nil {
 				return err
 			}
@@ -232,16 +232,33 @@ func (l *ActivateOrderLogic) fulfillOrder(ctx context.Context, orderInfo *order.
 		return l.loadActivationResult(ctx, orderInfo)
 	}
 	var result *activationResult
-	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
-		var txErr error
-		result, txErr = l.processOrderByTypeInTx(ctx, store, orderInfo)
-		if txErr != nil {
-			return txErr
-		}
-		// A duplicate key here means a concurrent delivery fulfilled first;
-		// this transaction rolls back and the retry takes the replay path.
-		return store.Inbox().Insert(ctx, consumer, orderInfo.OrderNo, "")
-	})
+	if orderInfo.Type == OrderTypeRecharge {
+		// Recharge is a wallet credit: a pure billing-domain transaction.
+		err = l.svc.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
+			var txErr error
+			result, txErr = l.activateRechargeTx(ctx, store, orderInfo)
+			if txErr != nil {
+				return txErr
+			}
+			return store.Inbox().Insert(ctx, consumer, orderInfo.OrderNo, "")
+		})
+	} else {
+		// Subscription fulfillment still runs on the generic transaction: the
+		// user row lock inside serialises per-user quota checks across
+		// domains until the subscription module owns that concern (ADR-001
+		// step 5).
+		err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
+			var txErr error
+			result, txErr = l.processOrderByTypeInTx(ctx, store, orderInfo)
+			if txErr != nil {
+				return txErr
+			}
+			// A duplicate key here means a concurrent delivery fulfilled
+			// first; this transaction rolls back and the retry takes the
+			// replay path.
+			return store.Inbox().Insert(ctx, consumer, orderInfo.OrderNo, "")
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +321,7 @@ func (l *ActivateOrderLogic) settleCommission(ctx context.Context, userInfo *use
 		return nil, nil
 	}
 	var recipient *user.User
-	err = l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	err = l.svc.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		var txErr error
 		recipient, txErr = l.handleCommissionTx(ctx, store, userInfo, orderInfo)
 		if txErr != nil {
@@ -329,7 +346,7 @@ func (l *ActivateOrderLogic) settleCommission(ctx context.Context, userInfo *use
 // locks; compensation for admin closes of paid orders is a billing concern
 // tracked in ADR-001 step 2.
 func (l *ActivateOrderLogic) finalizeOrder(ctx context.Context, orderInfo *order.Order) error {
-	return l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	return l.svc.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		if orderInfo.Coupon != "" && !orderInfo.CouponReserved {
 			if err := store.Coupon().UpdateCount(ctx, orderInfo.Coupon); err != nil {
 				return err
@@ -354,8 +371,6 @@ func (l *ActivateOrderLogic) processOrderByTypeInTx(ctx context.Context, store r
 		return l.activateRenewalTx(ctx, store, orderInfo)
 	case OrderTypeResetTraffic:
 		return l.activateResetTrafficTx(ctx, store, orderInfo)
-	case OrderTypeRecharge:
-		return l.activateRechargeTx(ctx, store, orderInfo)
 	default:
 		return nil, ErrInvalidOrderType
 	}
@@ -508,13 +523,13 @@ func (l *ActivateOrderLogic) activateResetTrafficTx(ctx context.Context, store r
 	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: telegram.ResetTrafficNotify}, nil
 }
 
-func (l *ActivateOrderLogic) activateRechargeTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*activationResult, error) {
-	userInfo, err := store.User().FindOneForUpdate(ctx, orderInfo.UserId)
+func (l *ActivateOrderLogic) activateRechargeTx(ctx context.Context, store repository.BillingStore, orderInfo *order.Order) (*activationResult, error) {
+	userInfo, err := store.Wallet().FindOneForUpdate(ctx, orderInfo.UserId)
 	if err != nil {
 		return nil, err
 	}
 	userInfo.Balance += orderInfo.Price
-	if err := store.User().UpdateBalanceFields(ctx, userInfo); err != nil {
+	if err := store.Wallet().UpdateBalanceFields(ctx, userInfo); err != nil {
 		return nil, err
 	}
 	balanceLog := &log.Balance{
@@ -619,11 +634,11 @@ func (l *ActivateOrderLogic) getGuestOrderInfo(ctx context.Context, orderInfo *o
 	return l.getTempOrderInfo(ctx, orderInfo.OrderNo)
 }
 
-func (l *ActivateOrderLogic) handleCommissionTx(ctx context.Context, store repository.Store, userInfo *user.User, orderInfo *order.Order) (*user.User, error) {
+func (l *ActivateOrderLogic) handleCommissionTx(ctx context.Context, store repository.BillingStore, userInfo *user.User, orderInfo *order.Order) (*user.User, error) {
 	if userInfo == nil || userInfo.RefererId == 0 || (orderInfo.Type != OrderTypeSubscribe && orderInfo.Type != OrderTypeRenewal) {
 		return nil, nil
 	}
-	referer, err := store.User().FindOneForUpdate(ctx, userInfo.RefererId)
+	referer, err := store.Wallet().FindOneForUpdate(ctx, userInfo.RefererId)
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +658,7 @@ func (l *ActivateOrderLogic) handleCommissionTx(ctx context.Context, store repos
 		return nil, nil
 	}
 	referer.Commission += amount
-	if err := store.User().UpdateCommission(ctx, referer); err != nil {
+	if err := store.Wallet().UpdateCommission(ctx, referer); err != nil {
 		return nil, err
 	}
 	commissionType := log.CommissionTypePurchase

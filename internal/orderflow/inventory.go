@@ -33,7 +33,7 @@ func ReserveInventoryOnce(ctx context.Context, store repository.Store, orderNo s
 	if mark != nil {
 		return nil
 	}
-	return store.InTx(ctx, func(tx repository.Store) error {
+	return store.InSubscriptionTx(ctx, func(tx repository.SubscriptionStore) error {
 		reserved, err := tx.Subscribe().ReserveInventory(ctx, subscribeID)
 		if err != nil {
 			return err
@@ -63,7 +63,7 @@ func RestoreInventoryOnce(ctx context.Context, store repository.Store, orderNo s
 	if restoreMark != nil {
 		return nil
 	}
-	return store.InTx(ctx, func(tx repository.Store) error {
+	return store.InSubscriptionTx(ctx, func(tx repository.SubscriptionStore) error {
 		if err := tx.Subscribe().RestoreInventory(ctx, subscribeID); err != nil {
 			return err
 		}

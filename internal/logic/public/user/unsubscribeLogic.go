@@ -90,7 +90,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		}
 		// Subscription-domain transaction: flip the status and durably record
 		// what the billing stage owes.
-		err = l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
+		err = l.svcCtx.Store.InSubscriptionTx(l.ctx, func(store repository.SubscriptionStore) error {
 			// Re-read the subscription under a row lock. The context user is
 			// only an authorization principal and can be stale.
 			lockedSub, err := store.UserSubscription().FindOneSubscribeForUpdate(l.ctx, req.Id)
@@ -177,11 +177,11 @@ func (l *UnsubscribeLogic) settleRefundOnce(userID, subID int64, subKey string) 
 	if err != nil {
 		return err
 	}
-	return l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
+	return l.svcCtx.Store.InBillingTx(l.ctx, func(store repository.BillingStore) error {
 		// Subscriptions created by an administrator have no associated order.
 		// They can be cancelled, but there is no payment to refund.
 		if orderID != 0 {
-			lockedUser, err := store.User().FindOneForUpdate(l.ctx, userID)
+			lockedUser, err := store.Wallet().FindOneForUpdate(l.ctx, userID)
 			if err != nil {
 				return err
 			}
@@ -258,7 +258,7 @@ func (l *UnsubscribeLogic) settleRefundOnce(userID, subID int64, subKey string) 
 			// Update only financial fields so this refund cannot overwrite a
 			// concurrent profile/auth update.
 			lockedUser.Balance = balance
-			if err := store.User().UpdateBalanceFields(l.ctx, lockedUser); err != nil {
+			if err := store.Wallet().UpdateBalanceFields(l.ctx, lockedUser); err != nil {
 				return err
 			}
 		}

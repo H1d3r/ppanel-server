@@ -39,6 +39,13 @@ type Store interface {
 	UserCache() UserCacheRepo
 
 	InTx(ctx context.Context, fn func(store Store) error) error
+
+	// Domain-scoped transactions (ADR-001 step 2): the closure receives only
+	// its domain's store view, so cross-domain writes fail to compile.
+	InBillingTx(ctx context.Context, fn func(BillingStore) error) error
+	InSubscriptionTx(ctx context.Context, fn func(SubscriptionStore) error) error
+	InIdentityTx(ctx context.Context, fn func(IdentityStore) error) error
+	InNetworkTx(ctx context.Context, fn func(NetworkStore) error) error
 }
 
 var _ Store = (*GormStore)(nil)

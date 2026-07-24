@@ -29,14 +29,14 @@ func (l *CheckSubscriptionLogic) ProcessTask(ctx context.Context, _ *asynq.Task)
 	logger.Infof("[CheckSubscription] Start check subscription: %s", timeutil.Now().Format("2006-01-02 15:04:05"))
 	// Check subscription traffic
 	if err := l.markSubscribes(ctx, 2, "[Check Subscription Traffic]", l.sendTrafficNotify,
-		func(store repository.Store) ([]*user.Subscribe, error) {
+		func(store repository.SubscriptionStore) ([]*user.Subscribe, error) {
 			return store.UserSubscription().FindTrafficExceededSubscribes(ctx)
 		}); err != nil {
 		logger.Error("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
 	}
 	// Check subscription expire
 	if err := l.markSubscribes(ctx, 3, "[Check Subscription Expire]", l.sendExpiredNotify,
-		func(store repository.Store) ([]*user.Subscribe, error) {
+		func(store repository.SubscriptionStore) ([]*user.Subscribe, error) {
 			return store.UserSubscription().FindExpiredSubscribes(ctx, timeutil.Now())
 		}); err != nil {
 		logger.Info("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
@@ -47,9 +47,9 @@ func (l *CheckSubscriptionLogic) ProcessTask(ctx context.Context, _ *asynq.Task)
 // markSubscribes commits the status flip in a subscription-domain transaction;
 // notifications and cache invalidation are retryable side effects that run
 // after the commit (ADR-001 step 2).
-func (l *CheckSubscriptionLogic) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []int64) error, find func(repository.Store) ([]*user.Subscribe, error)) error {
+func (l *CheckSubscriptionLogic) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []int64) error, find func(repository.SubscriptionStore) ([]*user.Subscribe, error)) error {
 	var list []*user.Subscribe
-	err := l.svc.Store.InTx(ctx, func(store repository.Store) error {
+	err := l.svc.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		var err error
 		list, err = find(store)
 		if err != nil {

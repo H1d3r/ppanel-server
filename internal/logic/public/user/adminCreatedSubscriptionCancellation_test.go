@@ -103,6 +103,18 @@ func (s *adminCreatedSubscriptionStore) InTx(ctx context.Context, fn func(reposi
 	return fn(s)
 }
 
+func (s *adminCreatedSubscriptionStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
+	s.inTxCalls++
+	return fn(s)
+}
+
+func (s *adminCreatedSubscriptionStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
+	s.inTxCalls++
+	return fn(s)
+}
+
+func (s *adminCreatedSubscriptionStore) Wallet() repository.WalletRepo { return s.userRepo }
+
 func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	logtest.Discard(t)
 

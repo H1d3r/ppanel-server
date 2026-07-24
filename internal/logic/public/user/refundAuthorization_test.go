@@ -60,6 +60,16 @@ func (s *fakeStore) Inbox() repository.InboxRepo {
 	return s.inbox
 }
 
+func (s *fakeStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
+	return fn(s)
+}
+
+func (s *fakeStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
+	return fn(s)
+}
+
+func (s *fakeStore) Wallet() repository.WalletRepo { return s.uRepo }
+
 func (s *fakeStore) User() repository.UserRepo { return s.uRepo }
 func (s *fakeStore) UserSubscription() repository.UserSubscriptionRepo {
 	return s.uRepo

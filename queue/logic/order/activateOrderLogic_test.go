@@ -32,8 +32,22 @@ type activationStore struct {
 func (s *activationStore) InTx(_ context.Context, fn func(repository.Store) error) error {
 	return fn(s)
 }
-func (s *activationStore) Order() repository.OrderRepo { return s.orders }
-func (s *activationStore) User() repository.UserRepo   { return s.users }
+
+func (s *activationStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
+	return fn(s)
+}
+
+func (s *activationStore) InIdentityTx(_ context.Context, fn func(repository.IdentityStore) error) error {
+	return fn(s)
+}
+
+func (s *activationStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
+	return fn(s)
+}
+
+func (s *activationStore) Wallet() repository.WalletRepo { return s.users }
+func (s *activationStore) Order() repository.OrderRepo   { return s.orders }
+func (s *activationStore) User() repository.UserRepo     { return s.users }
 func (s *activationStore) UserSubscription() repository.UserSubscriptionRepo {
 	return s.users
 }

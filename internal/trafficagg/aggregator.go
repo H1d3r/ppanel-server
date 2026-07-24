@@ -448,13 +448,32 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 	// it succeeds (then deadletters), so each transaction marks the bucket in
 	// the idempotent inbox to keep replays from double-counting the side that
 	// already committed.
-	if err := a.applyBucketOnce(ctx, subscriptionTrafficBucketConsumer, suffix, func(store repository.Store) error {
-		return store.UserSubscription().BatchUpdateUserSubscribeWithTraffic(ctx, updates)
-	}); err != nil {
+	processed, err := a.bucketProcessed(ctx, subscriptionTrafficBucketConsumer, suffix)
+	if err != nil {
 		return err
 	}
-	return a.applyBucketOnce(ctx, networkTrafficBucketConsumer, suffix, func(store repository.Store) error {
-		return store.TrafficLog().InsertBatch(ctx, logs, defaultTrafficBatchSize)
+	if !processed {
+		if err := a.svc.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+			if err := store.UserSubscription().BatchUpdateUserSubscribeWithTraffic(ctx, updates); err != nil {
+				return err
+			}
+			return store.Inbox().Insert(ctx, subscriptionTrafficBucketConsumer, suffix, "")
+		}); err != nil {
+			return err
+		}
+	}
+	processed, err = a.bucketProcessed(ctx, networkTrafficBucketConsumer, suffix)
+	if err != nil {
+		return err
+	}
+	if processed {
+		return nil
+	}
+	return a.svc.Store.InNetworkTx(ctx, func(store repository.NetworkStore) error {
+		if err := store.TrafficLog().InsertBatch(ctx, logs, defaultTrafficBatchSize); err != nil {
+			return err
+		}
+		return store.Inbox().Insert(ctx, networkTrafficBucketConsumer, suffix, "")
 	})
 }
 
@@ -464,20 +483,12 @@ const (
 	networkTrafficBucketConsumer      = "network.traffic_bucket"
 )
 
-func (a *Aggregator) applyBucketOnce(ctx context.Context, consumer, suffix string, apply func(repository.Store) error) error {
+func (a *Aggregator) bucketProcessed(ctx context.Context, consumer, suffix string) (bool, error) {
 	mark, err := a.svc.Store.Inbox().Find(ctx, consumer, suffix)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if mark != nil {
-		return nil
-	}
-	return a.svc.Store.InTx(ctx, func(store repository.Store) error {
-		if err := apply(store); err != nil {
-			return err
-		}
-		return store.Inbox().Insert(ctx, consumer, suffix, "")
-	})
+	return mark != nil, nil
 }
 
 func protocolRatio(serverInfo *node.Server, protocol string) (float32, bool, error) {

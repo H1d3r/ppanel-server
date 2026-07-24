@@ -83,7 +83,7 @@ func (l *CloseOrderLogic) CloseOrder(req *dto.CloseOrderRequest) error {
 	}
 
 	var closed bool
-	err = store.InTx(l.ctx, func(txStore repository.Store) error {
+	err = store.InBillingTx(l.ctx, func(txStore repository.BillingStore) error {
 		// Only the still-pending order may be closed.  A payment callback can
 		// race this task, so an unconditional status write would otherwise turn
 		// a paid order back into a closed order.
@@ -108,7 +108,7 @@ func (l *CloseOrderLogic) CloseOrder(req *dto.CloseOrderRequest) error {
 		// of the early return, also skipped restoration of reserved inventory.
 		// refund deduction amount to user deduction balance
 		if orderInfo.GiftAmount > 0 {
-			userInfo, err := txStore.User().FindOneForUpdate(l.ctx, orderInfo.UserId)
+			userInfo, err := txStore.Wallet().FindOneForUpdate(l.ctx, orderInfo.UserId)
 			if err != nil {
 				l.Errorw("[CloseOrder] Find user info failed",
 					logger.Field("error", err.Error()),
@@ -118,7 +118,7 @@ func (l *CloseOrderLogic) CloseOrder(req *dto.CloseOrderRequest) error {
 			}
 			deduction := userInfo.GiftAmount + orderInfo.GiftAmount
 			userInfo.GiftAmount = deduction
-			err = txStore.User().UpdateBalanceFields(l.ctx, userInfo)
+			err = txStore.Wallet().UpdateBalanceFields(l.ctx, userInfo)
 			if err != nil {
 				l.Errorw("[CloseOrder] Refund deduction amount failed",
 					logger.Field("error", err.Error()),

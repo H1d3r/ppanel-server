@@ -178,7 +178,7 @@ func (l *PurchaseLogic) Purchase(req *dto.PortalPurchaseRequest) (resp *dto.Port
 	// package cannot reuse the public order close logic without an import
 	// cycle, and guest pre-orders only hold a coupon reservation.
 	if err := orderflow.ReserveInventoryOnce(l.ctx, l.svcCtx.Store, orderInfo.OrderNo, sub.Id); err != nil {
-		closeErr := l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
+		closeErr := l.svcCtx.Store.InBillingTx(l.ctx, func(store repository.BillingStore) error {
 			closed, e := store.Order().UpdateOrderStatusFrom(l.ctx, orderInfo.OrderNo, 1, 3)
 			if e != nil {
 				return e

@@ -94,6 +94,13 @@ internal/module/<name>/
      status==3 分支续跑）。已知窗口：①建单提交后、预留前进程崩溃且用户在 30 分钟内完成网关
      支付 → 单件超卖（极小概率双重巧合）；②部署切换时刻处于 Pending 的新购订单（旧流程无
      预留标记）关单时不回补 → 建议低峰部署或部署后跑一次库存核对。
+   - ✅ **领域窄 store 视图与作用域事务**（`internal/repository/domains.go`）：
+     `BillingStore / SubscriptionStore / IdentityStore / NetworkStore` 四个视图 +
+     `InBillingTx` 等作用域事务，闭包只拿到本域仓储，跨域写**编译失败**。
+     `WalletRepo` 把"钱包归 billing"落到代码（billing 事务经 `Wallet()` 而非 `User()`
+     动钱包列）。已迁移的调用点：库存预留/回补、订阅检查、退订两段、流量聚合两段、
+     激活的建号/充值/佣金/结算段、关单主事务、portal 补偿。仍留在通用 `InTx` 的例外：
+     订阅履约段（过渡期 user 行锁）与新购主事务（订阅配额跨域读），均有注释标记。
    - ✅ **退订两段化**（`unsubscribeLogic`）：subscription 事务翻转状态并在取消标记中持久化
      "orderID|应退金额"，billing 事务按标记退款（赠金优先）并写退款标记；两段之间崩溃时，
      用户重试会命中"已扣减但未退款"分支直接续跑退款段。
