@@ -30,5 +30,15 @@ func (l *CleanupOrderEventsLogic) ProcessTask(ctx context.Context, _ *asynq.Task
 	if deleted > 0 {
 		logger.WithContext(ctx).Infof("removed %d expired order events", deleted)
 	}
+	// The idempotent inbox shares the retention contract: every consumer's
+	// replay window (deferred closes, activation retries, bucket flushes)
+	// resolves far inside it.
+	inboxDeleted, err := l.svcCtx.Store.Inbox().DeleteProcessedBefore(ctx, time.Now().Add(-orderEventRetention))
+	if err != nil {
+		return err
+	}
+	if inboxDeleted > 0 {
+		logger.WithContext(ctx).Infof("removed %d expired inbox markers", inboxDeleted)
+	}
 	return nil
 }

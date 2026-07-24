@@ -50,6 +50,14 @@ func (r *fakeUserRepo) FindOneUserSubscribe(ctx context.Context, id int64) (*use
 type fakeStore struct {
 	repository.Store
 	uRepo *fakeUserRepo
+	inbox *fakeInboxRepo
+}
+
+func (s *fakeStore) Inbox() repository.InboxRepo {
+	if s.inbox == nil {
+		s.inbox = newFakeInboxRepo()
+	}
+	return s.inbox
 }
 
 func (s *fakeStore) User() repository.UserRepo { return s.uRepo }

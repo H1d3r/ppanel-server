@@ -65,8 +65,16 @@ type adminCreatedSubscriptionStore struct {
 
 	userRepo      *adminCreatedSubscriptionUserRepo
 	subscribeRepo repository.SubscribeRepo
+	inbox         *fakeInboxRepo
 	inTxCalls     int
 	orderCalls    int
+}
+
+func (s *adminCreatedSubscriptionStore) Inbox() repository.InboxRepo {
+	if s.inbox == nil {
+		s.inbox = newFakeInboxRepo()
+	}
+	return s.inbox
 }
 
 func (s *adminCreatedSubscriptionStore) User() repository.UserRepo {
@@ -139,8 +147,10 @@ func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	if currentUser.GiftAmount != 200 {
 		t.Fatalf("user gift amount = %d, want 200", currentUser.GiftAmount)
 	}
-	if store.inTxCalls != 1 {
-		t.Fatalf("InTx called %d time(s), want 1", store.inTxCalls)
+	// One subscription-domain cancellation transaction plus one billing
+	// transaction that only records the settled-refund marker.
+	if store.inTxCalls != 2 {
+		t.Fatalf("InTx called %d time(s), want 2", store.inTxCalls)
 	}
 	if store.orderCalls != 0 {
 		t.Fatalf("Order called %d time(s), want 0", store.orderCalls)

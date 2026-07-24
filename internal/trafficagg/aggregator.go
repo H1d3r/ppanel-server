@@ -442,11 +442,41 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 		return updates[i].SubscribeId < updates[j].SubscribeId
 	})
 
+	// The subscription usage counters and the network traffic log commit in
+	// their own domain transactions (ADR-001 step 2). The bucket suffix is a
+	// stable replay key: the flush pipeline retries the identical bucket until
+	// it succeeds (then deadletters), so each transaction marks the bucket in
+	// the idempotent inbox to keep replays from double-counting the side that
+	// already committed.
+	if err := a.applyBucketOnce(ctx, subscriptionTrafficBucketConsumer, suffix, func(store repository.Store) error {
+		return store.UserSubscription().BatchUpdateUserSubscribeWithTraffic(ctx, updates)
+	}); err != nil {
+		return err
+	}
+	return a.applyBucketOnce(ctx, networkTrafficBucketConsumer, suffix, func(store repository.Store) error {
+		return store.TrafficLog().InsertBatch(ctx, logs, defaultTrafficBatchSize)
+	})
+}
+
+// Inbox consumers for the two halves of a traffic bucket flush.
+const (
+	subscriptionTrafficBucketConsumer = "subscription.traffic_bucket"
+	networkTrafficBucketConsumer      = "network.traffic_bucket"
+)
+
+func (a *Aggregator) applyBucketOnce(ctx context.Context, consumer, suffix string, apply func(repository.Store) error) error {
+	mark, err := a.svc.Store.Inbox().Find(ctx, consumer, suffix)
+	if err != nil {
+		return err
+	}
+	if mark != nil {
+		return nil
+	}
 	return a.svc.Store.InTx(ctx, func(store repository.Store) error {
-		if err := store.UserSubscription().BatchUpdateUserSubscribeWithTraffic(ctx, updates); err != nil {
+		if err := apply(store); err != nil {
 			return err
 		}
-		return store.TrafficLog().InsertBatch(ctx, logs, defaultTrafficBatchSize)
+		return store.Inbox().Insert(ctx, consumer, suffix, "")
 	})
 }
 

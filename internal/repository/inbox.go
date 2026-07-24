@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/inbox"
 	"gorm.io/gorm"
@@ -20,6 +21,10 @@ type InboxRepo interface {
 	// transaction as the step's mutations; a duplicate-key error means a
 	// concurrent delivery won the race and this transaction must roll back.
 	Insert(ctx context.Context, consumer, eventKey, result string) error
+	// DeleteProcessedBefore removes markers older than the replay contract;
+	// every flow that consults the inbox resolves well inside the retention
+	// window (deferred closes in minutes, bucket replays in hours).
+	DeleteProcessedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 var _ InboxRepo = (*inboxRepo)(nil)
@@ -52,4 +57,11 @@ func (m *inboxRepo) Insert(ctx context.Context, consumer, eventKey, result strin
 		EventKey: eventKey,
 		Result:   result,
 	}).Error
+}
+
+func (m *inboxRepo) DeleteProcessedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	result := m.db.WithContext(ctx).
+		Where("processed_at < ?", cutoff).
+		Delete(&inbox.Record{})
+	return result.RowsAffected, result.Error
 }

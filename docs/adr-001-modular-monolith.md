@@ -94,6 +94,14 @@ internal/module/<name>/
      status==3 分支续跑）。已知窗口：①建单提交后、预留前进程崩溃且用户在 30 分钟内完成网关
      支付 → 单件超卖（极小概率双重巧合）；②部署切换时刻处于 Pending 的新购订单（旧流程无
      预留标记）关单时不回补 → 建议低峰部署或部署后跑一次库存核对。
+   - ✅ **退订两段化**（`unsubscribeLogic`）：subscription 事务翻转状态并在取消标记中持久化
+     "orderID|应退金额"，billing 事务按标记退款（赠金优先）并写退款标记；两段之间崩溃时，
+     用户重试会命中"已扣减但未退款"分支直接续跑退款段。
+   - ✅ **流量聚合两段化**（`trafficagg`）：订阅用量计数（subscription）与流量日志（network）
+     各自成事务，以 bucket suffix 为幂等键——flush 管线本就重放同一 bucket 直至成功/死信，
+     inbox 标记防止已提交的一半被重复计数。
+   - ✅ **收件箱保留期**：`InboxRepo.DeleteProcessedBefore` 挂入每日清理任务，与订单事件
+     共用 30 天保留契约（所有重放窗口远小于它）。
    - ✅ **首个改造完成：`queue/logic/order/activateOrderLogic`**。原单一跨 4 域事务拆为
      四个单域事务：① identity 访客建号（inbox 存 userId 供重放重绑）→ ② subscription/identity
      履约（开通/续费/重置/充值）→ ③ identity 佣金 → ④ billing 结算（优惠券计数 + Paid→Finished
@@ -161,7 +169,10 @@ identity 与 subscription 的 repo 实现需要先物理分家。
 ### A.1 跨域事务点（第 2 步的改造清单）
 
 单域事务 23 处（identity 8、subscription 7、network 3、billing 2、platform 3），无需改造。
-**跨 2+ 模块的事务 17 处**，按业务流分组：
+**跨 2+ 模块的事务 17 处——已全部处理**（2026-07-24）：4 处随 activateOrderLogic 事件化、
+6 处经"钱包归 billing"澄清重分类为单域、2 处（checkSubscription）副作用外移、
+2 处（purchase/portal purchase）库存生命周期拆出、1 处（closeOrder）回补拆出、
+1 处（unsubscribe）两段化、1 处（trafficagg）两段化。原始清单留档：
 
 | 调用点 | 跨越模块 | 业务流 |
 |---|---|---|
