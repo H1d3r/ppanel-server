@@ -150,6 +150,7 @@ func (r *closeSubscribeRepo) RestoreInventory(_ context.Context, id int64, _ ...
 
 type closeUserRepo struct {
 	repository.UserRepo
+	repository.WalletRepo
 	user        *userEntity.User
 	updateCalls int
 }

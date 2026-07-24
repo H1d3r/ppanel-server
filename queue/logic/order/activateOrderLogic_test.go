@@ -112,6 +112,7 @@ type activationUserRepo struct {
 	repository.UserRepo
 	repository.UserSubscriptionRepo
 	repository.UserCacheRepo
+	repository.WalletRepo
 	user             *userEntity.User
 	updateCacheCalls int
 	quotaCount       int64

@@ -164,7 +164,7 @@ func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*
 }
 
 func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *user.User) error {
-	return s.store.User().UpdateBalanceFields(ctx, data)
+	return s.store.Wallet().UpdateBalanceFields(ctx, data)
 }
 
 func (s checkoutTransaction) InsertSystemLog(ctx context.Context, data *log.SystemLog) error {

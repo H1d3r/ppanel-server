@@ -35,8 +35,6 @@ type UserRepo interface {
 	FindOneByReferCode(ctx context.Context, referCode string) (*user.User, error)
 	Update(ctx context.Context, data *user.User, tx ...*gorm.DB) error
 	UpgradePasswordHash(ctx context.Context, id int64, currentHash, password, algo, salt string) (bool, error)
-	UpdateBalanceFields(ctx context.Context, data *user.User, tx ...*gorm.DB) error
-	UpdateCommission(ctx context.Context, data *user.User, tx ...*gorm.DB) error
 	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
 	BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm.DB) error
 	QueryPageList(ctx context.Context, page, size int, filter *user.UserFilterParams) ([]*user.User, int64, error)
@@ -137,30 +135,57 @@ type UserCacheRepo interface {
 	UpdateUserSubscribeCache(ctx context.Context, data *user.Subscribe) error
 }
 
+// The former shared *userRepo is physically split along domain seams
+// (ADR-001 step 5): userRepo keeps the identity domain (and the cache
+// facade), userSubscriptionRepo owns user_subscribe and traffic accounting,
+// userBillingRepo owns the wallet-column view and withdrawals. They share
+// one database today; each struct only touches its own domain's tables so
+// the eventual per-service databases fall out of the wiring.
 var _ UserRepo = (*userRepo)(nil)
 var _ UserAuthRepo = (*userRepo)(nil)
-var _ UserSubscriptionRepo = (*userRepo)(nil)
 var _ UserDeviceRepo = (*userRepo)(nil)
-var _ UserWithdrawalRepo = (*userRepo)(nil)
-var _ SubscriptionTrafficRepo = (*userRepo)(nil)
 var _ UserCacheRepo = (*userRepo)(nil)
+var _ UserSubscriptionRepo = (*userSubscriptionRepo)(nil)
+var _ SubscriptionTrafficRepo = (*userSubscriptionRepo)(nil)
+var _ UserWithdrawalRepo = (*userBillingRepo)(nil)
+var _ WalletRepo = (*userBillingRepo)(nil)
 
 type userRepo struct {
 	cache.CachedConn
 	table string
+	// subs supports the cross-domain cache cascade in
+	// BatchClearRelatedCache and the wallet's row locking until the money
+	// columns leave the user table.
+	subs *userSubscriptionRepo
+}
+
+type userSubscriptionRepo struct {
+	cache.CachedConn
+}
+
+type userBillingRepo struct {
+	cache.CachedConn
+	// users provides the row lock and cache keys for the wallet columns,
+	// which still live on the identity-owned user table (recorded data
+	// debt; step 5 moves them into their own table).
+	users *userRepo
 }
 
 func newUserRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) *userRepo {
+	conn := newCachedConn(db, c, invalidations...)
+	subs := &userSubscriptionRepo{CachedConn: conn}
 	return &userRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "user",
+		subs:       subs,
 	}
 }
 
-// Code organization (ADR-001 step 5): the shared *userRepo implementation is
-// being split along domain seams. Each user_*.go file holds one domain's
-// methods; the struct itself splits once the cross-domain cascades
-// (Delete/BatchDeleteUser/BatchClearRelatedCache) are untangled.
+func newUserSubscriptionRepo(u *userRepo) *userSubscriptionRepo { return u.subs }
+
+func newUserBillingRepo(u *userRepo) *userBillingRepo {
+	return &userBillingRepo{CachedConn: u.CachedConn, users: u}
+}
 
 // --- internal helpers ---
 
@@ -235,7 +260,7 @@ func (m *userRepo) BatchClearRelatedCache(ctx context.Context, u *user.User) err
 		allKeys = append(allKeys, device.GetCacheKeys()...)
 	}
 
-	subscribes, err := m.QueryUserSubscribe(ctx, u.Id)
+	subscribes, err := m.subs.QueryUserSubscribe(ctx, u.Id)
 	if err != nil {
 		logger.Errorf("failed to query user subscribes for cache clearing: %v", err)
 	} else {
@@ -251,4 +276,15 @@ func (m *userRepo) BatchClearRelatedCache(ctx context.Context, u *user.User) err
 	}
 
 	return m.CachedConn.DelCacheCtx(ctx, allKeys...)
+}
+
+// ClearSubscribeCache and UpdateUserSubscribeCache delegate to the
+// subscription repo: the cache facade (UserCacheRepo) stays one object for
+// its consumers while each domain owns its keys.
+func (m *userRepo) ClearSubscribeCache(ctx context.Context, data ...*user.Subscribe) error {
+	return m.subs.ClearSubscribeCache(ctx, data...)
+}
+
+func (m *userRepo) UpdateUserSubscribeCache(ctx context.Context, data *user.Subscribe) error {
+	return m.subs.UpdateUserSubscribeCache(ctx, data)
 }

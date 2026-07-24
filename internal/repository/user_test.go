@@ -69,7 +69,7 @@ func TestUserRepoUpdateBalanceFieldsOnlyWritesBalanceColumns(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	err = newUserRepo(db, redisClient).UpdateBalanceFields(context.Background(), &user.User{Id: 42, Balance: 100, GiftAmount: 20})
+	err = newUserBillingRepo(newUserRepo(db, redisClient)).UpdateBalanceFields(context.Background(), &user.User{Id: 42, Balance: 100, GiftAmount: 20})
 	if err != nil {
 		t.Fatalf("UpdateBalanceFields: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestQueryUserSubscribeFiltersSharedCachedList(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	repo := newUserRepo(nil, redisClient)
+	repo := newUserSubscriptionRepo(newUserRepo(nil, redisClient))
 	cacheKey := fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, 42)
 	cached := []*user.SubscribeDetails{
 		{Id: 3, UserId: 42, Status: 1},
@@ -370,7 +370,7 @@ func TestQueryUserSubscribeCachesUnfilteredListWithStableOrder(t *testing.T) {
 			redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 			t.Cleanup(func() { _ = redisClient.Close() })
 
-			if _, err := newUserRepo(db, redisClient).QueryUserSubscribe(context.Background(), 42, 0, 1, 2, 3); err != nil {
+			if _, err := newUserSubscriptionRepo(newUserRepo(db, redisClient)).QueryUserSubscribe(context.Background(), 42, 0, 1, 2, 3); err != nil {
 				t.Fatalf("QueryUserSubscribe: %v", err)
 			}
 
@@ -492,7 +492,7 @@ func TestSubscriptionPolicyQueriesExcludeDeductedSubscriptions(t *testing.T) {
 			redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 			t.Cleanup(func() { _ = redisClient.Close() })
 
-			repo := newUserRepo(db, redisClient)
+			repo := newUserSubscriptionRepo(newUserRepo(db, redisClient))
 			if _, err := repo.CountQuotaConsumingSubscriptions(context.Background(), 42, 10); err != nil {
 				t.Fatalf("CountQuotaConsumingSubscriptions: %v", err)
 			}

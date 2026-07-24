@@ -238,7 +238,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		}
 		if orderInfo.GiftAmount > 0 {
 			lockedUser.GiftAmount -= orderInfo.GiftAmount
-			if e := txStore.User().UpdateBalanceFields(ctx, lockedUser); e != nil {
+			if e := txStore.Wallet().UpdateBalanceFields(ctx, lockedUser); e != nil {
 				log.Errorw("[Purchase] Database update error", logger.Field("error", e.Error()), logger.Field("user", lockedUser))
 				return e
 			}

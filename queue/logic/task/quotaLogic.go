@@ -314,7 +314,7 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 
 	if giftAmount > 0 {
 		userInfo.GiftAmount += giftAmount
-		if err := store.User().UpdateBalanceFields(ctx, userInfo); err != nil {
+		if err := store.Wallet().UpdateBalanceFields(ctx, userInfo); err != nil {
 			return fmt.Errorf("update user gift amount: %w", err)
 		}
 

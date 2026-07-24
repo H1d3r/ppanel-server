@@ -37,6 +37,9 @@ type Store interface {
 	UserWithdrawal() UserWithdrawalRepo
 	SubscriptionTraffic() SubscriptionTrafficRepo
 	UserCache() UserCacheRepo
+	// Wallet exposes the billing view of the user table's money columns
+	// (ADR-001 step 5 data debt).
+	Wallet() WalletRepo
 
 	InTx(ctx context.Context, fn func(store Store) error) error
 
@@ -139,12 +142,14 @@ func (s *GormStore) TrafficLog() TrafficRepo        { return s.trafficLog }
 func (s *GormStore) User() UserRepo                 { return s.user }
 func (s *GormStore) UserAuth() UserAuthRepo         { return s.user }
 func (s *GormStore) UserSubscription() UserSubscriptionRepo {
-	return s.user
+	return newUserSubscriptionRepo(s.user)
 }
-func (s *GormStore) UserDevice() UserDeviceRepo                   { return s.user }
-func (s *GormStore) UserWithdrawal() UserWithdrawalRepo           { return s.user }
-func (s *GormStore) SubscriptionTraffic() SubscriptionTrafficRepo { return s.user }
-func (s *GormStore) UserCache() UserCacheRepo                     { return s.user }
+func (s *GormStore) UserDevice() UserDeviceRepo         { return s.user }
+func (s *GormStore) UserWithdrawal() UserWithdrawalRepo { return newUserBillingRepo(s.user) }
+func (s *GormStore) SubscriptionTraffic() SubscriptionTrafficRepo {
+	return newUserSubscriptionRepo(s.user)
+}
+func (s *GormStore) UserCache() UserCacheRepo { return s.user }
 
 // InTx runs fn within a database transaction. A new GormStore backed by the
 // transaction is passed to fn, so all repository operations inside fn share

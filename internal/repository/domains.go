@@ -87,7 +87,7 @@ var (
 )
 
 // Wallet exposes the billing view of the user table's money columns.
-func (s *GormStore) Wallet() WalletRepo { return s.user }
+func (s *GormStore) Wallet() WalletRepo { return newUserBillingRepo(s.user) }
 
 // InBillingTx runs fn inside a transaction scoped to the billing domain.
 func (s *GormStore) InBillingTx(ctx context.Context, fn func(BillingStore) error) error {

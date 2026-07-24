@@ -391,42 +391,6 @@ func (m *userRepo) CountEmailRecipients(ctx context.Context, filter *user.EmailR
 	return total, err
 }
 
-func subscribeFilterQuery(conn *gorm.DB, filter *user.SubscribeFilter) *gorm.DB {
-	query := conn.Model(&user.Subscribe{})
-	if filter == nil {
-		return query
-	}
-	if len(filter.Subscribers) > 0 {
-		query = query.Where("subscribe_id IN ?", filter.Subscribers)
-	}
-	if filter.IsActive != nil && *filter.IsActive {
-		query = query.Where("status IN ?", []int64{0, 1, 2})
-	}
-	if filter.StartTime != 0 {
-		query = query.Where("start_time <= ?", time.UnixMilli(filter.StartTime))
-	}
-	if filter.EndTime != 0 {
-		query = query.Where("expire_time >= ?", time.UnixMilli(filter.EndTime))
-	}
-	return query
-}
-
-func (m *userRepo) QuerySubscribeIdsByFilter(ctx context.Context, filter *user.SubscribeFilter) ([]int64, error) {
-	var ids []int64
-	err := m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
-		return subscribeFilterQuery(conn, filter).Pluck("id", v).Error
-	})
-	return ids, err
-}
-
-func (m *userRepo) CountSubscribesByFilter(ctx context.Context, filter *user.SubscribeFilter) (int64, error) {
-	var total int64
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
-		return subscribeFilterQuery(conn, filter).Count(&total).Error
-	})
-	return total, err
-}
-
 func (m *userRepo) BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm.DB) error {
 	if len(ids) == 0 {
 		return nil
@@ -501,16 +465,6 @@ func (m *userRepo) FindOneByReferCode(ctx context.Context, referCode string) (*u
 	var data user.User
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.User{}).Where("refer_code = ?", referCode).First(&data).Error
-	})
-	return &data, err
-}
-
-func (m *userRepo) FindOneSubscribeDetailsById(ctx context.Context, id int64) (*user.SubscribeDetails, error) {
-	var data user.SubscribeDetails
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
-		// Subscribe is a same-domain association; the identity-domain User
-		// row is no longer preloaded (no consumer read it — ADR-001 step 5).
-		return conn.Model(&user.Subscribe{}).Preload("Subscribe").Where("id = ?", id).First(&data).Error
 	})
 	return &data, err
 }
@@ -957,15 +911,4 @@ func (m *userRepo) FindUsersByIds(ctx context.Context, ids []int64) ([]*user.Use
 		return conn.Model(&user.User{}).Where("id IN ?", ids).Find(&users).Error
 	})
 	return users, err
-}
-
-func (m *userRepo) FindSubscribesByIds(ctx context.Context, ids []int64) ([]*user.Subscribe, error) {
-	var subscribes []*user.Subscribe
-	if len(ids) == 0 {
-		return subscribes, nil
-	}
-	err := m.QueryNoCacheCtx(ctx, &subscribes, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&user.Subscribe{}).Where("id IN ?", ids).Find(&subscribes).Error
-	})
-	return subscribes, err
 }

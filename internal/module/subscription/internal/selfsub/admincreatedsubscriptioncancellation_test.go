@@ -16,12 +16,18 @@ type adminCreatedSubscriptionUserRepo struct {
 	repository.UserRepo
 	repository.UserSubscriptionRepo
 	repository.UserCacheRepo
+	repository.WalletRepo
 
 	subscribe                 *usermodel.Subscribe
 	findOneSubscribeCalls     int
 	findOneUserSubscribeCalls int
 	updateSubscribeCalls      int
 	clearSubscribeCacheCalls  int
+}
+
+// FindOneForUpdate disambiguates the embedded UserRepo/WalletRepo pair.
+func (r *adminCreatedSubscriptionUserRepo) FindOneForUpdate(ctx context.Context, id int64) (*usermodel.User, error) {
+	return r.UserRepo.FindOneForUpdate(ctx, id)
 }
 
 func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribe(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
