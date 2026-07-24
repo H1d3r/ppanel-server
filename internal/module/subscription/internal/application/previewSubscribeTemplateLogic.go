@@ -6,7 +6,6 @@ import (
 	"github.com/perfect-panel/server/adapter"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/node"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -16,21 +15,21 @@ import (
 type PreviewSubscribeTemplateLogic struct {
 	logger.Logger
 	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	deps Deps
 }
 
 // Preview Template
-func NewPreviewSubscribeTemplateLogic(ctx context.Context, svcCtx *svc.ServiceContext) *PreviewSubscribeTemplateLogic {
+func newPreviewSubscribeTemplateLogic(ctx context.Context, deps Deps) *PreviewSubscribeTemplateLogic {
 	return &PreviewSubscribeTemplateLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *PreviewSubscribeTemplateLogic) PreviewSubscribeTemplate(req *dto.PreviewSubscribeTemplateRequest) (resp *dto.PreviewSubscribeTemplateResponse, err error) {
 	enable := true
-	_, servers, err := l.svcCtx.Store.Node().FilterNodeList(l.ctx, &node.FilterNodeParams{
+	_, servers, err := l.deps.Nodes.FilterNodeList(l.ctx, &node.FilterNodeParams{
 		Page:    1,
 		Size:    1000,
 		Preload: true,
@@ -41,7 +40,7 @@ func (l *PreviewSubscribeTemplateLogic) PreviewSubscribeTemplate(req *dto.Previe
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindAllServer error: %v", err.Error())
 	}
 
-	data, err := l.svcCtx.Store.Client().FindOne(l.ctx, req.Id)
+	data, err := l.deps.Clients.FindOne(l.ctx, req.Id)
 	if err != nil {
 		l.Errorf("[PreviewSubscribeTemplateLogic] FindOne error: %v", err.Error())
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneClient error: %v", err.Error())

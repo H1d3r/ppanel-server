@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -14,20 +13,20 @@ import (
 type GetSubscribeApplicationListLogic struct {
 	logger.Logger
 	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	deps Deps
 }
 
 // NewGetSubscribeApplicationListLogic Get subscribe application list
-func NewGetSubscribeApplicationListLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetSubscribeApplicationListLogic {
+func newGetSubscribeApplicationListLogic(ctx context.Context, deps Deps) *GetSubscribeApplicationListLogic {
 	return &GetSubscribeApplicationListLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetSubscribeApplicationListLogic) GetSubscribeApplicationList(req *dto.GetSubscribeApplicationListRequest) (resp *dto.GetSubscribeApplicationListResponse, err error) {
-	data, err := l.svcCtx.Store.Client().List(l.ctx)
+	data, err := l.deps.Clients.List(l.ctx)
 	if err != nil {
 		l.Errorf("Failed to get subscribe application list: %v", err)
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Failed to get subscribe application list")

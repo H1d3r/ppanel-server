@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/application"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func PreviewSubscribeTemplateHandler(svcCtx *svc.ServiceContext) app.HandlerFunc
 			return
 		}
 
-		l := application.NewPreviewSubscribeTemplateLogic(ctx, svcCtx)
-		resp, err := l.PreviewSubscribeTemplate(&req)
+		resp, err := svcCtx.Subscription.PreviewSubscribeTemplate(ctx, &req)
 		result.HttpResult(c, resp, err)
 
 	}

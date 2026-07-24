@@ -5,7 +5,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/client"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -15,20 +14,20 @@ import (
 type UpdateSubscribeApplicationLogic struct {
 	logger.Logger
 	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	deps Deps
 }
 
 // NewUpdateSubscribeApplicationLogic Update subscribe application
-func NewUpdateSubscribeApplicationLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateSubscribeApplicationLogic {
+func newUpdateSubscribeApplicationLogic(ctx context.Context, deps Deps) *UpdateSubscribeApplicationLogic {
 	return &UpdateSubscribeApplicationLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *UpdateSubscribeApplicationLogic) UpdateSubscribeApplication(req *dto.UpdateSubscribeApplicationRequest) (resp *dto.SubscribeApplication, err error) {
-	data, err := l.svcCtx.Store.Client().FindOne(l.ctx, req.Id)
+	data, err := l.deps.Clients.FindOne(l.ctx, req.Id)
 	if err != nil {
 		l.Errorf("Failed to find subscribe application with ID %d: %v", req.Id, err)
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Failed to find subscribe application with ID %d", req.Id)
@@ -50,7 +49,7 @@ func (l *UpdateSubscribeApplicationLogic) UpdateSubscribeApplication(req *dto.Up
 	data.SubscribeTemplate = req.SubscribeTemplate
 	data.OutputFormat = req.OutputFormat
 	data.DownloadLink = string(linkData)
-	err = l.svcCtx.Store.Client().Update(l.ctx, data)
+	err = l.deps.Clients.Update(l.ctx, data)
 	if err != nil {
 		l.Errorf("Failed to update subscribe application with ID %d: %v", req.Id, err)
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Failed to update subscribe application with ID %d", req.Id)

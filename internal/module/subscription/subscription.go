@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/application"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/delivery"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
@@ -18,6 +19,13 @@ import (
 // Service is the only surface other code may depend on; the implementation
 // lives under internal/ where the compiler seals it off.
 type Service interface {
+	// The client-application management for subscription delivery.
+	CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
+	UpdateSubscribeApplication(ctx context.Context, req *dto.UpdateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
+	DeleteSubscribeApplication(ctx context.Context, req *dto.DeleteSubscribeApplicationRequest) error
+	GetSubscribeApplicationList(ctx context.Context, req *dto.GetSubscribeApplicationListRequest) (*dto.GetSubscribeApplicationListResponse, error)
+	PreviewSubscribeTemplate(ctx context.Context, req *dto.PreviewSubscribeTemplateRequest) (*dto.PreviewSubscribeTemplateResponse, error)
+
 	CreateSubscribe(ctx context.Context, req *dto.CreateSubscribeRequest) error
 	UpdateSubscribe(ctx context.Context, req *dto.UpdateSubscribeRequest) error
 	DeleteSubscribe(ctx context.Context, req *dto.DeleteSubscribeRequest) error
@@ -113,6 +121,10 @@ type Deps struct {
 
 func New(deps Deps) Service {
 	return &service{
+		apps: application.NewService(application.Deps{
+			Clients: deps.Clients,
+			Nodes:   deps.Nodes,
+		}),
 		plans: plan.NewService(plan.Deps{
 			Plans:             deps.Plans,
 			UserSubs:          deps.UserSubs,
@@ -161,6 +173,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	apps       *application.Service
 	plans      *plan.Service
 	storefront *storefront.Service
 	delivery   *delivery.Service
@@ -310,4 +323,24 @@ func (s *service) PreUnsubscribe(ctx context.Context, req *dto.PreUnsubscribeReq
 
 func (s *service) Unsubscribe(ctx context.Context, req *dto.UnsubscribeRequest) error {
 	return s.selfSubs.Unsubscribe(ctx, req)
+}
+
+func (s *service) CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error) {
+	return s.apps.CreateSubscribeApplication(ctx, req)
+}
+
+func (s *service) UpdateSubscribeApplication(ctx context.Context, req *dto.UpdateSubscribeApplicationRequest) (*dto.SubscribeApplication, error) {
+	return s.apps.UpdateSubscribeApplication(ctx, req)
+}
+
+func (s *service) DeleteSubscribeApplication(ctx context.Context, req *dto.DeleteSubscribeApplicationRequest) error {
+	return s.apps.DeleteSubscribeApplication(ctx, req)
+}
+
+func (s *service) GetSubscribeApplicationList(ctx context.Context, req *dto.GetSubscribeApplicationListRequest) (*dto.GetSubscribeApplicationListResponse, error) {
+	return s.apps.GetSubscribeApplicationList(ctx, req)
+}
+
+func (s *service) PreviewSubscribeTemplate(ctx context.Context, req *dto.PreviewSubscribeTemplateRequest) (*dto.PreviewSubscribeTemplateResponse, error) {
+	return s.apps.PreviewSubscribeTemplate(ctx, req)
 }

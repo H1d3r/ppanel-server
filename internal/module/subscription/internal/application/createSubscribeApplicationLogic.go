@@ -5,7 +5,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/client"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -15,15 +14,15 @@ import (
 type CreateSubscribeApplicationLogic struct {
 	logger.Logger
 	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	deps Deps
 }
 
 // NewCreateSubscribeApplicationLogic Create subscribe application
-func NewCreateSubscribeApplicationLogic(ctx context.Context, svcCtx *svc.ServiceContext) *CreateSubscribeApplicationLogic {
+func newCreateSubscribeApplicationLogic(ctx context.Context, deps Deps) *CreateSubscribeApplicationLogic {
 	return &CreateSubscribeApplicationLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -47,7 +46,7 @@ func (l *CreateSubscribeApplicationLogic) CreateSubscribeApplication(req *dto.Cr
 		DownloadLink:      string(linkData),
 	}
 
-	err = l.svcCtx.Store.Client().Insert(l.ctx, data)
+	err = l.deps.Clients.Insert(l.ctx, data)
 	if err != nil {
 		l.Errorf("Failed to create subscribe application: %v", err)
 		return nil, errors.Wrap(xerr.NewErrCode(xerr.DatabaseInsertError), "Failed to create subscribe application")
