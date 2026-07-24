@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/authMethod"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func TestEmailSendHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := authMethod.NewTestEmailSendLogic(ctx, svcCtx)
-		err := l.TestEmailSend(&req)
+		err := svcCtx.Identity.TestEmailSend(ctx, &req)
 		result.HttpResult(c, nil, err)
 	}
 }

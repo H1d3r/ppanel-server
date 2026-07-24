@@ -1,11 +1,10 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
 	"encoding/json"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -14,21 +13,21 @@ import (
 
 type GetAuthMethodConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewGetAuthMethodConfigLogic Get auth method config
-func NewGetAuthMethodConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetAuthMethodConfigLogic {
+func newGetAuthMethodConfigLogic(ctx context.Context, deps Deps) *GetAuthMethodConfigLogic {
 	return &GetAuthMethodConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetAuthMethodConfigLogic) GetAuthMethodConfig(req *dto.GetAuthMethodConfigRequest) (resp *dto.AuthMethodConfig, err error) {
-	method, err := l.svcCtx.Store.Auth().FindOneByMethod(l.ctx, req.Method)
+	method, err := l.deps.Auths.FindOneByMethod(l.ctx, req.Method)
 	if err != nil {
 		l.Errorw("find one by method failed", logger.Field("method", req.Method), logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find one by method failed: %v", err.Error())

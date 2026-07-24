@@ -8,6 +8,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/identity/internal/adminuser"
+	"github.com/perfect-panel/server/internal/module/identity/internal/authmethodadmin"
 	authn "github.com/perfect-panel/server/internal/module/identity/internal/authn"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/oauth"
 	"github.com/perfect-panel/server/internal/module/identity/internal/profile"
@@ -73,6 +74,16 @@ type Service interface {
 	OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest, ip, userAgent string) (*dto.LoginResponse, error)
 	AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCallbackRequest) (*AppleLoginRedirect, error)
 
+	// The admin-side authentication-method management: configuration,
+	// sender platforms and test sends.
+	GetAuthMethodList(ctx context.Context) (*dto.GetAuthMethodListResponse, error)
+	GetAuthMethodConfig(ctx context.Context, req *dto.GetAuthMethodConfigRequest) (*dto.AuthMethodConfig, error)
+	UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAuthMethodConfigRequest) (*dto.AuthMethodConfig, error)
+	GetEmailPlatform(ctx context.Context) (*dto.PlatformResponse, error)
+	GetSmsPlatform(ctx context.Context) (*dto.PlatformResponse, error)
+	TestEmailSend(ctx context.Context, req *dto.TestEmailSendRequest) error
+	TestSmsSend(ctx context.Context, req *dto.TestSmsSendRequest) error
+
 	// The verification-code flows issue and pre-check the email/SMS codes
 	// gating registration and account mutations.
 	SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (*dto.SendCodeResponse, error)
@@ -122,7 +133,16 @@ type Deps struct {
 	// VerifyCodeConfig snapshots the runtime-mutable settings consumed by
 	// the verification-code flows per request.
 	VerifyCodeConfig func() VerifyCodeSnapshot
+	// SenderConfig snapshots the runtime-mutable sender platform settings
+	// per request, and Reinitialize re-runs a sender subsystem's
+	// initialization after its configuration changed.
+	SenderConfig func() SenderSnapshot
+	Reinitialize func(subsystem string)
 }
+
+// SenderSnapshot re-exports the auth-method subdomain's sender settings view
+// for the composition root.
+type SenderSnapshot = authmethodadmin.Snapshot
 
 // VerificationTaskQueue and VerifyCodeSnapshot re-export the
 // verification-code subdomain's ports for the composition root.
@@ -150,6 +170,11 @@ func New(deps Deps) Service {
 			Logs:       deps.Logs,
 			Store:      deps.Store,
 			KickDevice: deps.KickDevice,
+		}),
+		methods: authmethodadmin.NewService(authmethodadmin.Deps{
+			Auths:        deps.Auths,
+			Config:       deps.SenderConfig,
+			Reinitialize: deps.Reinitialize,
 		}),
 		verify: verifycode.NewService(verifycode.Deps{
 			Store:  deps.Store,
@@ -180,6 +205,7 @@ type service struct {
 	profile    *profile.Service
 	authn      *authn.Service
 	verify     *verifycode.Service
+	methods    *authmethodadmin.Service
 }
 
 func (s *service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) error {
@@ -368,4 +394,32 @@ func (s *service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 
 func (s *service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeRespone, error) {
 	return s.verify.CheckVerificationCode(ctx, req)
+}
+
+func (s *service) GetAuthMethodList(ctx context.Context) (*dto.GetAuthMethodListResponse, error) {
+	return s.methods.GetAuthMethodList(ctx)
+}
+
+func (s *service) GetAuthMethodConfig(ctx context.Context, req *dto.GetAuthMethodConfigRequest) (*dto.AuthMethodConfig, error) {
+	return s.methods.GetAuthMethodConfig(ctx, req)
+}
+
+func (s *service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAuthMethodConfigRequest) (*dto.AuthMethodConfig, error) {
+	return s.methods.UpdateAuthMethodConfig(ctx, req)
+}
+
+func (s *service) GetEmailPlatform(ctx context.Context) (*dto.PlatformResponse, error) {
+	return s.methods.GetEmailPlatform(ctx)
+}
+
+func (s *service) GetSmsPlatform(ctx context.Context) (*dto.PlatformResponse, error) {
+	return s.methods.GetSmsPlatform(ctx)
+}
+
+func (s *service) TestEmailSend(ctx context.Context, req *dto.TestEmailSendRequest) error {
+	return s.methods.TestEmailSend(ctx, req)
+}
+
+func (s *service) TestSmsSend(ctx context.Context, req *dto.TestSmsSendRequest) error {
+	return s.methods.TestSmsSend(ctx, req)
 }

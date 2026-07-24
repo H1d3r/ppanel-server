@@ -1,4 +1,4 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
@@ -6,22 +6,21 @@ import (
 	"github.com/perfect-panel/server/pkg/email"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type GetEmailPlatformLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get email support platform
-func NewGetEmailPlatformLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetEmailPlatformLogic {
+func newGetEmailPlatformLogic(ctx context.Context, deps Deps) *GetEmailPlatformLogic {
 	return &GetEmailPlatformLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 

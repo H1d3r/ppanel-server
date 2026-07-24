@@ -242,6 +242,21 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 			}
 		},
 		VerifyQueue: srv.Queue,
+		SenderConfig: func() identity.SenderSnapshot {
+			c := srv.Config
+			return identity.SenderSnapshot{
+				EmailPlatform:        c.Email.Platform,
+				EmailPlatformConfig:  c.Email.PlatformConfig,
+				MobilePlatform:       c.Mobile.Platform,
+				MobilePlatformConfig: c.Mobile.PlatformConfig,
+				SiteName:             c.Site.SiteName,
+			}
+		},
+		Reinitialize: func(subsystem string) {
+			if srv.ReinitSubsystem != nil {
+				srv.ReinitSubsystem(subsystem)
+			}
+		},
 		VerifyCodeConfig: func() identity.VerifyCodeSnapshot {
 			c := srv.Config
 			return identity.VerifyCodeSnapshot{

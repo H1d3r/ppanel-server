@@ -1,13 +1,11 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
 	"encoding/json"
 
-	"github.com/perfect-panel/server/initialize"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/auth"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/email"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/sms"
@@ -18,21 +16,21 @@ import (
 
 type UpdateAuthMethodConfigLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Update auth method config
-func NewUpdateAuthMethodConfigLogic(ctx context.Context, svcCtx *svc.ServiceContext) *UpdateAuthMethodConfigLogic {
+func newUpdateAuthMethodConfigLogic(ctx context.Context, deps Deps) *UpdateAuthMethodConfigLogic {
 	return &UpdateAuthMethodConfigLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *UpdateAuthMethodConfigLogic) UpdateAuthMethodConfig(req *dto.UpdateAuthMethodConfigRequest) (resp *dto.AuthMethodConfig, err error) {
-	method, err := l.svcCtx.Store.Auth().FindOneByMethod(l.ctx, req.Method)
+	method, err := l.deps.Auths.FindOneByMethod(l.ctx, req.Method)
 	if err != nil {
 		l.Errorw("find one by method failed", logger.Field("method", req.Method), logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find one by method failed: %v", err.Error())
@@ -81,7 +79,7 @@ func (l *UpdateAuthMethodConfigLogic) UpdateAuthMethodConfig(req *dto.UpdateAuth
 		// initialize platform config
 		method.Config = initializePlatformConfig(req.Method).(string)
 	}
-	err = l.svcCtx.Store.Auth().Update(l.ctx, method)
+	err = l.deps.Auths.Update(l.ctx, method)
 	if err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "update auth method failed: %v", err.Error())
 	}
@@ -100,14 +98,8 @@ func (l *UpdateAuthMethodConfigLogic) UpdateAuthMethodConfig(req *dto.UpdateAuth
 }
 
 func (l *UpdateAuthMethodConfigLogic) UpdateGlobal(method string) {
-	if method == "email" {
-		initialize.Email(l.svcCtx)
-	}
-	if method == "mobile" {
-		initialize.Mobile(l.svcCtx)
-	}
-	if method == "device" {
-		initialize.Device(l.svcCtx)
+	if method == "email" || method == "mobile" || method == "device" {
+		l.deps.Reinitialize(method)
 	}
 }
 

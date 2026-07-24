@@ -119,6 +119,12 @@ func (m *Service) Start() {
 			initialize.Invite(m.svc)
 		case "subscribe":
 			initialize.Subscribe(m.svc)
+		case "email":
+			initialize.Email(m.svc)
+		case "mobile":
+			initialize.Mobile(m.svc)
+		case "device":
+			initialize.Device(m.svc)
 		}
 	}
 	m.svc.NotifyTelegramUnbind = func(userID, chatID int64) error {

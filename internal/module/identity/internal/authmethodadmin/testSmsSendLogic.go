@@ -1,11 +1,10 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/sms"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -14,21 +13,21 @@ import (
 
 type TestSmsSendLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Test sms send
-func NewTestSmsSendLogic(ctx context.Context, svcCtx *svc.ServiceContext) *TestSmsSendLogic {
+func newTestSmsSendLogic(ctx context.Context, deps Deps) *TestSmsSendLogic {
 	return &TestSmsSendLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *TestSmsSendLogic) TestSmsSend(req *dto.TestSmsSendRequest) error {
-	client, err := sms.NewSender(l.svcCtx.Config.Mobile.Platform, l.svcCtx.Config.Mobile.PlatformConfig)
+	client, err := sms.NewSender(l.deps.Config().MobilePlatform, l.deps.Config().MobilePlatformConfig)
 	if err != nil {
 		l.Errorw("new sms sender err", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "new sms sender err: %v", err.Error())

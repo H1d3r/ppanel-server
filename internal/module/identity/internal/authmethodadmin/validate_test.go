@@ -1,4 +1,4 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"encoding/json"

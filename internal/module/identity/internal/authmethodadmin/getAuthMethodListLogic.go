@@ -1,11 +1,10 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
 	"encoding/json"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -14,21 +13,21 @@ import (
 
 type GetAuthMethodListLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewGetAuthMethodListLogic Get auth method list
-func NewGetAuthMethodListLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetAuthMethodListLogic {
+func newGetAuthMethodListLogic(ctx context.Context, deps Deps) *GetAuthMethodListLogic {
 	return &GetAuthMethodListLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *GetAuthMethodListLogic) GetAuthMethodList() (resp *dto.GetAuthMethodListResponse, err error) {
-	methods, err := l.svcCtx.Store.Auth().FindAll(l.ctx)
+	methods, err := l.deps.Auths.FindAll(l.ctx)
 	if err != nil {
 		l.Errorw("find all failed", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find all failed: %v", err.Error())

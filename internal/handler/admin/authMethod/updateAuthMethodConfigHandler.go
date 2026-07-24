@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/authMethod"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func UpdateAuthMethodConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := authMethod.NewUpdateAuthMethodConfigLogic(ctx, svcCtx)
-		resp, err := l.UpdateAuthMethodConfig(&req)
+		resp, err := svcCtx.Identity.UpdateAuthMethodConfig(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }

@@ -1,4 +1,4 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
@@ -6,22 +6,21 @@ import (
 	"github.com/perfect-panel/server/pkg/sms"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type GetSmsPlatformLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Get sms support platform
-func NewGetSmsPlatformLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetSmsPlatformLogic {
+func newGetSmsPlatformLogic(ctx context.Context, deps Deps) *GetSmsPlatformLogic {
 	return &GetSmsPlatformLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 

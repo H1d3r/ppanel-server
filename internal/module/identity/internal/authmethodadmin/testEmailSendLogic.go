@@ -1,11 +1,10 @@
-package authMethod
+package authmethodadmin
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/email"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -14,21 +13,21 @@ import (
 
 type TestEmailSendLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // Test email send
-func NewTestEmailSendLogic(ctx context.Context, svcCtx *svc.ServiceContext) *TestEmailSendLogic {
+func newTestEmailSendLogic(ctx context.Context, deps Deps) *TestEmailSendLogic {
 	return &TestEmailSendLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
 func (l *TestEmailSendLogic) TestEmailSend(req *dto.TestEmailSendRequest) error {
-	client, err := email.NewSender(l.svcCtx.Config.Email.Platform, l.svcCtx.Config.Email.PlatformConfig, l.svcCtx.Config.Site.SiteName)
+	client, err := email.NewSender(l.deps.Config().EmailPlatform, l.deps.Config().EmailPlatformConfig, l.deps.Config().SiteName)
 	if err != nil {
 		l.Errorw("new email sender err", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "new email sender err: %v", err.Error())
