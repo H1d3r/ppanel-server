@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/application"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/delivery"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/quotatask"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/sweep"
@@ -24,6 +25,9 @@ type Service interface {
 	// expired), committing status flips in subscription transactions with
 	// notification and cache invalidation as post-commit side effects.
 	CheckSubscriptions(ctx context.Context) error
+	// ProcessQuotaTask executes an admin-scheduled quota grant (time
+	// extension / gift credit) for the task's subscription scope.
+	ProcessQuotaTask(ctx context.Context, taskID int64) error
 
 	// The client-application management for subscription delivery.
 	CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
@@ -132,6 +136,9 @@ type Deps struct {
 
 func New(deps Deps) Service {
 	return &service{
+		quota: quotatask.NewService(quotatask.Deps{
+			Store: deps.FullStore,
+		}),
 		sweeper: sweep.NewService(sweep.Deps{
 			UserSubs: deps.UserSubs,
 			Plans:    deps.Plans,
@@ -192,6 +199,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	quota      *quotatask.Service
 	sweeper    *sweep.Service
 	apps       *application.Service
 	plans      *plan.Service
@@ -368,3 +376,11 @@ func (s *service) PreviewSubscribeTemplate(ctx context.Context, req *dto.Preview
 func (s *service) CheckSubscriptions(ctx context.Context) error {
 	return s.sweeper.CheckSubscriptions(ctx)
 }
+
+func (s *service) ProcessQuotaTask(ctx context.Context, taskID int64) error {
+	return s.quota.ProcessQuotaTask(ctx, taskID)
+}
+
+// ErrQuotaTaskUnretryable re-exports the quota subdomain's skip-retry
+// sentinel for the queue shell.
+var ErrQuotaTaskUnretryable = quotatask.ErrUnretryable
