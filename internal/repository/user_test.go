@@ -79,8 +79,17 @@ func TestUserRepoUpdateBalanceFieldsOnlyWritesBalanceColumns(t *testing.T) {
 			t.Fatalf("SQL missing %q:\n%s", want, sql)
 		}
 	}
+	// Only inspect the user-row UPDATE: the transitional wallet dual-write
+	// legitimately mentions every money column in its upsert.
+	userUpdate := ""
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.Contains(line, "UPDATE `user`") {
+			userUpdate = line
+			break
+		}
+	}
 	for _, unwanted := range []string{"`password`", "`commission`", "`refer_code`"} {
-		if strings.Contains(sql, unwanted) {
+		if strings.Contains(userUpdate, unwanted) {
 			t.Fatalf("SQL should not contain %q:\n%s", unwanted, sql)
 		}
 	}

@@ -56,7 +56,18 @@ func (m *userRepo) Insert(ctx context.Context, data *user.User, tx ...*gorm.DB) 
 				return err
 			}
 		}
-		return conn.Create(&data).Error
+		if err := conn.Create(&data).Error; err != nil {
+			return err
+		}
+		// Transitional dual-write (ADR-001 step 5): every account gets its
+		// billing-owned wallet row seeded with the initial money values that
+		// still live on the user columns.
+		return conn.Create(&user.Wallet{
+			UserId:     data.Id,
+			Balance:    data.Balance,
+			GiftAmount: data.GiftAmount,
+			Commission: data.Commission,
+		}).Error
 	}, m.getCacheKeys(data)...)
 	return err
 }
