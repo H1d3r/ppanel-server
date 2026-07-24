@@ -698,7 +698,9 @@ func (m *userRepo) FindOneByReferCode(ctx context.Context, referCode string) (*u
 func (m *userRepo) FindOneSubscribeDetailsById(ctx context.Context, id int64) (*user.SubscribeDetails, error) {
 	var data user.SubscribeDetails
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&user.Subscribe{}).Preload("Subscribe").Preload("User").Where("id = ?", id).First(&data).Error
+		// Subscribe is a same-domain association; the identity-domain User
+		// row is no longer preloaded (no consumer read it — ADR-001 step 5).
+		return conn.Model(&user.Subscribe{}).Preload("Subscribe").Where("id = ?", id).First(&data).Error
 	})
 	return &data, err
 }
