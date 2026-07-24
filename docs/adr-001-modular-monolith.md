@@ -171,9 +171,19 @@ internal/module/<name>/
 
    审计日志（`system_logs`）与收件箱（`domain_event_inbox`）保持豁免：任何域事务可写。
 6. **拆分就绪**：门面换 gRPC 实现（`api/` 已有 protobuf 基建）、事件换消息队列、搬表。
+   前置工作（拆分启动时执行）：①模块 repo 直连——解散共享的 `internal/repository`，
+   每模块自带 repo 包（表归属已定稿，机械搬移）；②queue 编排下沉——`queue/logic/order`
+   的激活 saga、`queue/logic/subscription` 的到期检查等改为调用模块门面（saga 归属
+   billing，作为订单流程属主）。
 
 过渡期约定：模块实现**暂时允许** import `internal/repository`（包装存量 repo 起步），
-目标在第 5 步归零；不允许 import `internal/svc` 与 `internal/logic`（测试强制）。
+目标在第 6 步前置工作中归零；不允许 import `internal/svc` 与 `internal/logic`（测试强制）。
+
+**svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩至 48，剩余条目全部为
+组装根/传输层性质——`cmd`、`initialize`、`internal`（server）、`internal/handler/**`
+（薄壳调门面）、`internal/middleware`、`internal/route`、`internal/transport/httpserver`、
+`queue/**`、`scheduler`。业务逻辑对 `ServiceContext` 的依赖已归零；这些剩余依赖是
+进程装配的本职，不再视为债务（queue 编排的门面化并入第 6 步前置）。
 
 ## 门面接口草案（示意）
 
