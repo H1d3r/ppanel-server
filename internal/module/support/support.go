@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/support/internal/ads"
 	"github.com/perfect-panel/server/internal/module/support/internal/announcement"
+	"github.com/perfect-panel/server/internal/module/support/internal/document"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
@@ -30,6 +31,25 @@ type Service interface {
 	DeleteAds(ctx context.Context, req *dto.DeleteAdsRequest) error
 	GetAdsDetail(ctx context.Context, req *dto.GetAdsDetailRequest) (*dto.Ads, error)
 	GetAdsList(ctx context.Context, req *dto.GetAdsListRequest) (*dto.GetAdsListResponse, error)
+
+	CreateDocument(ctx context.Context, req *dto.CreateDocumentRequest) error
+	UpdateDocument(ctx context.Context, req *dto.UpdateDocumentRequest) error
+	DeleteDocument(ctx context.Context, req *dto.DeleteDocumentRequest) error
+	BatchDeleteDocument(ctx context.Context, req *dto.BatchDeleteDocumentRequest) error
+	GetDocumentDetail(ctx context.Context, req *dto.GetDocumentDetailRequest) (*dto.Document, error)
+	GetDocumentList(ctx context.Context, req *dto.GetDocumentListRequest) (*dto.GetDocumentListResponse, error)
+	// QueryDocumentDetail renders subscription-gated blocks for the current
+	// user before returning the content.
+	QueryDocumentDetail(ctx context.Context, req *dto.QueryDocumentDetailRequest) (*dto.Document, error)
+	QueryDocumentList(ctx context.Context) (*dto.QueryDocumentListResponse, error)
+}
+
+// SubscriptionReader is the support module's port onto the subscription
+// domain (dependency inversion: the consumer owns the interface). The
+// composition root wraps the legacy repository today; the subscription module
+// facade will implement it once that module exists.
+type SubscriptionReader interface {
+	HasActiveSubscription(ctx context.Context, userID int64) (bool, error)
 }
 
 // Deps declares everything the module needs; the composition root
@@ -39,18 +59,22 @@ type Service interface {
 type Deps struct {
 	Announcements repository.AnnouncementRepo
 	Ads           repository.AdsRepo
+	Documents     repository.DocumentRepo
+	Subscriptions SubscriptionReader
 }
 
 func New(deps Deps) Service {
 	return &service{
 		announcements: announcement.NewService(deps.Announcements),
 		ads:           ads.NewService(deps.Ads),
+		documents:     document.NewService(deps.Documents, deps.Subscriptions),
 	}
 }
 
 type service struct {
 	announcements *announcement.Service
 	ads           *ads.Service
+	documents     *document.Service
 }
 
 func (s *service) CreateAnnouncement(ctx context.Context, req *dto.CreateAnnouncementRequest) error {
@@ -95,4 +119,36 @@ func (s *service) GetAdsDetail(ctx context.Context, req *dto.GetAdsDetailRequest
 
 func (s *service) GetAdsList(ctx context.Context, req *dto.GetAdsListRequest) (*dto.GetAdsListResponse, error) {
 	return s.ads.List(ctx, req)
+}
+
+func (s *service) CreateDocument(ctx context.Context, req *dto.CreateDocumentRequest) error {
+	return s.documents.Create(ctx, req)
+}
+
+func (s *service) UpdateDocument(ctx context.Context, req *dto.UpdateDocumentRequest) error {
+	return s.documents.Update(ctx, req)
+}
+
+func (s *service) DeleteDocument(ctx context.Context, req *dto.DeleteDocumentRequest) error {
+	return s.documents.Delete(ctx, req)
+}
+
+func (s *service) BatchDeleteDocument(ctx context.Context, req *dto.BatchDeleteDocumentRequest) error {
+	return s.documents.BatchDelete(ctx, req)
+}
+
+func (s *service) GetDocumentDetail(ctx context.Context, req *dto.GetDocumentDetailRequest) (*dto.Document, error) {
+	return s.documents.GetDetail(ctx, req)
+}
+
+func (s *service) GetDocumentList(ctx context.Context, req *dto.GetDocumentListRequest) (*dto.GetDocumentListResponse, error) {
+	return s.documents.List(ctx, req)
+}
+
+func (s *service) QueryDocumentDetail(ctx context.Context, req *dto.QueryDocumentDetailRequest) (*dto.Document, error) {
+	return s.documents.QueryDetail(ctx, req)
+}
+
+func (s *service) QueryDocumentList(ctx context.Context) (*dto.QueryDocumentListResponse, error) {
+	return s.documents.QueryList(ctx)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/document"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetDocumentDetailHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := document.NewGetDocumentDetailLogic(ctx, svcCtx)
-		resp, err := l.GetDocumentDetail(&req)
+		resp, err := svcCtx.Support.GetDocumentDetail(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }

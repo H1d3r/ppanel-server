@@ -74,10 +74,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		ExchangeRate: exchangeRate.NewCache(0),
 		GeoIP:        geoIP,
 		Store:        store,
-		Support: support.New(support.Deps{
-			Announcements: store.Announcement(),
-			Ads:           store.Ads(),
-		}),
+		Support:      newSupportModule(store),
 		//NodeCache:   cache.NewNodeCacheClient(rds),
 		AuthLimiter: authLimiter,
 	}
