@@ -66,7 +66,8 @@ type trafficDelta struct {
 type Deps struct {
 	Store repository.Store
 	Redis *redis.Client
-	// TrafficReportThreshold reads the runtime-mutable minimum report size.
+	// TrafficReportThreshold reads the runtime-mutable minimum report size;
+	// nil means no minimum.
 	TrafficReportThreshold func() int64
 	// Multiplier returns the node traffic multiplier in effect at the given
 	// time; nil means no multiplier is configured.
@@ -129,7 +130,11 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 		if item.SID <= 0 {
 			continue
 		}
-		if item.Download+item.Upload <= a.deps.TrafficReportThreshold() {
+		threshold := int64(0)
+		if a.deps.TrafficReportThreshold != nil {
+			threshold = a.deps.TrafficReportThreshold()
+		}
+		if item.Download+item.Upload <= threshold {
 			continue
 		}
 		download := int64(float32(item.Download) * ratio * multiplier)

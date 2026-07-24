@@ -88,15 +88,19 @@ func (l *ActivateOrderLogic) ProcessTask(ctx context.Context, task *asynq.Task) 
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Recharge stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
+		// Load the notification context BEFORE the finalize CAS: once the
+		// order is Finished a retry short-circuits, so failing here (all
+		// prior stages are idempotent) keeps the notice at-least-once.
+		userInfo, err := l.svc.Store.User().FindOne(ctx, orderInfo.UserId)
+		if err != nil {
+			logger.WithContext(ctx).Error("[ActivateOrderLogic] Load user for recharge notify failed", logger.Field("error", err.Error()))
+			return err
+		}
 		if err := l.svc.Billing.FinalizeOrder(ctx, orderInfo.OrderNo); err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Finalize stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
-		if userInfo, err := l.svc.Store.User().FindOne(ctx, orderInfo.UserId); err == nil {
-			l.sendRechargeNotifications(ctx, orderInfo, userInfo, balance)
-		} else {
-			logger.WithContext(ctx).Error("[ActivateOrderLogic] Load user for recharge notify failed", logger.Field("error", err.Error()))
-		}
+		l.sendRechargeNotifications(ctx, orderInfo, userInfo, balance)
 		return nil
 	}
 
@@ -113,18 +117,26 @@ func (l *ActivateOrderLogic) ProcessTask(ctx context.Context, task *asynq.Task) 
 		}
 	}
 
+	// Load the notification context BEFORE the finalize CAS (see the
+	// recharge branch above for why).
+	userInfo, err := l.svc.Store.User().FindOne(ctx, orderInfo.UserId)
+	if err != nil {
+		logger.WithContext(ctx).Error("[ActivateOrderLogic] Load user for notify failed", logger.Field("error", err.Error()))
+		return err
+	}
+
 	if err := l.svc.Billing.FinalizeOrder(ctx, orderInfo.OrderNo); err != nil {
 		logger.WithContext(ctx).Error("[ActivateOrderLogic] Finalize stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 		return err
 	}
 
-	l.notifyFulfillment(ctx, orderInfo, outcome)
+	l.notifyFulfillment(ctx, orderInfo, userInfo, outcome)
 	return nil
 }
 
 // notifyFulfillment dispatches the post-activation notices using the
 // fulfillment outcome's notification context.
-func (l *ActivateOrderLogic) notifyFulfillment(ctx context.Context, orderInfo *order.Order, outcome *subscription.FulfillmentOutcome) {
+func (l *ActivateOrderLogic) notifyFulfillment(ctx context.Context, orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome) {
 	if outcome == nil {
 		return
 	}
@@ -137,11 +149,6 @@ func (l *ActivateOrderLogic) notifyFulfillment(ctx context.Context, orderInfo *o
 	case subscription.NotifyKindResetTraffic:
 		notifyType = notification.ResetTrafficNotify
 	default:
-		return
-	}
-	userInfo, err := l.svc.Store.User().FindOne(ctx, orderInfo.UserId)
-	if err != nil {
-		logger.WithContext(ctx).Error("[ActivateOrderLogic] Load user for notify failed", logger.Field("error", err.Error()))
 		return
 	}
 	l.sendNotifications(ctx, orderInfo, userInfo, outcome, notifyType)
