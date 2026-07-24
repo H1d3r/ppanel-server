@@ -225,7 +225,7 @@ func New(deps Deps) Service {
 		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue),
 		payments:   adminpayment.NewService(deps.Payments, deps.Orders, deps.Tx, deps.Host, deps.IsGatewayMode),
 		coupons:    coupon.NewService(deps.Coupons),
-		userOrders: userorder.NewService(deps.Orders),
+		userOrders: userorder.NewService(deps.Orders, deps.Plans),
 		callbacks:  callbacks.NewService(deps.Orders, deps.Queue),
 		portal:     portalSvc,
 		checkout:   checkoutSvc,

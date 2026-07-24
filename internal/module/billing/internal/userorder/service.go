@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
 	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
@@ -16,12 +17,44 @@ import (
 	"github.com/pkg/errors"
 )
 
-type Service struct {
-	orders repository.OrderRepo
+// PlanReader is the subdomain's read-only port onto the subscription
+// domain's plan catalogue: the order rows only carry the plan ID, and the
+// plan fields shown on an order detail are attached here instead of through
+// a cross-domain SQL association (ADR-001 step 5).
+type PlanReader interface {
+	FindOne(ctx context.Context, id int64) (*subscribeEntity.Subscribe, error)
 }
 
-func NewService(orders repository.OrderRepo) *Service {
-	return &Service{orders: orders}
+type Service struct {
+	orders repository.OrderRepo
+	plans  PlanReader
+}
+
+func NewService(orders repository.OrderRepo, plans PlanReader) *Service {
+	return &Service{orders: orders, plans: plans}
+}
+
+// attachPlan fills the detail's plan fields from the subscription domain.
+// A missing plan (deleted, or a recharge order without one) leaves the
+// zero value, matching the former SQL association's behaviour.
+func (s *Service) attachPlan(ctx context.Context, detail *dto.OrderDetail, cache map[int64]*subscribeEntity.Subscribe) {
+	if detail.SubscribeId == 0 || s.plans == nil {
+		return
+	}
+	plan, cached := cache[detail.SubscribeId]
+	if !cached {
+		found, err := s.plans.FindOne(ctx, detail.SubscribeId)
+		if err != nil {
+			logger.WithContext(ctx).Errorw("[UserOrder] load plan for order failed",
+				logger.Field("error", err.Error()), logger.Field("subscribe_id", detail.SubscribeId))
+		} else {
+			plan = found
+		}
+		cache[detail.SubscribeId] = plan
+	}
+	if plan != nil {
+		tool.DeepCopy(&detail.Subscribe, plan)
+	}
 }
 
 // QueryDetail returns one of the current user's orders; ownership is
@@ -41,6 +74,7 @@ func (s *Service) QueryDetail(ctx context.Context, req *dto.QueryOrderDetailRequ
 	}
 	resp := &dto.OrderDetail{}
 	tool.DeepCopy(resp, orderInfo)
+	s.attachPlan(ctx, resp, map[int64]*subscribeEntity.Subscribe{})
 	// Prevent commission amount leakage
 	resp.Commission = 0
 	return resp, nil
@@ -61,9 +95,11 @@ func (s *Service) QueryList(ctx context.Context, req *dto.QueryOrderListRequest)
 		Total: total,
 		List:  make([]dto.OrderDetail, 0),
 	}
+	planCache := map[int64]*subscribeEntity.Subscribe{}
 	for _, item := range data {
 		var orderInfo dto.OrderDetail
 		tool.DeepCopy(&orderInfo, item)
+		s.attachPlan(ctx, &orderInfo, planCache)
 		// Prevent commission amount leakage
 		orderInfo.Commission = 0
 		resp.List = append(resp.List, orderInfo)

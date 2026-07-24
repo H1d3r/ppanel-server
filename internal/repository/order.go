@@ -215,7 +215,7 @@ func (m *orderRepo) QueryOrderListByPage(ctx context.Context, page, size int, st
 		if err := conn.Count(&total).Error; err != nil {
 			return err
 		}
-		return conn.Order(orderColumn(conn, "id") + " desc").Preload("Subscribe").Preload("Payment").Offset((page - 1) * size).Limit(size).Find(v).Error
+		return conn.Order(orderColumn(conn, "id") + " desc").Preload("Payment").Offset((page - 1) * size).Limit(size).Find(v).Error
 	})
 	return total, list, err
 }
@@ -422,7 +422,7 @@ func (m *orderRepo) QueryOrdersByStatusAfterID(ctx context.Context, status uint8
 func (m *orderRepo) FindOneDetailsByOrderNo(ctx context.Context, orderNo string) (*order.Details, error) {
 	var orderInfo order.Details
 	err := m.QueryNoCacheCtx(ctx, &orderInfo, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).Preload("Subscribe").Preload("Payment").First(v).Error
+		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).Preload("Payment").First(v).Error
 	})
 	return &orderInfo, err
 }
@@ -432,7 +432,6 @@ func (m *orderRepo) FindOneDetails(ctx context.Context, id int64) (*order.Detail
 	err := m.QueryNoCacheCtx(ctx, &orderInfo, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&order.Order{}).
 			Where("id = ?", id).
-			Preload("Subscribe").
 			Preload("SubOrders").
 			First(v).Error
 	})
