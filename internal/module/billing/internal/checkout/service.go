@@ -54,17 +54,24 @@ type OrderQueue interface {
 	EnqueueDeferredClose(ctx context.Context, orderNo string) error
 }
 
+// Store is the subdomain's persistence surface: billing-scoped
+// transactions, the wallet view, and the inbox + subscription-scoped
+// transaction the inventory lifecycle helpers need. The repository store
+// satisfies it structurally.
+type Store interface {
+	InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error
+	InSubscriptionTx(ctx context.Context, fn func(repository.SubscriptionStore) error) error
+	Inbox() repository.InboxRepo
+	Wallet() repository.WalletRepo
+}
+
 type Deps struct {
 	Orders   repository.OrderRepo
 	Coupons  repository.CouponRepo
 	Payments repository.PaymentRepo
 	Plans    PlanReader
 	UserSubs UserSubscriptionReader
-	// Store is the transitional full-store dependency: the purchase
-	// transaction re-checks the subscription quota under the wallet row lock
-	// (ADR-001 step 5 moves that concern), and the inventory lifecycle
-	// helpers need the store's scoped transactions and inbox.
-	Store repository.Store
+	Store    Store
 	Queue OrderQueue
 	// SingleModel forbids holding more than one blocking subscription.
 	SingleModel bool

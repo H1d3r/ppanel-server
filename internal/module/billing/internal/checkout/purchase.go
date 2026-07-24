@@ -196,11 +196,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		SubscribeId:    req.SubscribeId,
 	}
 	orderflow.ApplyIdempotency(ctx, orderInfo)
-	// Database transaction. The per-user quota check must re-run under the
-	// wallet row lock, which reads the subscription domain: this is the
-	// documented transitional exception on the generic transaction (ADR-001
-	// step 5 moves the serialisation into the subscription module).
-	err = s.deps.Store.InTx(ctx, func(txStore repository.Store) error {
+	err = s.deps.Store.InBillingTx(ctx, func(txStore repository.BillingStore) error {
 		// The request-context user is only an authentication snapshot. Lock and
 		// re-read the account before reserving gift credit so two concurrent
 		// orders cannot spend the same balance.
@@ -210,7 +206,11 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		}
 
 		if sub.Quota > 0 {
-			count, e := txStore.UserSubscription().CountQuotaConsumingSubscriptions(ctx, u.Id, req.SubscribeId)
+			// The quota re-check reads the subscription domain through the
+			// module port. The wallet row lock held above serialises
+			// concurrent purchases by the same user, so a fresh (non-tx)
+			// read is race-safe here.
+			count, e := s.deps.UserSubs.CountQuotaConsumingSubscriptions(ctx, u.Id, req.SubscribeId)
 			if e != nil {
 				log.Errorw("[Purchase] Database query error", logger.Field("error", e.Error()), logger.Field("user_id", u.Id), logger.Field("subscribe_id", req.SubscribeId))
 				return e

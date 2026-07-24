@@ -25,7 +25,14 @@ var ErrOutOfStock = errors.New("subscribe out of stock")
 // subscription-domain transaction. Replays and concurrent deliveries are
 // resolved by the inbox marker: a lost race rolls the reservation back and the
 // retry sees the winner's marker. Returns ErrOutOfStock when no unit is left.
-func ReserveInventoryOnce(ctx context.Context, store repository.Store, orderNo string, subscribeID int64) error {
+// Store is the narrow persistence surface the inventory lifecycle needs;
+// the repository store satisfies it structurally.
+type Store interface {
+	Inbox() repository.InboxRepo
+	InSubscriptionTx(ctx context.Context, fn func(repository.SubscriptionStore) error) error
+}
+
+func ReserveInventoryOnce(ctx context.Context, store Store, orderNo string, subscribeID int64) error {
 	mark, err := store.Inbox().Find(ctx, InventoryReserveConsumer, orderNo)
 	if err != nil {
 		return err
@@ -48,7 +55,7 @@ func ReserveInventoryOnce(ctx context.Context, store repository.Store, orderNo s
 // RestoreInventoryOnce returns the order's reserved unit exactly once. Orders
 // that never reserved (stock-out compensation, historical orders) are a
 // no-op, and a second restoration attempt is absorbed by the restore marker.
-func RestoreInventoryOnce(ctx context.Context, store repository.Store, orderNo string, subscribeID int64) error {
+func RestoreInventoryOnce(ctx context.Context, store Store, orderNo string, subscribeID int64) error {
 	reserveMark, err := store.Inbox().Find(ctx, InventoryReserveConsumer, orderNo)
 	if err != nil {
 		return err
