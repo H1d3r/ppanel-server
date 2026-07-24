@@ -13,8 +13,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/sse"
-	orderLogic "github.com/perfect-panel/server/internal/logic/public/order"
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/orderstream"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
@@ -53,8 +53,8 @@ func V2CreateAndCheckoutHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			result.ParamErrorResult(ctx, err)
 			return
 		}
-		resp, err := orderLogic.NewV2OrderLogic(c, svcCtx).CreateAndCheckout(&req, idempotencyKey)
-		if stdErrors.Is(err, orderLogic.ErrIdempotencyKeyReused) {
+		resp, err := svcCtx.Billing.V2CreateAndCheckout(c, &req, idempotencyKey)
+		if stdErrors.Is(err, billing.ErrIdempotencyKeyReused) {
 			ctx.JSON(http.StatusConflict, result.Error(xerr.InvalidParams, "IDEMPOTENCY_KEY_REUSED"))
 			return
 		}
@@ -78,7 +78,7 @@ func V2CheckoutHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			result.ParamErrorResult(ctx, err)
 			return
 		}
-		resp, err := orderLogic.NewV2OrderLogic(c, svcCtx).Checkout(ctx.Param("orderNo"), &req)
+		resp, err := svcCtx.Billing.V2Checkout(c, ctx.Param("orderNo"), &req)
 		result.HttpResult(ctx, resp, err)
 	}
 }
@@ -92,7 +92,7 @@ func V2CheckoutHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 // @Router /v2/public/orders/{orderNo} [get]
 func V2GetOrderHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
-		resp, err := orderLogic.NewV2OrderLogic(c, svcCtx).GetOrder(ctx.Param("orderNo"), ctx.Query("checkout_token"))
+		resp, err := svcCtx.Billing.V2GetOrder(c, ctx.Param("orderNo"), ctx.Query("checkout_token"))
 		result.HttpResult(ctx, resp, err)
 	}
 }
@@ -112,7 +112,7 @@ func V2EventTicketHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			result.ParamErrorResult(ctx, err)
 			return
 		}
-		resp, err := orderLogic.NewV2OrderLogic(c, svcCtx).EventTicket(ctx.Param("orderNo"), req.CheckoutToken)
+		resp, err := svcCtx.Billing.V2EventTicket(c, ctx.Param("orderNo"), req.CheckoutToken)
 		result.HttpResult(ctx, resp, err)
 	}
 }
@@ -132,7 +132,7 @@ func V2OrderSessionHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			result.ParamErrorResult(ctx, err)
 			return
 		}
-		resp, err := orderLogic.NewV2OrderLogic(c, svcCtx).Session(ctx.Param("orderNo"), req.CheckoutToken)
+		resp, err := svcCtx.Billing.V2Session(c, ctx.Param("orderNo"), req.CheckoutToken)
 		result.HttpResult(ctx, resp, err)
 	}
 }
@@ -153,15 +153,9 @@ func V2OrderSessionHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 // @Router /v2/public/orders/{orderNo}/events [get]
 func V2OrderEventsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
-		logic := orderLogic.NewV2OrderLogic(c, svcCtx)
 		orderNo := ctx.Param("orderNo")
 		ticket := ctx.Query("ticket")
-		orderInfo, err := logic.AuthorizeEventTicket(orderNo, ticket)
-		if err != nil {
-			result.HttpResult(ctx, nil, err)
-			return
-		}
-		expiresAt, err := logic.EventTicketExpiresAt(ticket)
+		snapshot, expiresAt, err := svcCtx.Billing.V2AuthorizeEventStream(c, orderNo, ticket)
 		if err != nil {
 			result.HttpResult(ctx, nil, err)
 			return
@@ -185,7 +179,7 @@ func V2OrderEventsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			defer func() { _ = pubsub.Close() }()
 		}
 
-		if err := writeSSESnapshot(writer, logic.Snapshot(orderInfo)); err != nil {
+		if err := writeSSESnapshot(writer, snapshot); err != nil {
 			return
 		}
 		afterID := requestedEventID(ctx)
@@ -194,7 +188,7 @@ func V2OrderEventsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			if err != nil {
 				logger.WithContext(c).Errorw("[V2OrderEvents] inspect replay cursor failed", logger.Field("error", err.Error()), logger.Field("order_no", orderNo))
 			} else if earliestID > afterID {
-				if err := writeSSEReset(writer, logic.Snapshot(orderInfo)); err != nil {
+				if err := writeSSEReset(writer, snapshot); err != nil {
 					return
 				}
 				afterID = earliestID - 1

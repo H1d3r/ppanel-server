@@ -7,6 +7,7 @@ package billing
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminorder"
@@ -16,6 +17,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/coupon"
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/module/billing/internal/userorder"
+	v2orch "github.com/perfect-panel/server/internal/module/billing/internal/v2"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
@@ -72,7 +74,22 @@ type Service interface {
 	EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error
 	StripeNotify(ctx context.Context, payload []byte, signature string) error
 	AlipayNotify(ctx context.Context, form url.Values) error
+
+	// The V2 orchestration: idempotent create-and-checkout, guest checkout
+	// capabilities and SSE event-stream tickets.
+	V2CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderRequest, idempotencyKey string) (*dto.V2OrderResponse, error)
+	V2Checkout(ctx context.Context, orderNo string, req *dto.V2CheckoutOrderRequest) (*dto.V2OrderResponse, error)
+	V2GetOrder(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderResponse, error)
+	V2EventTicket(ctx context.Context, orderNo, checkoutToken string) (*dto.V2EventTicketResponse, error)
+	V2Session(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderSessionResponse, error)
+	// V2AuthorizeEventStream validates the stream ticket and returns the
+	// initial snapshot with the ticket expiry.
+	V2AuthorizeEventStream(ctx context.Context, orderNo, ticket string) (dto.V2OrderSnapshot, time.Time, error)
 }
+
+// ErrIdempotencyKeyReused is handled as HTTP 409 by the V2 handler. It is a
+// distinct transport condition: the original order remains intact.
+var ErrIdempotencyKeyReused = v2orch.ErrIdempotencyKeyReused
 
 // EPayNotifyMeta re-exports the callback subdomain's raw transport details.
 type EPayNotifyMeta = callbacks.EPayNotifyMeta
@@ -153,35 +170,44 @@ type Deps struct {
 }
 
 func New(deps Deps) Service {
+	checkoutSvc := checkout.NewService(checkout.Deps{
+		Orders:       deps.Orders,
+		Coupons:      deps.Coupons,
+		Payments:     deps.Payments,
+		Plans:        deps.Plans,
+		UserSubs:     deps.UserSubs,
+		Store:        deps.Store,
+		Queue:        deps.Queue,
+		SingleModel:  deps.SingleModel,
+		CurrencyUnit: deps.CurrencyUnit,
+	})
+	portalSvc := portal.NewService(portal.Deps{
+		Orders:             deps.Orders,
+		Coupons:            deps.Coupons,
+		Payments:           deps.Payments,
+		UserAuths:          deps.GuestAccounts,
+		Plans:              deps.PortalPlans,
+		Store:              deps.Store,
+		Sessions:           deps.Sessions,
+		Queue:              deps.Queue,
+		GuestCheckoutCache: deps.GuestCheckoutCache,
+		ActivationQueue:    deps.ActivationQueue,
+		ExchangeRate:       deps.ExchangeRate,
+		Config:             deps.Portal,
+	})
 	return &service{
 		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue),
 		payments:   adminpayment.NewService(deps.Payments, deps.Orders, deps.Tx, deps.Host, deps.IsGatewayMode),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders),
 		callbacks:  callbacks.NewService(deps.Orders, deps.Queue),
-		portal: portal.NewService(portal.Deps{
-			Orders:             deps.Orders,
-			Coupons:            deps.Coupons,
-			Payments:           deps.Payments,
-			UserAuths:          deps.GuestAccounts,
-			Plans:              deps.PortalPlans,
-			Store:              deps.Store,
-			Sessions:           deps.Sessions,
-			Queue:              deps.Queue,
-			GuestCheckoutCache: deps.GuestCheckoutCache,
-			ActivationQueue:    deps.ActivationQueue,
-			ExchangeRate:       deps.ExchangeRate,
-			Config:             deps.Portal,
-		}),
-		checkout: checkout.NewService(checkout.Deps{
+		portal:     portalSvc,
+		checkout:   checkoutSvc,
+		v2: v2orch.NewService(v2orch.Deps{
 			Orders:       deps.Orders,
-			Coupons:      deps.Coupons,
-			Payments:     deps.Payments,
-			Plans:        deps.Plans,
-			UserSubs:     deps.UserSubs,
-			Store:        deps.Store,
-			Queue:        deps.Queue,
-			SingleModel:  deps.SingleModel,
+			Checkout:     checkoutSvc,
+			Portal:       portalSvc,
+			JwtSecret:    deps.Portal.JwtSecret,
 			CurrencyUnit: deps.CurrencyUnit,
 		}),
 	}
@@ -195,6 +221,7 @@ type service struct {
 	checkout   *checkout.Service
 	portal     *portal.Service
 	callbacks  *callbacks.Service
+	v2         *v2orch.Service
 }
 
 func (s *service) CreateOrder(ctx context.Context, req *dto.CreateOrderRequest) error {
@@ -319,4 +346,28 @@ func (s *service) StripeNotify(ctx context.Context, payload []byte, signature st
 
 func (s *service) AlipayNotify(ctx context.Context, form url.Values) error {
 	return s.callbacks.AlipayNotify(ctx, form)
+}
+
+func (s *service) V2CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderRequest, idempotencyKey string) (*dto.V2OrderResponse, error) {
+	return s.v2.CreateAndCheckout(ctx, req, idempotencyKey)
+}
+
+func (s *service) V2Checkout(ctx context.Context, orderNo string, req *dto.V2CheckoutOrderRequest) (*dto.V2OrderResponse, error) {
+	return s.v2.Checkout(ctx, orderNo, req)
+}
+
+func (s *service) V2GetOrder(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderResponse, error) {
+	return s.v2.GetOrder(ctx, orderNo, checkoutToken)
+}
+
+func (s *service) V2EventTicket(ctx context.Context, orderNo, checkoutToken string) (*dto.V2EventTicketResponse, error) {
+	return s.v2.EventTicket(ctx, orderNo, checkoutToken)
+}
+
+func (s *service) V2Session(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderSessionResponse, error) {
+	return s.v2.Session(ctx, orderNo, checkoutToken)
+}
+
+func (s *service) V2AuthorizeEventStream(ctx context.Context, orderNo, ticket string) (dto.V2OrderSnapshot, time.Time, error) {
+	return s.v2.AuthorizeEventStream(ctx, orderNo, ticket)
 }

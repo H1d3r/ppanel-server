@@ -1,4 +1,4 @@
-package order
+package v2
 
 import (
 	"context"
@@ -11,9 +11,8 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/module/billing"
+	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/jwt"
 	"github.com/redis/go-redis/v9"
@@ -33,16 +32,9 @@ func (r *v2TicketOrderRepo) FindOneByOrderNo(_ context.Context, orderNo string) 
 	return &copy, nil
 }
 
-type v2TicketStore struct {
-	repository.Store
-	orders repository.OrderRepo
-}
-
-func (s v2TicketStore) Order() repository.OrderRepo { return s.orders }
-
 func TestV2OrderRequestHashIgnoresReturnURLAndBindsUser(t *testing.T) {
 	ctx := context.WithValue(context.Background(), constant.CtxKeyUser, &userEntity.User{Id: 17})
-	logic := NewV2OrderLogic(ctx, &svc.ServiceContext{})
+	logic := NewService(Deps{}).flow(ctx)
 	first := &dto.V2CreateOrderRequest{
 		Type: v2OrderTypePurchase, PaymentID: 3, SubscribeID: 9, Quantity: 2, Coupon: "SUMMER",
 		ReturnURL: "https://one.example/result",
@@ -71,7 +63,7 @@ func TestV2OrderRequestHashIgnoresReturnURLAndBindsUser(t *testing.T) {
 }
 
 func TestV2GuestCheckoutTokenIsDeterministicPerIdempotencyKey(t *testing.T) {
-	logic := NewV2OrderLogic(context.Background(), &svc.ServiceContext{Config: config.Config{JwtAuth: config.JwtAuth{AccessSecret: "stream-secret"}}})
+	logic := NewService(Deps{JwtSecret: "stream-secret"}).flow(context.Background())
 	first := logic.derivedGuestCheckoutToken("1234567890abcdef")
 	second := logic.derivedGuestCheckoutToken("1234567890abcdef")
 	third := logic.derivedGuestCheckoutToken("abcdef1234567890")
@@ -85,10 +77,10 @@ func TestV2OrderEventTicketBindsCurrentOrderOwner(t *testing.T) {
 		OrderNo: "order-ticket", UserId: 17, Status: 1, CreatedAt: time.Now(), StateVersion: 1,
 	}
 	ctx := context.WithValue(context.Background(), constant.CtxKeyUser, &userEntity.User{Id: 17})
-	logic := NewV2OrderLogic(ctx, &svc.ServiceContext{
-		Config: config.Config{JwtAuth: config.JwtAuth{AccessSecret: "stream-secret"}},
-		Store:  v2TicketStore{orders: &v2TicketOrderRepo{order: orderInfo}},
-	})
+	logic := NewService(Deps{
+		JwtSecret: "stream-secret",
+		Orders:    &v2TicketOrderRepo{order: orderInfo},
+	}).flow(ctx)
 	ticket, _, err := logic.mintEventTicket(orderInfo, "")
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
@@ -126,10 +118,10 @@ func TestV2GuestCapabilitySurvivesAccountActivation(t *testing.T) {
 	}
 	orders := &v2TicketOrderRepo{order: orderInfo}
 	ctx := context.Background()
-	logic := NewV2OrderLogic(ctx, &svc.ServiceContext{
-		Config: config.Config{JwtAuth: config.JwtAuth{AccessSecret: secret}},
-		Store:  v2TicketStore{orders: orders},
-	})
+	logic := NewService(Deps{
+		JwtSecret: secret,
+		Orders:    orders,
+	}).flow(ctx)
 
 	ticket, _, err := logic.mintEventTicket(orderInfo, guestCapability)
 	if err != nil {
@@ -172,15 +164,14 @@ func TestV2GuestSessionExchangeRequiresActivatedAccount(t *testing.T) {
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	logic := NewV2OrderLogic(context.Background(), &svc.ServiceContext{
-		Config: config.Config{JwtAuth: config.JwtAuth{AccessSecret: "session-secret", AccessExpire: 3600}},
-		Store:  v2TicketStore{orders: orders},
-		Redis:  redisClient,
-		Billing: billing.New(billing.Deps{
+	logic := NewService(Deps{
+		JwtSecret: "session-secret",
+		Orders:    orders,
+		Portal: portal.NewService(portal.Deps{
 			Sessions: redisClient,
-			Portal:   billing.PortalConfig{JwtSecret: "session-secret", JwtExpire: 3600},
+			Config:   portal.Config{JwtSecret: "session-secret", JwtExpire: 3600},
 		}),
-	})
+	}).flow(context.Background())
 
 	if _, err := logic.Session(orderInfo.OrderNo, guestCapability); err == nil {
 		t.Fatal("session exchange must wait for guest account creation")
