@@ -1,4 +1,4 @@
-package console
+package dashboard
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -20,16 +19,16 @@ const consoleRevenueStatisticsCacheTTL = 60 * time.Second
 
 type QueryRevenueStatisticsLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewQueryRevenueStatisticsLogic Query revenue statistics
-func NewQueryRevenueStatisticsLogic(ctx context.Context, svcCtx *svc.ServiceContext) *QueryRevenueStatisticsLogic {
+func newQueryRevenueStatisticsLogic(ctx context.Context, deps Deps) *QueryRevenueStatisticsLogic {
 	return &QueryRevenueStatisticsLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -39,7 +38,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 	}
 
 	// Try cache first
-	cached, cacheErr := l.svcCtx.Redis.Get(l.ctx, consoleRevenueStatisticsCacheKey).Result()
+	cached, cacheErr := l.deps.Cache.Get(l.ctx, consoleRevenueStatisticsCacheKey).Result()
 	if cacheErr == nil && cached != "" {
 		var result dto.RevenueStatisticsResponse
 		if json.Unmarshal([]byte(cached), &result) == nil {
@@ -50,7 +49,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 	var today, monthly, all dto.OrdersStatistics
 	now := timeutil.Now()
 	// Get today's revenue statistics
-	todayData, err := l.svcCtx.Store.Order().QueryDateOrders(l.ctx, now)
+	todayData, err := l.deps.Orders.QueryDateOrders(l.ctx, now)
 	if err != nil {
 		l.Errorw("[QueryRevenueStatisticsLogic] QueryDateOrders error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryDateOrders error: %v", err)
@@ -62,7 +61,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 		}
 	}
 	// Get monthly's revenue statistics
-	monthlyData, err := l.svcCtx.Store.Order().QueryMonthlyOrders(l.ctx, now)
+	monthlyData, err := l.deps.Orders.QueryMonthlyOrders(l.ctx, now)
 	if err != nil {
 		l.Errorw("[QueryRevenueStatisticsLogic] QueryMonthlyOrders error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryMonthlyOrders error: %v", err)
@@ -76,7 +75,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 	}
 
 	// Get monthly daily list for the current month (from 1st to current date)
-	monthlyListData, err := l.svcCtx.Store.Order().QueryDailyOrdersList(l.ctx, now)
+	monthlyListData, err := l.deps.Orders.QueryDailyOrdersList(l.ctx, now)
 	if err != nil {
 		l.Errorw("[QueryRevenueStatisticsLogic] QueryDailyOrdersList error", logger.Field("error", err.Error()))
 		// Don't return error, just log it and continue with empty list
@@ -94,7 +93,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 	}
 
 	// Get all revenue statistics
-	allData, err := l.svcCtx.Store.Order().QueryTotalOrders(l.ctx)
+	allData, err := l.deps.Orders.QueryTotalOrders(l.ctx)
 	if err != nil {
 		l.Errorw("[QueryRevenueStatisticsLogic] QueryTotalOrders error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryTotalOrders error: %v", err)
@@ -108,7 +107,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 	}
 
 	// Get all monthly list for the past 6 months
-	allListData, err := l.svcCtx.Store.Order().QueryMonthlyOrdersList(l.ctx, now)
+	allListData, err := l.deps.Orders.QueryMonthlyOrdersList(l.ctx, now)
 	if err != nil {
 		l.Errorw("[QueryRevenueStatisticsLogic] QueryMonthlyOrdersList error", logger.Field("error", err.Error()))
 		// Don't return error, just log it and continue with empty list
@@ -133,7 +132,7 @@ func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.Revenu
 
 	// Cache the result
 	if data, marshalErr := json.Marshal(resp); marshalErr == nil {
-		l.svcCtx.Redis.Set(l.ctx, consoleRevenueStatisticsCacheKey, data, consoleRevenueStatisticsCacheTTL)
+		l.deps.Cache.Set(l.ctx, consoleRevenueStatisticsCacheKey, data, consoleRevenueStatisticsCacheTTL)
 	}
 
 	return resp, nil

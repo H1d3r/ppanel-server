@@ -9,6 +9,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/platform/internal/auditlog"
+	"github.com/perfect-panel/server/internal/module/platform/internal/dashboard"
 	"github.com/perfect-panel/server/internal/module/platform/internal/systemsetting"
 	"github.com/perfect-panel/server/internal/repository"
 )
@@ -61,6 +62,12 @@ type Service interface {
 	UpdateTosConfig(ctx context.Context, req *dto.TosConfig) error
 	UpdateVerifyCodeConfig(ctx context.Context, req *dto.VerifyCodeConfig) error
 	UpdateVerifyConfig(ctx context.Context, req *dto.VerifyConfig) error
+
+	// Admin console reporting aggregates (cross-domain reads through ports).
+	QueryRevenueStatistics(ctx context.Context) (*dto.RevenueStatisticsResponse, error)
+	QueryServerTotalData(ctx context.Context) (*dto.ServerTotalDataResponse, error)
+	QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelpyResponse, error)
+	QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsResponse, error)
 }
 
 // Deps declares everything the module needs; the composition root
@@ -82,6 +89,13 @@ type Deps struct {
 	SubscribePath     func() string
 	ApplyVerifyConfig func(req *dto.VerifyConfig)
 	Multiplier        systemsetting.MultiplierFunc
+
+	// Dashboard read ports and cache.
+	Orders  dashboard.OrderStatsReader
+	Users   dashboard.UserStatsReader
+	Tickets dashboard.TicketStatsReader
+	Nodes   dashboard.NodeStatsReader
+	Cache   dashboard.Cache
 }
 
 func New(deps Deps) Service {
@@ -95,6 +109,15 @@ func New(deps Deps) Service {
 			ApplyVerifyConfig: deps.ApplyVerifyConfig,
 			Multiplier:        deps.Multiplier,
 		}),
+		dashboard: dashboard.NewService(dashboard.Deps{
+			Orders:  deps.Orders,
+			Users:   deps.Users,
+			Tickets: deps.Tickets,
+			Nodes:   deps.Nodes,
+			Traffic: deps.Traffic,
+			Logs:    deps.Logs,
+			Cache:   deps.Cache,
+		}),
 		logs: auditlog.NewService(auditlog.Deps{
 			Logs:                deps.Logs,
 			System:              deps.System,
@@ -107,8 +130,9 @@ func New(deps Deps) Service {
 }
 
 type service struct {
-	logs     *auditlog.Service
-	settings *systemsetting.Service
+	logs      *auditlog.Service
+	settings  *systemsetting.Service
+	dashboard *dashboard.Service
 }
 
 func (s *service) FilterBalanceLog(ctx context.Context, req *dto.FilterBalanceLogRequest) (*dto.FilterBalanceLogResponse, error) {
@@ -269,4 +293,20 @@ func (s *service) UpdateVerifyCodeConfig(ctx context.Context, req *dto.VerifyCod
 
 func (s *service) UpdateVerifyConfig(ctx context.Context, req *dto.VerifyConfig) error {
 	return s.settings.UpdateVerifyConfig(ctx, req)
+}
+
+func (s *service) QueryRevenueStatistics(ctx context.Context) (*dto.RevenueStatisticsResponse, error) {
+	return s.dashboard.QueryRevenueStatistics(ctx)
+}
+
+func (s *service) QueryServerTotalData(ctx context.Context) (*dto.ServerTotalDataResponse, error) {
+	return s.dashboard.QueryServerTotalData(ctx)
+}
+
+func (s *service) QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelpyResponse, error) {
+	return s.dashboard.QueryTicketWaitReply(ctx)
+}
+
+func (s *service) QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsResponse, error) {
+	return s.dashboard.QueryUserStatistics(ctx)
 }

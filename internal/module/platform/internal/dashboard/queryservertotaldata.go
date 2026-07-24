@@ -1,4 +1,4 @@
-package console
+package dashboard
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/traffic"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -24,16 +23,16 @@ const consoleServerTotalDataCacheTTL = 60 * time.Second
 
 type QueryServerTotalDataLogic struct {
 	logger.Logger
-	ctx    context.Context
-	svcCtx *svc.ServiceContext
+	ctx  context.Context
+	deps Deps
 }
 
 // NewQueryServerTotalDataLogic Query server total data
-func NewQueryServerTotalDataLogic(ctx context.Context, svcCtx *svc.ServiceContext) *QueryServerTotalDataLogic {
+func newQueryServerTotalDataLogic(ctx context.Context, deps Deps) *QueryServerTotalDataLogic {
 	return &QueryServerTotalDataLogic{
 		Logger: logger.WithContext(ctx),
 		ctx:    ctx,
-		svcCtx: svcCtx,
+		deps:   deps,
 	}
 }
 
@@ -44,7 +43,7 @@ func (l *QueryServerTotalDataLogic) QueryServerTotalData() (resp *dto.ServerTota
 	}
 
 	// Try cache first
-	cached, cacheErr := l.svcCtx.Redis.Get(l.ctx, consoleServerTotalDataCacheKey).Result()
+	cached, cacheErr := l.deps.Cache.Get(l.ctx, consoleServerTotalDataCacheKey).Result()
 	if cacheErr == nil && cached != "" {
 		var result dto.ServerTotalDataResponse
 		if json.Unmarshal([]byte(cached), &result) == nil {
@@ -55,9 +54,9 @@ func (l *QueryServerTotalDataLogic) QueryServerTotalData() (resp *dto.ServerTota
 	now := timeutil.Now()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	todayEnd := todayStart.Add(24 * time.Hour)
-	trafficStore := l.svcCtx.Store.TrafficLog()
-	logStore := l.svcCtx.Store.Log()
-	nodeStore := l.svcCtx.Store.Node()
+	trafficStore := l.deps.Traffic
+	logStore := l.deps.Logs
+	nodeStore := l.deps.Nodes
 
 	// Parallelize three traffic_log queries to reduce latency
 	var (
@@ -228,7 +227,7 @@ func (l *QueryServerTotalDataLogic) QueryServerTotalData() (resp *dto.ServerTota
 	}
 
 	// Query online user count
-	onlineUsers, err := l.svcCtx.Store.Node().OnlineUserSubscribeGlobal(l.ctx)
+	onlineUsers, err := l.deps.Nodes.OnlineUserSubscribeGlobal(l.ctx)
 	if err != nil {
 		l.Errorw("[QueryServerTotalDataLogic] OnlineUserSubscribeGlobal error", logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "OnlineUserSubscribeGlobal error: %v", err)
@@ -290,7 +289,7 @@ func (l *QueryServerTotalDataLogic) QueryServerTotalData() (resp *dto.ServerTota
 
 	// Cache the result
 	if data, marshalErr := json.Marshal(resp); marshalErr == nil {
-		l.svcCtx.Redis.Set(l.ctx, consoleServerTotalDataCacheKey, data, consoleServerTotalDataCacheTTL)
+		l.deps.Cache.Set(l.ctx, consoleServerTotalDataCacheKey, data, consoleServerTotalDataCacheTTL)
 	}
 
 	return resp, nil

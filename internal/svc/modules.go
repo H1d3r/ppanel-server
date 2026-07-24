@@ -99,6 +99,11 @@ func newPlatformModule(store repository.Store, srv *ServiceContext) platform.Ser
 		System:  store.System(),
 		Traffic: store.TrafficLog(),
 		Store:   store,
+		Orders:  store.Order(),
+		Users:   store.User(),
+		Tickets: store.Ticket(),
+		Nodes:   store.Node(),
+		Cache:   srv.Redis,
 		OnLogSettingChanged: func(autoClear bool, clearDays int64) {
 			srv.Config.Log = config.Log{AutoClear: autoClear, ClearDays: clearDays}
 		},
