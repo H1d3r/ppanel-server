@@ -45,7 +45,7 @@ func (r policyPlans) FindOne(_ context.Context, _ int64) (*subscribe.Subscribe, 
 
 func TestPurchaseSingleModelUsesBlockingSubscriptionPolicy(t *testing.T) {
 	users := &policyUserSubs{blocking: true}
-	svc := NewService(Deps{UserSubs: users, SingleModel: true})
+	svc := NewService(Deps{UserSubs: users, SingleModel: func() bool { return true }})
 
 	_, err := svc.Purchase(ownerContext(42), &dto.PurchaseOrderRequest{SubscribeId: 10})
 	if err == nil || !strings.Contains(err.Error(), "user has subscription") {
@@ -61,7 +61,7 @@ func TestPurchaseAllowsDeductedSubscriptionPastSingleModelCheck(t *testing.T) {
 	svc := NewService(Deps{
 		UserSubs:    users,
 		Plans:       policyPlans{subscribe: &subscribe.Subscribe{Sell: boolPtr(true), Inventory: 0}},
-		SingleModel: true,
+		SingleModel: func() bool { return true },
 	})
 
 	_, err := svc.Purchase(ownerContext(42), &dto.PurchaseOrderRequest{SubscribeId: 10})
@@ -78,7 +78,7 @@ func TestPurchaseAndPreCreateUseQuotaConsumingCount(t *testing.T) {
 
 	t.Run("purchase", func(t *testing.T) {
 		users := &policyUserSubs{quotaCount: 1}
-		svc := NewService(Deps{UserSubs: users, Plans: policyPlans{subscribe: plan}})
+		svc := NewService(Deps{UserSubs: users, Plans: policyPlans{subscribe: plan}, SingleModel: func() bool { return false }})
 
 		_, err := svc.Purchase(ownerContext(42), &dto.PurchaseOrderRequest{SubscribeId: 10})
 		if err == nil || !strings.Contains(err.Error(), "quota limit") {
@@ -91,7 +91,7 @@ func TestPurchaseAndPreCreateUseQuotaConsumingCount(t *testing.T) {
 
 	t.Run("pre-create", func(t *testing.T) {
 		users := &policyUserSubs{quotaCount: 1}
-		svc := NewService(Deps{UserSubs: users, Plans: policyPlans{subscribe: plan}})
+		svc := NewService(Deps{UserSubs: users, Plans: policyPlans{subscribe: plan}, SingleModel: func() bool { return false }})
 
 		_, err := svc.PreCreateOrder(ownerContext(42), &dto.PurchaseOrderRequest{SubscribeId: 10})
 		if err == nil || !strings.Contains(err.Error(), "quota limit") {

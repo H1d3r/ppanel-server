@@ -53,7 +53,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "quantity exceeds maximum limit of %d", MaxQuantity)
 	}
 
-	if s.deps.SingleModel {
+	if s.deps.SingleModel() {
 		hasBlockingSubscription, err := s.deps.UserSubs.HasBlockingSubscription(ctx, u.Id)
 		if err != nil {
 			log.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id))

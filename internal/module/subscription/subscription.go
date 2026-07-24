@@ -115,8 +115,9 @@ type Deps struct {
 	FullStore repository.Store
 	Orders    repository.OrderRepo
 	Inbox     repository.InboxRepo
-	// SingleModel forbids holding more than one blocking subscription.
-	SingleModel bool
+	// SingleModel forbids holding more than one blocking subscription;
+	// runtime-mutable, read per request.
+	SingleModel func() bool
 }
 
 func New(deps Deps) Service {

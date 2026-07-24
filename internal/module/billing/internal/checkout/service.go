@@ -73,10 +73,12 @@ type Deps struct {
 	UserSubs UserSubscriptionReader
 	Store    Store
 	Queue OrderQueue
-	// SingleModel forbids holding more than one blocking subscription.
-	SingleModel bool
-	// CurrencyUnit is the site currency used for gateway verification.
-	CurrencyUnit string
+	// SingleModel forbids holding more than one blocking subscription;
+	// read per request because the admin can change it at runtime.
+	SingleModel func() bool
+	// CurrencyUnit is the site currency used for gateway verification;
+	// read per request because the admin can change it at runtime.
+	CurrencyUnit func() string
 }
 
 type Service struct {

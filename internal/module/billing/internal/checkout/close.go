@@ -211,7 +211,7 @@ func (s *Service) settleOrCancelStripeOrder(ctx context.Context, orderInfo *orde
 		OrderNo:   orderInfo.OrderNo,
 		Subscribe: "", // subscribe metadata is informational; immutable payment fields below are authoritative.
 		Amount:    orderInfo.Amount,
-		Currency:  s.deps.CurrencyUnit,
+		Currency:  s.deps.CurrencyUnit(),
 		Payment:   config.Payment,
 	}
 	paid, err := client.VerifyPaymentIntent(stripeOrder, orderInfo.TradeNo)

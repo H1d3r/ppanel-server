@@ -31,9 +31,14 @@ func (l *GetUserDetailLogic) GetUserDetail(req *dto.GetDetailRequest) (*dto.User
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get user detail error: %v", err.Error())
 	}
 	tool.DeepCopy(&resp, userInfo)
-	// Wallet values come from the billing-owned table; an account without
-	// a wallet row reads as zero.
-	if w, err := l.deps.Wallet.FindWallet(l.ctx, userInfo.Id); err == nil && w != nil {
+	// Wallet values come from the billing-owned table. A read failure must
+	// fail the request: this response populates the admin edit form, and a
+	// silently zeroed balance would round-trip into a real adjustment.
+	w, err := l.deps.Wallet.FindWallet(l.ctx, userInfo.Id)
+	if err != nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "load user wallet error: %v", err.Error())
+	}
+	if w != nil {
 		resp.Balance = w.Balance
 		resp.GiftAmount = w.GiftAmount
 		resp.Commission = w.Commission

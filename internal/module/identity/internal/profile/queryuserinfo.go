@@ -38,9 +38,13 @@ func (l *QueryUserInfoLogic) QueryUserInfo() (resp *dto.User, err error) {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 	tool.DeepCopy(resp, u)
-	// Wallet values come from the billing-owned table; the context user is
-	// the middleware's cached identity row (ADR-001 step 5).
-	if w, err := l.deps.Wallet.FindWallet(l.ctx, u.Id); err == nil && w != nil {
+	// Wallet values come from the billing-owned table; a read failure fails
+	// the request rather than rendering zero balances (ADR-001 step 5).
+	w, werr := l.deps.Wallet.FindWallet(l.ctx, u.Id)
+	if werr != nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "load user wallet error: %v", werr.Error())
+	}
+	if w != nil {
 		resp.Balance = w.Balance
 		resp.GiftAmount = w.GiftAmount
 		resp.Commission = w.Commission

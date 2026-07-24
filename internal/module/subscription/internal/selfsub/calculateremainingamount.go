@@ -20,7 +20,7 @@ func CalculateRemainingAmount(ctx context.Context, deps Deps, userSubscribeId in
 	if userSubscribe.OrderId == 0 {
 		return 0, nil
 	}
-	if !*userSubscribe.Subscribe.AllowDeduction && !deps.SingleModel {
+	if !*userSubscribe.Subscribe.AllowDeduction && !deps.SingleModel() {
 		return 0, errors.New("The subscription package does not support deductions")
 	}
 

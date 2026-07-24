@@ -37,7 +37,7 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		l.Errorw("FindOne error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOne error: %v", err.Error())
 	}
-	if l.deps.SingleModel {
+	if l.deps.SingleModel() {
 		hasBlockingSubscription, err := l.deps.UserSubs.HasBlockingSubscription(l.ctx, req.UserId)
 		if err != nil {
 			l.Errorw("HasBlockingSubscription error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))

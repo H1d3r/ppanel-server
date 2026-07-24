@@ -51,10 +51,12 @@ type OrderQueue interface {
 // Config is the static configuration snapshot for the portal flows. ClientIP
 // is deliberately absent: it is resolved per request from the context.
 type Config struct {
-	Host              string
-	SiteName          string
-	CurrencyUnit      string
-	CurrencyAccessKey string
+	Host string
+	// SiteName/CurrencyUnit/CurrencyAccessKey are runtime-mutable (the
+	// admin edits them and ReinitSubsystem reloads); read per request.
+	SiteName          func() string
+	CurrencyUnit      func() string
+	CurrencyAccessKey func() string
 	JwtSecret         string
 	JwtExpire         int64
 	IsGatewayMode     func() bool
@@ -94,9 +96,9 @@ func (s *Service) Checkout(ctx context.Context, req *dto.CheckoutOrderRequest) (
 		ActivationQueue:    s.deps.ActivationQueue,
 		Config: CheckoutConfig{
 			Host:              s.deps.Config.Host,
-			SiteName:          s.deps.Config.SiteName,
-			CurrencyUnit:      s.deps.Config.CurrencyUnit,
-			CurrencyAccessKey: s.deps.Config.CurrencyAccessKey,
+			SiteName:          s.deps.Config.SiteName(),
+			CurrencyUnit:      s.deps.Config.CurrencyUnit(),
+			CurrencyAccessKey: s.deps.Config.CurrencyAccessKey(),
 			ClientIP:          clientIP,
 			IsGatewayMode:     s.deps.Config.IsGatewayMode,
 		},

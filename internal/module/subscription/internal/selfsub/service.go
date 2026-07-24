@@ -21,8 +21,9 @@ type Deps struct {
 	Logs   repository.LogRepo
 	Inbox  repository.InboxRepo
 	Store  repository.Store
-	// SingleModel forbids holding more than one blocking subscription.
-	SingleModel bool
+	// SingleModel forbids holding more than one blocking subscription;
+	// runtime-mutable, read per request.
+	SingleModel func() bool
 }
 
 type Service struct {

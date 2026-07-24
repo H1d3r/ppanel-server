@@ -170,10 +170,12 @@ type Deps struct {
 	Store repository.Store
 	Tx    Transactor
 	Queue OrderQueue
-	// SingleModel forbids holding more than one blocking subscription.
-	SingleModel bool
-	// CurrencyUnit is the site currency used for gateway verification.
-	CurrencyUnit string
+	// SingleModel forbids holding more than one blocking subscription;
+	// runtime-mutable, read per request.
+	SingleModel func() bool
+	// CurrencyUnit is the site currency used for gateway verification;
+	// runtime-mutable, read per request.
+	CurrencyUnit func() string
 	// Host is the site host used to derive default payment notify URLs.
 	Host string
 	// IsGatewayMode reports whether notify URLs must use the gateway prefix.

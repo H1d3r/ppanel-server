@@ -32,7 +32,7 @@ import (
 
 // newBillingModule wires the billing module against the legacy store and the
 // asynq client (ADR-001 step 4).
-func newBillingModule(c config.Config, store repository.Store, queue *asynq.Client, rds *redis.Client, rate *exchangeRate.Cache) billing.Service {
+func newBillingModule(c config.Config, store repository.Store, queue *asynq.Client, rds *redis.Client, rate *exchangeRate.Cache, srv *ServiceContext) billing.Service {
 	return billing.New(billing.Deps{
 		Orders:        store.Order(),
 		Payments:      store.Payment(),
@@ -42,8 +42,8 @@ func newBillingModule(c config.Config, store repository.Store, queue *asynq.Clie
 		Store:         store,
 		Tx:            store,
 		Queue:         activationQueue{client: queue},
-		SingleModel:   c.Subscribe.SingleModel,
-		CurrencyUnit:  c.Currency.Unit,
+		SingleModel:   func() bool { return srv.Config.Subscribe.SingleModel },
+		CurrencyUnit:  func() string { return srv.Config.Currency.Unit },
 		Host:          c.Host,
 		IsGatewayMode: report.IsGatewayMode,
 
@@ -60,9 +60,9 @@ func newBillingModule(c config.Config, store repository.Store, queue *asynq.Clie
 		ExchangeRate:       rate,
 		Portal: billing.PortalConfig{
 			Host:              c.Host,
-			SiteName:          c.Site.SiteName,
-			CurrencyUnit:      c.Currency.Unit,
-			CurrencyAccessKey: c.Currency.AccessKey,
+			SiteName:          func() string { return srv.Config.Site.SiteName },
+			CurrencyUnit:      func() string { return srv.Config.Currency.Unit },
+			CurrencyAccessKey: func() string { return srv.Config.Currency.AccessKey },
 			JwtSecret:         c.JwtAuth.AccessSecret,
 			JwtExpire:         c.JwtAuth.AccessExpire,
 			IsGatewayMode:     report.IsGatewayMode,
@@ -191,7 +191,7 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 		Orders:      store.Order(),
 		Inbox:       store.Inbox(),
 		FullStore:   store,
-		SingleModel: srv.Config.Subscribe.SingleModel,
+		SingleModel: func() bool { return srv.Config.Subscribe.SingleModel },
 		DeliveryConfig: func() subscription.DeliveryConfig {
 			return subscription.DeliveryConfig{
 				SiteName:              srv.Config.Site.SiteName,

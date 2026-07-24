@@ -93,10 +93,10 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		GeoIP:        geoIP,
 		Store:        store,
 		Support:      newSupportModule(store, queue),
-		Billing:      newBillingModule(c, store, queue, rds, rate),
 		//NodeCache:   cache.NewNodeCacheClient(rds),
 		AuthLimiter: authLimiter,
 	}
+	srv.Billing = newBillingModule(c, store, queue, rds, rate, srv)
 	srv.Platform = newPlatformModule(store, srv)
 	srv.DeviceManager = NewDeviceManager(srv)
 	srv.Subscription = newSubscriptionModule(store, srv)

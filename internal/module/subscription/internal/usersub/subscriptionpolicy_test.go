@@ -41,7 +41,7 @@ func TestCreateUserSubscribeUsesBlockingSubscriptionPolicy(t *testing.T) {
 	svc := NewService(Deps{
 		Users:       users,
 		UserSubs:    users,
-		SingleModel: true,
+		SingleModel: func() bool { return true },
 	})
 
 	err := svc.CreateUserSubscribe(context.Background(), &dto.CreateUserSubscribeRequest{UserId: 7})

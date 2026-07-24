@@ -52,7 +52,7 @@ type Deps struct {
 	Checkout     *checkout.Service
 	Portal       *portal.Service
 	JwtSecret    string
-	CurrencyUnit string
+	CurrencyUnit func() string
 }
 
 // Service wraps the per-request orchestration flow.
@@ -293,7 +293,7 @@ func (l *V2OrderLogic) snapshot(orderInfo *orderEntity.Order) dto.V2OrderSnapsho
 		OrderNo: orderInfo.OrderNo, Status: v2OrderStatus(orderInfo.Status),
 		PaymentStatus: v2PaymentStatus(orderInfo.Status), FulfillmentStatus: v2FulfillmentStatus(orderInfo.Status),
 		StateVersion: orderInfo.StateVersion, Amount: orderInfo.Amount,
-		Currency:  l.deps.CurrencyUnit,
+		Currency:  l.deps.CurrencyUnit(),
 		ExpiresAt: orderInfo.CreatedAt.Add(checkout.CloseOrderTimeMinutes * time.Minute).Unix(),
 	}
 }
