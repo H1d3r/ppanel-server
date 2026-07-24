@@ -36,7 +36,7 @@ func (l *FlushTrafficLogic) ProcessTask(ctx context.Context, _ *asynq.Task) erro
 		}
 	}()
 
-	if err := trafficagg.New(l.svc).FlushDueBuckets(ctx, timeutil.Now()); err != nil {
+	if err := trafficagg.New(aggregatorDeps(l.svc)).FlushDueBuckets(ctx, timeutil.Now()); err != nil {
 		logger.WithContext(ctx).Error("[FlushTraffic] flush traffic failed", logger.Field("error", err.Error()))
 		return err
 	}

@@ -12,7 +12,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/node"
 	trafficEntity "github.com/perfect-panel/server/internal/model/entity/traffic"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/redis/go-redis/v9"
@@ -47,7 +46,7 @@ type UserTraffic struct {
 }
 
 type Aggregator struct {
-	svc *svc.ServiceContext
+	deps Deps
 }
 
 type trafficKey struct {
@@ -62,8 +61,20 @@ type trafficDelta struct {
 	Download    int64
 }
 
-func New(svcCtx *svc.ServiceContext) *Aggregator {
-	return &Aggregator{svc: svcCtx}
+// Deps declares the aggregator's collaborators; callers build it from their
+// own composition (the queue logic and the network module both use it).
+type Deps struct {
+	Store repository.Store
+	Redis *redis.Client
+	// TrafficReportThreshold reads the runtime-mutable minimum report size.
+	TrafficReportThreshold func() int64
+	// Multiplier returns the node traffic multiplier in effect at the given
+	// time; nil means no multiplier is configured.
+	Multiplier func(at time.Time) float32
+}
+
+func New(deps Deps) *Aggregator {
+	return &Aggregator{deps: deps}
 }
 
 func (a *Aggregator) AddReport(ctx context.Context, serverInfo *node.Server, protocol string, logs []UserTraffic) error {
@@ -71,14 +82,14 @@ func (a *Aggregator) AddReport(ctx context.Context, serverInfo *node.Server, pro
 }
 
 func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, protocol string, logs []UserTraffic, now time.Time) error {
-	if a == nil || a.svc == nil || a.svc.Redis == nil {
+	if a == nil || a.deps.Redis == nil {
 		return errors.New("traffic aggregator is not initialized")
 	}
 	if serverInfo == nil || serverInfo.Id <= 0 {
 		return errors.New("server not found")
 	}
 
-	pipe := a.svc.Redis.Pipeline()
+	pipe := a.deps.Redis.Pipeline()
 	pipe.HSet(ctx, serverLastReportedKey, strconv.FormatInt(serverInfo.Id, 10), strconv.FormatInt(now.UnixMilli(), 10))
 
 	if len(logs) == 0 {
@@ -109,8 +120,8 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 	suffix := minute.Format(bucketLayout)
 	bucketKey := bucketPrefix + suffix
 	multiplier := float32(defaultTrafficMultiplier)
-	if a.svc.NodeMultiplierManager != nil {
-		multiplier = a.svc.NodeMultiplierManager.GetMultiplier(now)
+	if a.deps.Multiplier != nil {
+		multiplier = a.deps.Multiplier(now)
 	}
 
 	trafficOps := 0
@@ -118,7 +129,7 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 		if item.SID <= 0 {
 			continue
 		}
-		if item.Download+item.Upload <= a.svc.Config.Node.TrafficReportThreshold {
+		if item.Download+item.Upload <= a.deps.TrafficReportThreshold() {
 			continue
 		}
 		download := int64(float32(item.Download) * ratio * multiplier)
@@ -141,12 +152,12 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 }
 
 func (a *Aggregator) FlushDueBuckets(ctx context.Context, now time.Time) error {
-	if a == nil || a.svc == nil || a.svc.Redis == nil {
+	if a == nil || a.deps.Redis == nil {
 		return errors.New("traffic aggregator is not initialized")
 	}
 
 	maxScore := now.In(timeutil.Location()).Truncate(time.Minute).Unix() - 1
-	buckets, err := a.svc.Redis.ZRangeByScore(ctx, bucketIndexKey, &redis.ZRangeBy{
+	buckets, err := a.deps.Redis.ZRangeByScore(ctx, bucketIndexKey, &redis.ZRangeBy{
 		Min: "-inf",
 		Max: strconv.FormatInt(maxScore, 10),
 	}).Result()
@@ -177,7 +188,7 @@ func (a *Aggregator) FlushDueBuckets(ctx context.Context, now time.Time) error {
 }
 
 func (a *Aggregator) FlushServerReports(ctx context.Context) error {
-	values, err := a.svc.Redis.HGetAll(ctx, serverLastReportedKey).Result()
+	values, err := a.deps.Redis.HGetAll(ctx, serverLastReportedKey).Result()
 	if err != nil {
 		return err
 	}
@@ -203,15 +214,15 @@ func (a *Aggregator) FlushServerReports(ctx context.Context) error {
 		return nil
 	}
 
-	if err := a.svc.Store.Node().BatchUpdateServerLastReportedAt(ctx, reports); err != nil {
+	if err := a.deps.Store.Node().BatchUpdateServerLastReportedAt(ctx, reports); err != nil {
 		return err
 	}
-	return redis.NewScript(conditionalHDelLua).Run(ctx, a.svc.Redis, []string{serverLastReportedKey}, args...).Err()
+	return redis.NewScript(conditionalHDelLua).Run(ctx, a.deps.Redis, []string{serverLastReportedKey}, args...).Err()
 }
 
 func (a *Aggregator) flushBucket(ctx context.Context, suffix string) error {
 	if _, err := parseBucketTime(suffix); err != nil {
-		pipe := a.svc.Redis.Pipeline()
+		pipe := a.deps.Redis.Pipeline()
 		pipe.ZRem(ctx, bucketIndexKey, suffix)
 		pipe.Del(ctx, bucketFailureKey(suffix))
 		_, _ = pipe.Exec(ctx)
@@ -221,7 +232,7 @@ func (a *Aggregator) flushBucket(ctx context.Context, suffix string) error {
 	aggregateKey := bucketPrefix + suffix
 	processingKey := processingBucketPrefix + suffix
 	processedKey := processedBucketPrefix + suffix
-	processed, err := a.svc.Redis.Exists(ctx, processedKey).Result()
+	processed, err := a.deps.Redis.Exists(ctx, processedKey).Result()
 	if err != nil {
 		return err
 	}
@@ -229,15 +240,15 @@ func (a *Aggregator) flushBucket(ctx context.Context, suffix string) error {
 		return a.cleanupBucket(ctx, suffix, processingKey)
 	}
 
-	exists, err := a.svc.Redis.Exists(ctx, processingKey).Result()
+	exists, err := a.deps.Redis.Exists(ctx, processingKey).Result()
 	if err != nil {
 		return err
 	}
 	if exists == 0 {
-		renamed, err := a.svc.Redis.RenameNX(ctx, aggregateKey, processingKey).Result()
+		renamed, err := a.deps.Redis.RenameNX(ctx, aggregateKey, processingKey).Result()
 		if err != nil {
 			if errors.Is(err, redis.Nil) || strings.Contains(err.Error(), "no such key") {
-				_ = a.svc.Redis.ZRem(ctx, bucketIndexKey, suffix).Err()
+				_ = a.deps.Redis.ZRem(ctx, bucketIndexKey, suffix).Err()
 				return nil
 			}
 			return err
@@ -247,7 +258,7 @@ func (a *Aggregator) flushBucket(ctx context.Context, suffix string) error {
 		}
 	}
 
-	values, err := a.svc.Redis.HGetAll(ctx, processingKey).Result()
+	values, err := a.deps.Redis.HGetAll(ctx, processingKey).Result()
 	if err != nil {
 		return err
 	}
@@ -267,7 +278,7 @@ func (a *Aggregator) flushBucket(ctx context.Context, suffix string) error {
 }
 
 func (a *Aggregator) cleanupBucket(ctx context.Context, suffix, processingKey string) error {
-	pipe := a.svc.Redis.Pipeline()
+	pipe := a.deps.Redis.Pipeline()
 	pipe.Del(ctx, processingKey)
 	pipe.ZRem(ctx, bucketIndexKey, suffix)
 	pipe.Del(ctx, bucketFailureKey(suffix))
@@ -276,7 +287,7 @@ func (a *Aggregator) cleanupBucket(ctx context.Context, suffix, processingKey st
 }
 
 func (a *Aggregator) markBucketProcessedAndCleanup(ctx context.Context, suffix, processingKey, processedKey string) error {
-	pipe := a.svc.Redis.Pipeline()
+	pipe := a.deps.Redis.Pipeline()
 	pipe.Set(ctx, processedKey, "1", bucketTTL)
 	pipe.Del(ctx, processingKey)
 	pipe.ZRem(ctx, bucketIndexKey, suffix)
@@ -299,18 +310,18 @@ func (a *Aggregator) handleBucketFlushFailure(ctx context.Context, suffix, proce
 
 func (a *Aggregator) recordBucketFlushFailure(ctx context.Context, suffix string) (int64, error) {
 	failureKey := bucketFailureKey(suffix)
-	failures, err := a.svc.Redis.Incr(ctx, failureKey).Result()
+	failures, err := a.deps.Redis.Incr(ctx, failureKey).Result()
 	if err != nil {
 		return 0, err
 	}
-	if err := a.svc.Redis.Expire(ctx, failureKey, deadLetterTTL).Err(); err != nil {
+	if err := a.deps.Redis.Expire(ctx, failureKey, deadLetterTTL).Err(); err != nil {
 		return 0, err
 	}
 	return failures, nil
 }
 
 func (a *Aggregator) moveBucketToDeadLetter(ctx context.Context, suffix, processingKey string, failures int64, cause error) error {
-	fieldCount, _ := a.svc.Redis.HLen(ctx, processingKey).Result()
+	fieldCount, _ := a.deps.Redis.HLen(ctx, processingKey).Result()
 	deadLetterKey, err := a.renameProcessingBucketToDeadLetter(ctx, suffix, processingKey)
 	if err != nil {
 		return err
@@ -322,7 +333,7 @@ func (a *Aggregator) moveBucketToDeadLetter(ctx context.Context, suffix, process
 		causeText = cause.Error()
 	}
 	metaKey := deadLetterMetaKey(deadLetterKey)
-	pipe := a.svc.Redis.Pipeline()
+	pipe := a.deps.Redis.Pipeline()
 	pipe.HSet(ctx, metaKey, map[string]interface{}{
 		"bucket":         suffix,
 		"source_key":     processingKey,
@@ -357,7 +368,7 @@ func (a *Aggregator) moveBucketToDeadLetter(ctx context.Context, suffix, process
 
 func (a *Aggregator) renameProcessingBucketToDeadLetter(ctx context.Context, suffix, processingKey string) (string, error) {
 	deadLetterKey := deadLetterBucketKey(suffix)
-	renamed, err := a.svc.Redis.RenameNX(ctx, processingKey, deadLetterKey).Result()
+	renamed, err := a.deps.Redis.RenameNX(ctx, processingKey, deadLetterKey).Result()
 	if err != nil {
 		return "", err
 	}
@@ -367,7 +378,7 @@ func (a *Aggregator) renameProcessingBucketToDeadLetter(ctx context.Context, suf
 
 	for i := 0; i < 3; i++ {
 		candidate := fmt.Sprintf("%s:%d:%d", deadLetterKey, timeutil.Now().UnixNano(), i)
-		renamed, err = a.svc.Redis.RenameNX(ctx, processingKey, candidate).Result()
+		renamed, err = a.deps.Redis.RenameNX(ctx, processingKey, candidate).Result()
 		if err != nil {
 			return "", err
 		}
@@ -394,7 +405,7 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 		subscribeIDs = append(subscribeIDs, delta.SubscribeId)
 	}
 
-	subs, err := a.svc.Store.UserSubscription().FindSubscribesByIds(ctx, subscribeIDs)
+	subs, err := a.deps.Store.UserSubscription().FindSubscribesByIds(ctx, subscribeIDs)
 	if err != nil {
 		return err
 	}
@@ -453,7 +464,7 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 		return err
 	}
 	if !processed {
-		if err := a.svc.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+		if err := a.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 			if err := store.UserSubscription().BatchUpdateUserSubscribeWithTraffic(ctx, updates); err != nil {
 				return err
 			}
@@ -469,7 +480,7 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 	if processed {
 		return nil
 	}
-	return a.svc.Store.InNetworkTx(ctx, func(store repository.NetworkStore) error {
+	return a.deps.Store.InNetworkTx(ctx, func(store repository.NetworkStore) error {
 		if err := store.TrafficLog().InsertBatch(ctx, logs, defaultTrafficBatchSize); err != nil {
 			return err
 		}
@@ -484,7 +495,7 @@ const (
 )
 
 func (a *Aggregator) bucketProcessed(ctx context.Context, consumer, suffix string) (bool, error) {
-	mark, err := a.svc.Store.Inbox().Find(ctx, consumer, suffix)
+	mark, err := a.deps.Store.Inbox().Find(ctx, consumer, suffix)
 	if err != nil {
 		return false, err
 	}

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/perfect-panel/server/internal/svc"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -17,7 +16,7 @@ func newTestAggregator(t *testing.T) (*Aggregator, *redis.Client) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	return New(&svc.ServiceContext{Redis: redisClient}), redisClient
+	return New(Deps{Redis: redisClient}), redisClient
 }
 
 func TestHandleBucketFlushFailureKeepsProcessingBeforeThreshold(t *testing.T) {

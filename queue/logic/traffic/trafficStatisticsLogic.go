@@ -45,7 +45,7 @@ func (l *TrafficStatisticsLogic) ProcessTask(ctx context.Context, task *asynq.Ta
 		)
 		return nil
 	}
-	if err = trafficagg.New(l.svc).AddReport(ctx, serverInfo, payload.Protocol, queueTrafficToAggregator(payload.Logs)); err != nil {
+	if err = trafficagg.New(aggregatorDeps(l.svc)).AddReport(ctx, serverInfo, payload.Protocol, queueTrafficToAggregator(payload.Logs)); err != nil {
 		logger.WithContext(ctx).Error("[TrafficStatistics] Aggregate traffic failed",
 			logger.Field("serverId", payload.ServerId),
 			logger.Field("error", err.Error()),

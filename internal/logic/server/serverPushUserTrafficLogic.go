@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
@@ -34,7 +35,19 @@ func (l *ServerPushUserTrafficLogic) ServerPushUserTraffic(req *dto.ServerPushUs
 		return errors.New("server not found")
 	}
 
-	if err = trafficagg.New(l.svcCtx).AddReport(l.ctx, serverInfo, req.Protocol, dtoTrafficToAggregator(req.Traffic)); err != nil {
+	if err = trafficagg.New(trafficagg.Deps{
+		Store: l.svcCtx.Store,
+		Redis: l.svcCtx.Redis,
+		TrafficReportThreshold: func() int64 {
+			return l.svcCtx.Config.Node.TrafficReportThreshold
+		},
+		Multiplier: func(at time.Time) float32 {
+			if l.svcCtx.NodeMultiplierManager == nil {
+				return 1
+			}
+			return l.svcCtx.NodeMultiplierManager.GetMultiplier(at)
+		},
+	}).AddReport(l.ctx, serverInfo, req.Protocol, dtoTrafficToAggregator(req.Traffic)); err != nil {
 		l.Errorw("[ServerPushUserTraffic] Aggregate traffic error", logger.Field("error", err.Error()))
 		return errors.Wrap(err, "aggregate traffic")
 	}
