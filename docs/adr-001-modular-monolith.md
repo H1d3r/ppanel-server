@@ -138,9 +138,19 @@ internal/module/<name>/
    EPay/Stripe/Alipay 回调的验签、订单-支付方式绑定校验、支付期望（金额/币种快照）核对、
    网关复查与结算；结算原语抽为模块内共享的 `internal/settle` 包（checkout 与 callbacks
    共用，防止回调结算与到期结算语义漂移）。`internal/logic/notify` 已删除，svc 基线再收缩。
-4. **域优先重组**：把 `logic/admin/<域>` + `logic/public/<域>` + `queue/logic/<域>` 收拢进
-   `internal/module/<域>/internal/service`，handler 变薄。试点顺序：`support`（耦合最低）
-   → `billing`（刚硬化过、测试最全）→ 其余。
+4. **域优先重组**（✅ 2026-07-24 完成）：把 `logic/admin/<域>` + `logic/public/<域>` 收拢进
+   `internal/module/<域>/internal/<子域>`，handler 变薄。实际完成顺序：`support`（耦合最低）
+   → `billing`（10 子域：admin order/payment、coupon、userorder、checkout、portal、callbacks、
+   settle、v2、wallet）→ `platform`（auditlog、systemsetting、dashboard、publicinfo、tool）
+   → `subscription`（plan、storefront、delivery、usersub、selfsub、application）→ `identity`
+   （adminuser、profile、authn+oauth+registerpolicy、verifycode、authmethodadmin）→ `network`
+   （adminserver、serverapi、edge、nodeconfig）→ `notification`（telegram）。
+   **`internal/logic` 目录已删除**：logic 层跨包依赖冻结基线清零后整树消失，7 个模块全部就位。
+   跨切面惯例沉淀：运行时可变配置一律经"每请求快照闭包"进模块；进程级副作用
+   （Restart/ReinitSubsystem/设备踢线/机器人）经 ServiceContext 函数字段或闭包晚绑定；
+   验证码原语抽为中立包 `internal/verification`；trafficagg 去 svc 化后由 queue 与
+   network 模块各自组装。`queue/logic/*` 与 handler/initialize/scheduler 仍持 svcCtx，
+   属组装根性质，其收缩并入第 5 步。
 5. **数据所有权清算**：表→模块归属表定稿，清理附录 A.4 的跨模块 JOIN/Preload，
    并把 identity 与 subscription 共用的 `*userRepo` 实现物理分家（见附录 A 开头说明）。
 6. **拆分就绪**：门面换 gRPC 实现（`api/` 已有 protobuf 基建）、事件换消息队列、搬表。
