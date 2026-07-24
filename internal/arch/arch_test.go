@@ -56,7 +56,6 @@ var svcImporters = map[string]bool{
 	"internal/logic/admin/console":  true,
 	"internal/logic/admin/user":     true,
 	"internal/logic/public/payment": true,
-	"internal/logic/telegram":       true,
 	"internal/middleware":           true, "internal/route": true,
 	"internal/transport/httpserver": true,
 	"queue":                         true, "queue/handler": true,

@@ -8,7 +8,6 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/logic/telegram"
 	"github.com/perfect-panel/server/internal/model/entity/auth"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -63,8 +62,7 @@ func Telegram(svc *svc.ServiceContext) {
 			for update := range updates {
 				if update.Message != nil {
 					ctx := context.Background()
-					l := newTelegramLogic(ctx, svc, bot)
-					l.TelegramLogic(&update)
+					svc.Notification.HandleTelegramUpdate(ctx, &update)
 				}
 			}
 		}()
@@ -91,28 +89,4 @@ func Telegram(svc *svc.ServiceContext) {
 	svc.TelegramBot = bot
 
 	logger.Info("[Init Telegram Config] Telegram init success")
-}
-
-func newTelegramLogic(ctx context.Context, svcCtx *svc.ServiceContext, bot *tgbotapi.BotAPI) *telegram.TelegramLogic {
-	messenger := telegram.NewTelegramBotMessenger(bot)
-	redisStore := telegram.NewTelegramRedisStore(svcCtx.Redis)
-	admin := telegram.NewTelegramAdmin(ctx, telegram.TelegramAdminDependencies{
-		Messenger:     messenger,
-		Actions:       redisStore,
-		Tickets:       svcCtx.Store.Ticket(),
-		Orders:        svcCtx.Store.Order(),
-		Users:         svcCtx.Store.User(),
-		UserAuth:      svcCtx.Store.UserAuth(),
-		Subscriptions: svcCtx.Store.UserSubscription(),
-		UserCache:     svcCtx.Store.UserCache(),
-		Plans:         svcCtx.Store.Subscribe(),
-		Logs:          svcCtx.Store.Log(),
-	})
-	return telegram.NewTelegramLogic(ctx, telegram.TelegramLogicDependencies{
-		Messenger: messenger,
-		Sessions:  redisStore,
-		UserAuth:  svcCtx.Store.UserAuth(),
-		UserCache: svcCtx.Store.UserCache(),
-		Admin:     admin,
-	})
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/network"
+	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -40,18 +41,14 @@ type ServiceContext struct {
 	Subscription subscription.Service
 	Identity     identity.Service
 	Network      network.Service
+	Notification notification.Service
 
 	//NodeCache   *cache.NodeCacheClient
 	Restart func() error
 	// ReinitSubsystem re-runs a subsystem's initialization after its
 	// configuration changed; assigned by the transport server alongside
 	// Restart (the initialize package cannot be imported here).
-	ReinitSubsystem func(subsystem string)
-	// NotifyTelegramUnbind is assigned by the transport server alongside
-	// Restart: its implementation lives in the legacy telegram logic package,
-	// which imports this package. Modules reach it through a late-binding
-	// closure wired in modules.go.
-	NotifyTelegramUnbind  func(userID, chatID int64) error
+	ReinitSubsystem       func(subsystem string)
 	TelegramBot           *tgbotapi.BotAPI
 	NodeMultiplierManager *nodeMultiplier.Manager
 	AuthLimiter           *limit.PeriodLimit
@@ -105,6 +102,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	srv.Subscription = newSubscriptionModule(store, srv)
 	srv.Identity = newIdentityModule(store, srv)
 	srv.Network = newNetworkModule(store, srv)
+	srv.Notification = newNotificationModule(store, srv)
 	return srv
 
 }

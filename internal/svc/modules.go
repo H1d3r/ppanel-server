@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"strconv"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/network"
+	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -230,7 +232,7 @@ func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Ser
 		},
 		TelegramBotName: func() string { return srv.Config.Telegram.BotName },
 		NotifyTelegramUnbind: func(userID, chatID int64) error {
-			return srv.NotifyTelegramUnbind(userID, chatID)
+			return srv.Notification.NotifyTelegramUnbind(userID, chatID)
 		},
 		AuthConfig: func() identity.AuthSnapshot {
 			c := srv.Config
@@ -313,6 +315,24 @@ func newNetworkModule(store repository.Store, srv *ServiceContext) network.Servi
 			}
 			return srv.NodeMultiplierManager.GetMultiplier(at)
 		},
+	})
+}
+
+// newNotificationModule wires the notification module against the legacy
+// store; the bot client is runtime-recreated, so the module reads it per
+// call.
+func newNotificationModule(store repository.Store, srv *ServiceContext) notification.Service {
+	return notification.New(notification.Deps{
+		Bot:           func() *tgbotapi.BotAPI { return srv.TelegramBot },
+		Redis:         srv.Redis,
+		Users:         store.User(),
+		UserAuth:      store.UserAuth(),
+		UserCache:     store.UserCache(),
+		Tickets:       store.Ticket(),
+		Orders:        store.Order(),
+		Subscriptions: store.UserSubscription(),
+		Plans:         store.Subscribe(),
+		Logs:          store.Log(),
 	})
 }
 

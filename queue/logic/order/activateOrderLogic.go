@@ -17,10 +17,10 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/perfect-panel/server/internal/logic/telegram"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/subscribe"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -297,11 +297,11 @@ func (l *ActivateOrderLogic) loadActivationResult(ctx context.Context, orderInfo
 		result.subscribe, result.userSub = sub, userSub
 		switch orderInfo.Type {
 		case OrderTypeSubscribe:
-			result.notifyType = telegram.PurchaseNotify
+			result.notifyType = notification.PurchaseNotify
 		case OrderTypeRenewal:
-			result.notifyType = telegram.RenewalNotify
+			result.notifyType = notification.RenewalNotify
 		case OrderTypeResetTraffic:
-			result.notifyType = telegram.ResetTrafficNotify
+			result.notifyType = notification.ResetTrafficNotify
 		}
 		return result, nil
 	default:
@@ -394,7 +394,7 @@ func (l *ActivateOrderLogic) activateNewPurchaseTx(ctx context.Context, store re
 	if err != nil {
 		return nil, err
 	}
-	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: telegram.PurchaseNotify}, nil
+	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: notification.PurchaseNotify}, nil
 }
 
 func (l *ActivateOrderLogic) createUserSubscriptionTx(ctx context.Context, store repository.Store, orderInfo *order.Order, sub *subscribe.Subscribe) (*user.Subscribe, error) {
@@ -453,7 +453,7 @@ func (l *ActivateOrderLogic) activateRenewalTx(ctx context.Context, store reposi
 	if err := l.updateSubscriptionForRenewalTx(ctx, store, userSub, sub, orderInfo); err != nil {
 		return nil, err
 	}
-	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: telegram.RenewalNotify}, nil
+	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: notification.RenewalNotify}, nil
 }
 
 func (l *ActivateOrderLogic) updateSubscriptionForRenewalTx(ctx context.Context, store repository.Store, userSub *user.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order) error {
@@ -520,7 +520,7 @@ func (l *ActivateOrderLogic) activateResetTrafficTx(ctx context.Context, store r
 	}); err != nil {
 		return nil, err
 	}
-	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: telegram.ResetTrafficNotify}, nil
+	return &activationResult{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: notification.ResetTrafficNotify}, nil
 }
 
 func (l *ActivateOrderLogic) activateRechargeTx(ctx context.Context, store repository.BillingStore, orderInfo *order.Order) (*activationResult, error) {
@@ -709,7 +709,7 @@ func (l *ActivateOrderLogic) sendNotifications(ctx context.Context, orderInfo *o
 
 	// Send admin notification
 	adminData := l.buildAdminNotificationData(orderInfo, sub)
-	if text, err := tool.RenderTemplateToString(telegram.AdminOrderNotify, adminData); err == nil {
+	if text, err := tool.RenderTemplateToString(notification.AdminOrderNotify, adminData); err == nil {
 		l.sendAdminNotifyWithTelegram(ctx, text)
 	}
 }
@@ -724,7 +724,7 @@ func (l *ActivateOrderLogic) sendRechargeNotifications(ctx context.Context, orde
 			"Time":          orderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
 			"Balance":       fmt.Sprintf("%.2f", float64(userInfo.Balance)/100),
 		}
-		if text, err := tool.RenderTemplateToString(telegram.RechargeNotify, templateData); err == nil {
+		if text, err := tool.RenderTemplateToString(notification.RechargeNotify, templateData); err == nil {
 			l.sendUserNotifyWithTelegram(telegramId, text)
 		}
 	}
@@ -739,7 +739,7 @@ func (l *ActivateOrderLogic) sendRechargeNotifications(ctx context.Context, orde
 		"OrderTime":     orderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
 		"PaymentMethod": orderInfo.Method,
 	}
-	if text, err := tool.RenderTemplateToString(telegram.AdminOrderNotify, adminData); err == nil {
+	if text, err := tool.RenderTemplateToString(notification.AdminOrderNotify, adminData); err == nil {
 		l.sendAdminNotifyWithTelegram(ctx, text)
 	}
 }

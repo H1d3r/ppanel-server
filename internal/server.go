@@ -6,17 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/perfect-panel/server/initialize"
-	"github.com/perfect-panel/server/internal/logic/telegram"
 	"github.com/perfect-panel/server/internal/report"
 	"github.com/perfect-panel/server/internal/transport/httpserver"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/perfect-panel/server/pkg/tool"
 
 	"github.com/perfect-panel/server/pkg/proc"
 	"github.com/perfect-panel/server/pkg/trace"
@@ -126,21 +121,6 @@ func (m *Service) Start() {
 		case "device":
 			initialize.Device(m.svc)
 		}
-	}
-	m.svc.NotifyTelegramUnbind = func(userID, chatID int64) error {
-		text, err := tool.RenderTemplateToString(telegram.UnbindNotify, map[string]string{
-			"Id":   strconv.FormatInt(userID, 10),
-			"Time": timeutil.Now().Format("2006-01-02 15:04:05"),
-		})
-		if err != nil {
-			return err
-		}
-		bot := m.svc.TelegramBot
-		if bot == nil {
-			return errors.New("telegram bot is not configured")
-		}
-		_, err = bot.Send(tgbotapi.NewMessage(chatID, text))
-		return err
 	}
 	logger.Infof("server start at %v", serverAddr)
 	m.server.Start()
