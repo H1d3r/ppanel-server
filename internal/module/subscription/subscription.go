@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/delivery"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
@@ -38,6 +39,20 @@ type Service interface {
 	Deliver(ctx context.Context, meta RequestMeta, req *dto.SubscribeRequest) (*dto.SubscribeResponse, error)
 	// IsUserAgentAllowed gates delivery by the configured user-agent allowlist.
 	IsUserAgentAllowed(ctx context.Context, userAgent string) bool
+
+	// Admin-side user subscription management.
+	CreateUserSubscribe(ctx context.Context, req *dto.CreateUserSubscribeRequest) error
+	DeleteUserSubscribe(ctx context.Context, req *dto.DeleteUserSubscribeRequest) error
+	UpdateUserSubscribe(ctx context.Context, req *dto.UpdateUserSubscribeRequest) error
+	GetUserSubscribe(ctx context.Context, req *dto.GetUserSubscribeListRequest) (*dto.GetUserSubscribeListResponse, error)
+	GetUserSubscribeById(ctx context.Context, req *dto.GetUserSubscribeByIdRequest) (*dto.UserSubscribeDetail, error)
+	GetUserSubscribeDevices(ctx context.Context, req *dto.GetUserSubscribeDevicesRequest) (*dto.GetUserSubscribeDevicesResponse, error)
+	GetUserSubscribeLogs(ctx context.Context, req *dto.GetUserSubscribeLogsRequest) (*dto.GetUserSubscribeLogsResponse, error)
+	GetUserSubscribeResetTrafficLogs(ctx context.Context, req *dto.GetUserSubscribeResetTrafficLogsRequest) (*dto.GetUserSubscribeResetTrafficLogsResponse, error)
+	GetUserSubscribeTrafficLogs(ctx context.Context, req *dto.GetUserSubscribeTrafficLogsRequest) (*dto.GetUserSubscribeTrafficLogsResponse, error)
+	ResetUserSubscribeToken(ctx context.Context, req *dto.ResetUserSubscribeTokenRequest) error
+	ResetUserSubscribeTraffic(ctx context.Context, req *dto.ResetUserSubscribeTrafficRequest) error
+	ToggleUserSubscribeStatus(ctx context.Context, req *dto.ToggleUserSubscribeStatusRequest) error
 }
 
 // RequestMeta re-exports the delivery subdomain's transport details.
@@ -69,6 +84,16 @@ type Deps struct {
 	Logs    repository.LogRepo
 	// DeliveryConfig reads the runtime-mutable delivery configuration.
 	DeliveryConfig func() DeliveryConfig
+
+	// User-subscription administration dependencies.
+	Devices repository.UserDeviceRepo
+	Cache   repository.UserCacheRepo
+	Traffic repository.TrafficRepo
+	// FullStore is the transitional full-store dependency for the admin
+	// subscription transactions.
+	FullStore repository.Store
+	// SingleModel forbids holding more than one blocking subscription.
+	SingleModel bool
 }
 
 func New(deps Deps) Service {
@@ -88,6 +113,17 @@ func New(deps Deps) Service {
 			Logs:           deps.Logs,
 			ConfigSnapshot: deps.DeliveryConfig,
 		}),
+		userSubs: usersub.NewService(usersub.Deps{
+			Plans:       deps.Plans,
+			UserSubs:    deps.UserSubs,
+			Users:       deps.Users,
+			Devices:     deps.Devices,
+			Cache:       deps.Cache,
+			Traffic:     deps.Traffic,
+			Logs:        deps.Logs,
+			Store:       deps.FullStore,
+			SingleModel: deps.SingleModel,
+		}),
 		storefront: storefront.NewService(storefront.Deps{
 			Plans:       deps.Plans,
 			UserSubs:    deps.UserSubs,
@@ -102,6 +138,7 @@ type service struct {
 	plans      *plan.Service
 	storefront *storefront.Service
 	delivery   *delivery.Service
+	userSubs   *usersub.Service
 }
 
 func (s *service) CreateSubscribe(ctx context.Context, req *dto.CreateSubscribeRequest) error {
@@ -174,4 +211,52 @@ func (s *service) Deliver(ctx context.Context, meta RequestMeta, req *dto.Subscr
 
 func (s *service) IsUserAgentAllowed(ctx context.Context, userAgent string) bool {
 	return s.delivery.IsUserAgentAllowed(ctx, userAgent)
+}
+
+func (s *service) CreateUserSubscribe(ctx context.Context, req *dto.CreateUserSubscribeRequest) error {
+	return s.userSubs.CreateUserSubscribe(ctx, req)
+}
+
+func (s *service) DeleteUserSubscribe(ctx context.Context, req *dto.DeleteUserSubscribeRequest) error {
+	return s.userSubs.DeleteUserSubscribe(ctx, req)
+}
+
+func (s *service) UpdateUserSubscribe(ctx context.Context, req *dto.UpdateUserSubscribeRequest) error {
+	return s.userSubs.UpdateUserSubscribe(ctx, req)
+}
+
+func (s *service) GetUserSubscribe(ctx context.Context, req *dto.GetUserSubscribeListRequest) (*dto.GetUserSubscribeListResponse, error) {
+	return s.userSubs.GetUserSubscribe(ctx, req)
+}
+
+func (s *service) GetUserSubscribeById(ctx context.Context, req *dto.GetUserSubscribeByIdRequest) (*dto.UserSubscribeDetail, error) {
+	return s.userSubs.GetUserSubscribeById(ctx, req)
+}
+
+func (s *service) GetUserSubscribeDevices(ctx context.Context, req *dto.GetUserSubscribeDevicesRequest) (*dto.GetUserSubscribeDevicesResponse, error) {
+	return s.userSubs.GetUserSubscribeDevices(ctx, req)
+}
+
+func (s *service) GetUserSubscribeLogs(ctx context.Context, req *dto.GetUserSubscribeLogsRequest) (*dto.GetUserSubscribeLogsResponse, error) {
+	return s.userSubs.GetUserSubscribeLogs(ctx, req)
+}
+
+func (s *service) GetUserSubscribeResetTrafficLogs(ctx context.Context, req *dto.GetUserSubscribeResetTrafficLogsRequest) (*dto.GetUserSubscribeResetTrafficLogsResponse, error) {
+	return s.userSubs.GetUserSubscribeResetTrafficLogs(ctx, req)
+}
+
+func (s *service) GetUserSubscribeTrafficLogs(ctx context.Context, req *dto.GetUserSubscribeTrafficLogsRequest) (*dto.GetUserSubscribeTrafficLogsResponse, error) {
+	return s.userSubs.GetUserSubscribeTrafficLogs(ctx, req)
+}
+
+func (s *service) ResetUserSubscribeToken(ctx context.Context, req *dto.ResetUserSubscribeTokenRequest) error {
+	return s.userSubs.ResetUserSubscribeToken(ctx, req)
+}
+
+func (s *service) ResetUserSubscribeTraffic(ctx context.Context, req *dto.ResetUserSubscribeTrafficRequest) error {
+	return s.userSubs.ResetUserSubscribeTraffic(ctx, req)
+}
+
+func (s *service) ToggleUserSubscribeStatus(ctx context.Context, req *dto.ToggleUserSubscribeStatusRequest) error {
+	return s.userSubs.ToggleUserSubscribeStatus(ctx, req)
 }

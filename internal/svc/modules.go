@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing"
+	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -151,9 +152,14 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 		IsTrialPlan: func(planID int64) bool {
 			return srv.Config.Register.EnableTrial && srv.Config.Register.TrialSubscribe == planID
 		},
-		Clients: store.Client(),
-		Users:   store.User(),
-		Logs:    store.Log(),
+		Clients:     store.Client(),
+		Users:       store.User(),
+		Logs:        store.Log(),
+		Devices:     store.UserDevice(),
+		Cache:       store.UserCache(),
+		Traffic:     store.TrafficLog(),
+		FullStore:   store,
+		SingleModel: srv.Config.Subscribe.SingleModel,
 		DeliveryConfig: func() subscription.DeliveryConfig {
 			return subscription.DeliveryConfig{
 				SiteName:              srv.Config.Site.SiteName,
@@ -163,6 +169,27 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 				ProfileWebPageURL:     srv.Config.Subscribe.ProfileWebPageURL,
 				UserAgentList:         srv.Config.Subscribe.UserAgentList,
 				GatewayMode:           report.IsGatewayMode(),
+			}
+		},
+	})
+}
+
+// newIdentityModule wires the identity module against the legacy store;
+// device kicking is a closure over the service context's device manager.
+func newIdentityModule(store repository.Store, srv *ServiceContext) identity.Service {
+	return identity.New(identity.Deps{
+		Users:     store.User(),
+		UserAuths: store.UserAuth(),
+		Devices:   store.UserDevice(),
+		Cache:     store.UserCache(),
+		UserSubs:  store.UserSubscription(),
+		Plans:     store.Subscribe(),
+		Traffic:   store.TrafficLog(),
+		Logs:      store.Log(),
+		Store:     store,
+		KickDevice: func(userID int64, identifier string) {
+			if srv.DeviceManager != nil {
+				srv.DeviceManager.KickDevice(userID, identifier)
 			}
 		},
 	})

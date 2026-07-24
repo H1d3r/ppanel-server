@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetUserListHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := user.NewGetUserListLogic(ctx, svcCtx)
-		resp, err := l.GetUserList(&req)
+		resp, err := svcCtx.Identity.GetUserList(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }

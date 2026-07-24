@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func DeleteUserSubscribeHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := user.NewDeleteUserSubscribeLogic(ctx, svcCtx)
-		err := l.DeleteUserSubscribe(&req)
+		err := svcCtx.Subscription.DeleteUserSubscribe(ctx, &req)
 		result.HttpResult(c, nil, err)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetUserSubscribeDevicesHandler(svcCtx *svc.ServiceContext) app.HandlerFunc 
 			return
 		}
 
-		l := user.NewGetUserSubscribeDevicesLogic(ctx, svcCtx)
-		resp, err := l.GetUserSubscribeDevices(&req)
+		resp, err := svcCtx.Subscription.GetUserSubscribeDevices(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }

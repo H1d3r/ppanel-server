@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/logic/admin/user"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -34,8 +33,7 @@ func GetUserLoginLogsHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		l := user.NewGetUserLoginLogsLogic(ctx, svcCtx)
-		resp, err := l.GetUserLoginLogs(&req)
+		resp, err := svcCtx.Identity.GetUserLoginLogs(ctx, &req)
 		result.HttpResult(c, resp, err)
 	}
 }
