@@ -164,6 +164,76 @@ func TestQueryOrderReturnsAuthoritativeGatewayFields(t *testing.T) {
 	}
 }
 
+func TestQueryOrderFallsBackToEasyPayStatusQuery(t *testing.T) {
+	var standardRequests, fallbackRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/gateway/api.php":
+			standardRequests++
+			if r.Method != http.MethodGet {
+				t.Errorf("standard method=%s, want GET", r.Method)
+			}
+			http.NotFound(w, r)
+		case "/gateway/api/EasyPay/queryOrder":
+			fallbackRequests++
+			if r.Method != http.MethodPost {
+				t.Errorf("fallback method=%s, want POST", r.Method)
+			}
+			if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+				t.Errorf("fallback content-type=%q", r.Header.Get("Content-Type"))
+			}
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.PostForm.Get("orderNo"); got != "order-1" {
+				t.Errorf("orderNo=%q, want order-1", got)
+			}
+			if len(r.PostForm) != 1 {
+				t.Errorf("fallback params=%v, want only orderNo", r.PostForm)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 1, "msg": "query success", "data": map[string]string{"status": "success"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("1001", server.URL+"/gateway", "secret", "alipay")
+	result, err := client.QueryOrder("order-1")
+	if err != nil {
+		t.Fatalf("QueryOrder: %v", err)
+	}
+	if standardRequests != 1 || fallbackRequests != 1 {
+		t.Fatalf("standard=%d fallback=%d, want one request each", standardRequests, fallbackRequests)
+	}
+	if !result.Paid || !result.StatusOnly || result.Message != "query success" {
+		t.Fatalf("unexpected fallback result: %+v", result)
+	}
+}
+
+func TestQueryOrderEasyPayFallbackReportsUnpaid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api.php" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code": 1, "data": map[string]string{"status": "pending"},
+		})
+	}))
+	defer server.Close()
+
+	result, err := NewClient("1001", server.URL, "secret", "alipay").QueryOrder("order-1")
+	if err != nil {
+		t.Fatalf("QueryOrder: %v", err)
+	}
+	if result.Paid || !result.StatusOnly {
+		t.Fatalf("unexpected fallback result: %+v", result)
+	}
+}
+
 func TestQueryOrderRejectsUnsuccessfulLookup(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"code":-1,"msg":"not found"}`))

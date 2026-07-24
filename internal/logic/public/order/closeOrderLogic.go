@@ -275,6 +275,9 @@ func (l *CloseOrderLogic) settleEPayOrder(orderInfo *order.Order) (bool, error) 
 	if !result.Paid {
 		return false, fmt.Errorf("cannot safely expire unpaid EPay order %s; gateway does not provide cancellation", orderInfo.OrderNo)
 	}
+	if result.StatusOnly {
+		return false, fmt.Errorf("cannot safely reconcile paid EPay order %s: gateway query has no transaction details", orderInfo.OrderNo)
+	}
 	amount, err := epay.ParseMoney(result.Money)
 	if err != nil || result.OrderNo != orderInfo.OrderNo || result.MerchantID != config.Pid || result.Type != config.Type || amount != orderInfo.PaymentAmount || result.TradeNo == "" {
 		return false, fmt.Errorf("EPay order %s query does not match payment expectation", orderInfo.OrderNo)

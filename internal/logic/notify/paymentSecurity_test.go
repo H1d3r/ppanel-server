@@ -273,6 +273,9 @@ func TestValidateQueriedEPayOrderRejectsGatewayMismatch(t *testing.T) {
 	if err := validateQueriedEPayOrder(&changed, req, credentials, 1000); err == nil {
 		t.Fatal("unpaid gateway order must be rejected")
 	}
+	if err := validateQueriedEPayOrder(&epay.QueryResult{Paid: true, StatusOnly: true}, req, credentials, 1000); err != nil {
+		t.Fatalf("paid status-only gateway query rejected: %v", err)
+	}
 }
 
 func TestActivationTaskIDIsDeterministicPerOrder(t *testing.T) {

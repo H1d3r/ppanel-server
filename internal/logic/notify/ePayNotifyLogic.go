@@ -202,6 +202,13 @@ func validateQueriedEPayOrder(result *epay.QueryResult, req *dto.EPayNotifyReque
 	if result == nil || !result.Paid {
 		return errors.New("gateway order is not paid")
 	}
+	// Some compatible gateways expose only a payment status from their query
+	// endpoint. The callback above is still signature-verified and its payment
+	// fields are validated before this point, so status confirmation is useful
+	// without pretending omitted fields were verified by the query API.
+	if result.StatusOnly {
+		return nil
+	}
 	if result.OrderNo != req.OutTradeNo {
 		return errors.New("gateway order number mismatch")
 	}

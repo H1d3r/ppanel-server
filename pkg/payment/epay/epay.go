@@ -20,8 +20,9 @@ import (
 	"github.com/perfect-panel/server/pkg/tool"
 )
 
-// ErrQueryNotSupported is returned when the payment gateway does not
-// implement the order query API (e.g., returns HTTP 404).
+// ErrQueryNotSupported is returned when the payment gateway implements
+// neither the standard EPay order query API nor the EasyPay-compatible
+// fallback API (e.g., both return HTTP 404).
 var ErrQueryNotSupported = errors.New("gateway does not support order query API")
 
 const (
@@ -68,6 +69,9 @@ type QueryResult struct {
 	Money      string
 	Paid       bool
 	Message    string
+	// StatusOnly reports that the gateway query API returned only a payment
+	// status. Callers must not treat omitted payment details as verified.
+	StatusOnly bool
 }
 
 type queryOrderResponse struct {
@@ -79,6 +83,17 @@ type queryOrderResponse struct {
 	Money      string          `json:"money"`
 	Pid        json.RawMessage `json:"pid"`
 	Status     int             `json:"status"`
+}
+
+// easyPayQueryOrderResponse is used by a non-standard EPay variant. Its
+// query response intentionally contains only an order status, rather than
+// the full payment details returned by standard EPay's api.php endpoint.
+type easyPayQueryOrderResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data *struct {
+		Status string `json:"status"`
+	} `json:"data"`
 }
 
 type mapiResponse struct {
@@ -172,13 +187,22 @@ func (c *Client) VerifySign(params map[string]string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(received)) == 1
 }
 
-// QueryOrder obtains authoritative payment details directly from the gateway.
-// A successful HTTP response is not enough: EPay-compatible gateways use code=1
-// to indicate a successful lookup and status=1 to indicate a paid order.
+// QueryOrder obtains payment details directly from the gateway. It first uses
+// the standard EPay api.php protocol. When that endpoint is absent, it falls
+// back to a known EasyPay-compatible POST protocol that exposes only status.
 func (c *Client) QueryOrder(orderNo string) (*QueryResult, error) {
 	if orderNo == "" {
 		return nil, errors.New("order number is empty")
 	}
+	result, err := c.queryStandardOrder(orderNo)
+	if !errors.Is(err, ErrQueryNotSupported) {
+		return result, err
+	}
+	return c.queryEasyPayOrder(orderNo)
+}
+
+// queryStandardOrder implements EPay's GET api.php?act=order protocol.
+func (c *Client) queryStandardOrder(orderNo string) (*QueryResult, error) {
 	endpoint, err := c.endpoint("api.php")
 	if err != nil {
 		return nil, err
@@ -236,6 +260,61 @@ func (c *Client) QueryOrder(orderNo string) (*QueryResult, error) {
 		Money:      response.Money,
 		Paid:       response.Status == 1,
 		Message:    response.Msg,
+	}, nil
+}
+
+// queryEasyPayOrder implements the status-only fallback used by a known
+// modified EPay gateway. It is attempted only after standard api.php returns
+// 404, so existing EPay integrations keep their normal protocol.
+func (c *Client) queryEasyPayOrder(orderNo string) (*QueryResult, error) {
+	endpoint, err := c.endpoint("api/EasyPay/queryOrder")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint.String(), strings.NewReader(url.Values{
+		"orderNo": []string{orderNo},
+	}.Encode()))
+	if err != nil {
+		return nil, errors.New("create EasyPay query request failed")
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := c.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, errors.New("EasyPay query request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrQueryNotSupported
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("EasyPay query returned HTTP %d", resp.StatusCode)
+	}
+	const maxQueryResponseSize = 1 << 20
+	value, err := io.ReadAll(io.LimitReader(resp.Body, maxQueryResponseSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read EasyPay query response: %w", err)
+	}
+	if len(value) > maxQueryResponseSize {
+		return nil, errors.New("EasyPay query response is too large")
+	}
+	var response easyPayQueryOrderResponse
+	if err := json.Unmarshal(value, &response); err != nil {
+		return nil, fmt.Errorf("decode EasyPay query response: %w", err)
+	}
+	if response.Code != 1 {
+		return nil, fmt.Errorf("EasyPay order lookup failed: code=%d", response.Code)
+	}
+	if response.Data == nil || strings.TrimSpace(response.Data.Status) == "" {
+		return nil, errors.New("EasyPay query response has no order status")
+	}
+	return &QueryResult{
+		Paid:       strings.EqualFold(response.Data.Status, "success"),
+		Message:    response.Msg,
+		StatusOnly: true,
 	}, nil
 }
 
