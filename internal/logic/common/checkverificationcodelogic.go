@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"fmt"
+	"github.com/perfect-panel/server/internal/verification"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
@@ -42,8 +43,8 @@ func (l *CheckVerificationCodeLogic) CheckVerificationCode(req *dto.CheckVerific
 			return resp, nil
 		}
 		cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, constant.ParseVerifyType(req.Type), email)
-		if err := ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, false); err != nil {
-			if errors.Is(err, ErrVerificationAttemptsExceeded) {
+		if err := verification.ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, false); err != nil {
+			if errors.Is(err, verification.ErrVerificationAttemptsExceeded) {
 				return nil, errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "verification attempts exceeded")
 			}
 			return resp, nil
@@ -55,8 +56,8 @@ func (l *CheckVerificationCodeLogic) CheckVerificationCode(req *dto.CheckVerific
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.TelephoneError), "Invalid phone number")
 		}
 		cacheKey := fmt.Sprintf("%s:%s:+%s", config.AuthCodeTelephoneCacheKey, constant.ParseVerifyType(req.Type), req.Account)
-		if err := ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, false); err != nil {
-			if errors.Is(err, ErrVerificationAttemptsExceeded) {
+		if err := verification.ValidateVerificationCode(l.ctx, l.svcCtx.Redis, cacheKey, req.Code, false); err != nil {
+			if errors.Is(err, verification.ErrVerificationAttemptsExceeded) {
 				return nil, errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "verification attempts exceeded")
 			}
 			return resp, nil

@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/logic/common"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
+	"github.com/perfect-panel/server/internal/verification"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/jwt"
@@ -108,7 +108,7 @@ func (l *TelephoneLoginLogic) TelephoneLogin(req *dto.TelephoneLoginRequest, ip,
 		upgradePasswordAfterLogin(l.ctx, l.deps.Store.User(), l.Logger, userInfo, req.Password)
 	} else {
 		cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeTelephoneCacheKey, constant.ParseVerifyType(uint8(constant.Security)), phoneNumber)
-		if err := common.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.TelephoneCode, true); err != nil {
+		if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.TelephoneCode, true); err != nil {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
 		}
 	}

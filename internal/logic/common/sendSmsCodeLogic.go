@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/perfect-panel/server/internal/verification"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -101,7 +102,7 @@ func (l *SendSmsCodeLogic) SendSmsCode(req *dto.SendSmsCodeRequest) (resp *dto.S
 	code := random.Key(6, 0)
 	taskPayload.Telephone = req.Telephone
 	taskPayload.Content = code
-	if err = SaveVerificationCode(l.ctx, l.deps.Redis, cacheKey, code, time.Second*time.Duration(l.deps.Config.VerifyCodeExpire)); err != nil {
+	if err = verification.SaveVerificationCode(l.ctx, l.deps.Redis, cacheKey, code, time.Second*time.Duration(l.deps.Config.VerifyCodeExpire)); err != nil {
 		l.Errorw("[SendSmsCode]: Redis Error", logger.Field("error", err.Error()), logger.Field("cacheKey", cacheKey))
 		return nil, errors.Wrap(xerr.NewErrCode(xerr.ERROR), "Failed to set verification code")
 	}
@@ -117,7 +118,7 @@ func (l *SendSmsCodeLogic) SendSmsCode(req *dto.SendSmsCodeRequest) (resp *dto.S
 	// Enqueue the task
 	taskInfo, err := l.deps.Queue.Enqueue(task)
 	if err != nil {
-		_ = DeleteVerificationCode(l.ctx, l.deps.Redis, cacheKey)
+		_ = verification.DeleteVerificationCode(l.ctx, l.deps.Redis, cacheKey)
 		l.Errorw("[SendSmsCode]: Enqueue Error", logger.Field("error", err.Error()), logger.Field("type", taskPayload.Type))
 		return nil, errors.Wrap(xerr.NewErrCode(xerr.ERROR), "Failed to enqueue task")
 	}

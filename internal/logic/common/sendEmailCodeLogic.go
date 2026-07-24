@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/perfect-panel/server/internal/verification"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -113,7 +114,7 @@ func (l *SendEmailCodeLogic) SendEmailCode(req *dto.SendCodeRequest) (resp *dto.
 		"Code":     code,
 	}
 	expiration := time.Duration(expireSeconds) * time.Second
-	if err = SaveVerificationCode(l.ctx, l.deps.Redis, cacheKey, code, expiration); err != nil {
+	if err = verification.SaveVerificationCode(l.ctx, l.deps.Redis, cacheKey, code, expiration); err != nil {
 		l.Errorw("[SendEmailCode]: Redis Error", logger.Field("error", err.Error()), logger.Field("cacheKey", cacheKey))
 		return nil, errors.Wrap(xerr.NewErrCode(xerr.ERROR), "Failed to set verification code")
 	}
@@ -129,7 +130,7 @@ func (l *SendEmailCodeLogic) SendEmailCode(req *dto.SendCodeRequest) (resp *dto.
 	// Enqueue the task
 	taskInfo, err := l.deps.Queue.Enqueue(task)
 	if err != nil {
-		_ = DeleteVerificationCode(l.ctx, l.deps.Redis, cacheKey)
+		_ = verification.DeleteVerificationCode(l.ctx, l.deps.Redis, cacheKey)
 		l.Errorw("[SendEmailCode]: Enqueue Error", logger.Field("error", err.Error()), logger.Field("type", taskPayload.Type))
 		return nil, errors.Wrap(xerr.NewErrCode(xerr.ERROR), "Failed to enqueue task")
 	}
