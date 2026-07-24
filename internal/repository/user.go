@@ -469,7 +469,11 @@ func userQuoteColumn(db *gorm.DB, table, column string) string {
 
 // --- user statistics / email recipients / batch delete ---
 
-func emailRecipientQuery(conn *gorm.DB, filter *user.EmailRecipientFilter) *gorm.DB {
+// emailRecipientQuery builds the identity-side recipient query (user +
+// auth_methods only). Subscription-scope filtering happens app-side in
+// subscriptionScopedUserIDs so no SQL crosses the domain boundary
+// (ADR-001 step 5); the ID list is applied via scopeIDs/scopeExclude.
+func emailRecipientQuery(conn *gorm.DB, filter *user.EmailRecipientFilter, scopeIDs []int64, scopeExclude bool) *gorm.DB {
 	if filter == nil {
 		filter = &user.EmailRecipientFilter{Scope: 1}
 	}
@@ -489,27 +493,71 @@ func emailRecipientQuery(conn *gorm.DB, filter *user.EmailRecipientFilter) *gorm
 		query = query.Where(userCreatedAt+" <= ?", time.UnixMilli(filter.RegisterEndTime))
 	}
 
-	switch filter.Scope {
-	case 2:
-		query = query.Joins(fmt.Sprintf("JOIN user_subscribe ON %s = user_subscribe.user_id", userID)).
-			Where("user_subscribe.status IN ?", []int64{1, 2})
-	case 3:
-		query = query.Joins(fmt.Sprintf("JOIN user_subscribe ON %s = user_subscribe.user_id", userID)).
-			Where("user_subscribe.status = ?", 3)
-	case 4:
-		query = query.Joins(fmt.Sprintf("LEFT JOIN user_subscribe ON %s = user_subscribe.user_id", userID)).
-			Where("user_subscribe.user_id IS NULL")
+	if scopeIDs != nil {
+		if scopeExclude {
+			if len(scopeIDs) > 0 {
+				query = query.Where(userID+" NOT IN ?", scopeIDs)
+			}
+		} else {
+			if len(scopeIDs) == 0 {
+				// An empty inclusion list matches nobody.
+				query = query.Where("1 = 0")
+			} else {
+				query = query.Where(userID+" IN ?", scopeIDs)
+			}
+		}
 	}
 	return query
+}
+
+// subscriptionScopedUserIDs resolves the subscription-domain half of the
+// recipient filter: which user IDs the scope includes (or, for scope 4,
+// excludes). A nil list with exclude=false means the scope does not
+// constrain by subscription.
+func (m *userRepo) subscriptionScopedUserIDs(ctx context.Context, scope int8) (ids []int64, exclude bool, err error) {
+	var statuses []int64
+	switch scope {
+	case 2:
+		statuses = []int64{1, 2}
+	case 3:
+		statuses = []int64{3}
+	case 4:
+		// Everyone who has any subscription row is excluded.
+		statuses = nil
+	default:
+		return nil, false, nil
+	}
+	err = m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
+		q := conn.Model(&user.Subscribe{}).Distinct("user_id")
+		if statuses != nil {
+			q = q.Where("status IN ?", statuses)
+		}
+		return q.Pluck("user_id", v).Error
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if ids == nil {
+		ids = []int64{}
+	}
+	return ids, scope == 4, nil
 }
 
 func (m *userRepo) QueryEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) ([]string, error) {
 	if filter != nil && filter.Scope == 5 {
 		return nil, nil
 	}
+	scope := int8(1)
+	if filter != nil {
+		scope = filter.Scope
+	}
+	ids, exclude, err := m.subscriptionScopedUserIDs(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
 	var emails []string
-	err := m.QueryNoCacheCtx(ctx, &emails, func(conn *gorm.DB, v interface{}) error {
-		return emailRecipientQuery(conn, filter).Pluck("auth_identifier", v).Error
+	err = m.QueryNoCacheCtx(ctx, &emails, func(conn *gorm.DB, v interface{}) error {
+		return emailRecipientQuery(conn, filter, ids, exclude).Pluck("auth_identifier", v).Error
 	})
 	return emails, err
 }
@@ -518,9 +566,17 @@ func (m *userRepo) CountEmailRecipients(ctx context.Context, filter *user.EmailR
 	if filter != nil && filter.Scope == 5 {
 		return 0, nil
 	}
+	scope := int8(1)
+	if filter != nil {
+		scope = filter.Scope
+	}
+	ids, exclude, err := m.subscriptionScopedUserIDs(ctx, scope)
+	if err != nil {
+		return 0, err
+	}
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
-		return emailRecipientQuery(conn, filter).Count(&total).Error
+	err = m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+		return emailRecipientQuery(conn, filter, ids, exclude).Count(&total).Error
 	})
 	return total, err
 }
