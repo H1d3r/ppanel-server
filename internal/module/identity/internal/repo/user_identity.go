@@ -11,7 +11,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/model/entity/usersub"
-	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -59,13 +58,7 @@ func (m *UserRepo) Insert(ctx context.Context, data *user.User, tx ...*gorm.DB) 
 				return err
 			}
 		}
-		if err := conn.Create(&data).Error; err != nil {
-			return err
-		}
-		// Every account gets its billing-owned wallet row at creation;
-		// initial money (admin-created accounts) is credited through the
-		// wallet view afterwards.
-		return conn.Create(&walletEntity.Wallet{UserId: data.Id}).Error
+		return conn.Create(&data).Error
 	}, m.getCacheKeys(data)...)
 	return err
 }

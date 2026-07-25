@@ -463,7 +463,7 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, reques
 	}
 
 	var userInfo *user.User
-	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
+	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		if email != "" {
 			l.Debugw("checking if email already exists",
 				logger.Field("request_id", requestID),
@@ -571,7 +571,7 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, reques
 	return userInfo, err
 }
 
-func (l *OAuthLoginGetTokenLogic) checkEmailExists(store repository.Store, email, requestID string) error {
+func (l *OAuthLoginGetTokenLogic) checkEmailExists(store repository.IdentityStore, email, requestID string) error {
 	userInfo, err := store.User().FindOneByEmail(l.ctx, email)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		l.Errorw("failed to check email existence",
@@ -596,7 +596,7 @@ func (l *OAuthLoginGetTokenLogic) checkEmailExists(store repository.Store, email
 	return nil
 }
 
-func (l *OAuthLoginGetTokenLogic) createAuthMethod(store repository.Store, userID int64, authType, identifier, requestID string) error {
+func (l *OAuthLoginGetTokenLogic) createAuthMethod(store repository.IdentityStore, userID int64, authType, identifier, requestID string) error {
 	l.Debugw("creating auth method",
 		logger.Field("request_id", requestID),
 		logger.Field("user_id", userID),

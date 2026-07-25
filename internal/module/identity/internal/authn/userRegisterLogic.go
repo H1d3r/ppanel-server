@@ -103,7 +103,7 @@ func (l *UserRegisterLogic) UserRegister(req *dto.UserRegisterRequest) (resp *dt
 	if referer != nil {
 		userInfo.RefererId = referer.Id
 	}
-	err = l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
+	err = l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		// Save user information
 		if err := store.User().Insert(l.ctx, userInfo); err != nil {
 			return err

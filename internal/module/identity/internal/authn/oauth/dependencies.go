@@ -26,7 +26,7 @@ type OAuthLoginStore interface {
 	UserCache() repository.UserCacheRepo
 	Subscribe() repository.SubscribeRepo
 	Log() repository.LogRepo
-	InTx(ctx context.Context, fn func(repository.Store) error) error
+	InIdentityTx(ctx context.Context, fn func(repository.IdentityStore) error) error
 }
 
 // OAuthLoginConfig is the configuration snapshot consumed by the OAuth login

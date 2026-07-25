@@ -170,7 +170,7 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 	}
 
 	var userInfo *user.User
-	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
+	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		// Create new user
 		userInfo = &user.User{
 			OnlyFirstPurchase: &l.deps.Config.OnlyFirstPurchase,

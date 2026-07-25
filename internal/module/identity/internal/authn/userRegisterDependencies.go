@@ -24,7 +24,7 @@ type UserRegisterStore interface {
 	UserCache() repository.UserCacheRepo
 	Subscribe() repository.SubscribeRepo
 	Log() repository.LogRepo
-	InTx(ctx context.Context, fn func(repository.Store) error) error
+	InIdentityTx(ctx context.Context, fn func(repository.IdentityStore) error) error
 }
 
 // DeviceBinder attaches a device identifier to a newly registered user.

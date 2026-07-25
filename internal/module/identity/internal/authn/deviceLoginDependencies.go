@@ -25,7 +25,7 @@ type DeviceLoginStore interface {
 	UserCache() repository.UserCacheRepo
 	Subscribe() repository.SubscribeRepo
 	Log() repository.LogRepo
-	InTx(ctx context.Context, fn func(repository.Store) error) error
+	InIdentityTx(ctx context.Context, fn func(repository.IdentityStore) error) error
 }
 
 // DeviceLoginConfig is the configuration snapshot consumed by the device

@@ -24,7 +24,7 @@ type TelephoneUserRegisterStore interface {
 	UserCache() repository.UserCacheRepo
 	Subscribe() repository.SubscribeRepo
 	Log() repository.LogRepo
-	InTx(ctx context.Context, fn func(repository.Store) error) error
+	InIdentityTx(ctx context.Context, fn func(repository.IdentityStore) error) error
 }
 
 // TelephoneUserRegisterConfig is the configuration snapshot consumed by
