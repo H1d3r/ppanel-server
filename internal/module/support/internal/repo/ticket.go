@@ -1,14 +1,14 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/ticket"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -17,29 +17,18 @@ var (
 	cacheTicketDetailPrefix = "cache:ticket:detail:"
 )
 
-// TicketRepo ticket 数据访问接口
-type TicketRepo interface {
-	Insert(ctx context.Context, data *ticket.Ticket) error
-	FindOne(ctx context.Context, id int64) (*ticket.Ticket, error)
-	Update(ctx context.Context, data *ticket.Ticket) error
-	Delete(ctx context.Context, id int64) error
-	QueryTicketDetail(ctx context.Context, id int64) (*ticket.Details, error)
-	InsertTicketFollow(ctx context.Context, data *ticket.Follow) error
-	QueryTicketList(ctx context.Context, page, size int, userId int64, status *uint8, search string) (int64, []*ticket.Ticket, error)
-	UpdateTicketStatus(ctx context.Context, id, userId int64, status uint8) error
-	QueryWaitReplyTotal(ctx context.Context) (int64, error)
-}
-
-var _ TicketRepo = (*ticketRepo)(nil)
+var _ repository.TicketRepo = (*ticketRepo)(nil)
 
 type ticketRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newTicketRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) TicketRepo {
+// NewTicketRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewTicketRepo(conn cache.CachedConn) repository.TicketRepo {
 	return &ticketRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "ticket",
 	}
 }
@@ -134,7 +123,7 @@ func (m *ticketRepo) InsertTicketFollow(ctx context.Context, data *ticket.Follow
 func (m *ticketRepo) QueryTicketList(ctx context.Context, page, size int, userId int64, status *uint8, search string) (int64, []*ticket.Ticket, error) {
 	var data []*ticket.Ticket
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		query := conn.Model(&ticket.Ticket{})
 		if userId > 0 {

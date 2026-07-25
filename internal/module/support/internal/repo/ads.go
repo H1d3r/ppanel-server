@@ -1,38 +1,31 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/ads"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
 var cacheAdsIdPrefix = "cache:ads:id:"
 
-// AdsRepo ads 数据访问接口
-type AdsRepo interface {
-	Insert(ctx context.Context, data *ads.Ads) error
-	FindOne(ctx context.Context, id int64) (*ads.Ads, error)
-	Update(ctx context.Context, data *ads.Ads) error
-	Delete(ctx context.Context, id int64) error
-	GetAdsListByPage(ctx context.Context, page, size int, filter ads.Filter) (int64, []*ads.Ads, error)
-}
-
-var _ AdsRepo = (*adsRepo)(nil)
+var _ repository.AdsRepo = (*adsRepo)(nil)
 
 type adsRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newAdsRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) AdsRepo {
+// NewAdsRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewAdsRepo(conn cache.CachedConn) repository.AdsRepo {
 	return &adsRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "ads",
 	}
 }
@@ -88,7 +81,7 @@ func (m *adsRepo) Delete(ctx context.Context, id int64) error {
 func (m *adsRepo) GetAdsListByPage(ctx context.Context, page, size int, filter ads.Filter) (int64, []*ads.Ads, error) {
 	var list []*ads.Ads
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&ads.Ads{})
 		if filter.Status != nil {

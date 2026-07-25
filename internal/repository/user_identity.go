@@ -163,7 +163,7 @@ func (m *userRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error {
 func (m *userRepo) QueryPageList(ctx context.Context, page, size int, filter *user.UserFilterParams) ([]*user.User, int64, error) {
 	var list []*user.User
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = applyUserPageFilters(conn.Model(&user.User{}), filter)
 		if err := conn.Count(&total).Error; err != nil {
@@ -801,7 +801,7 @@ func (m *userRepo) FindOneDeviceByIdentifier(ctx context.Context, id string) (*u
 func (m *userRepo) QueryDevicePageList(ctx context.Context, userId, subscribeId int64, page, size int) ([]*user.Device, int64, error) {
 	var list []*user.Device
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.Device{}).Where("user_id = ? and subscribe_id = ?", userId, subscribeId).Count(&total).Limit(size).Offset((page - 1) * size).Find(&list).Error
 	})
@@ -896,7 +896,7 @@ func (m *userRepo) CountAffiliates(ctx context.Context, refererId int64) (int64,
 func (m *userRepo) QueryAffiliateList(ctx context.Context, refererId int64, page, size int) ([]*user.User, int64, error) {
 	var list []*user.User
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.User{}).
 			Where("referer_id = ?", refererId).

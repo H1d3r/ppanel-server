@@ -1,39 +1,32 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/announcement"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 var cacheAnnouncementIdPrefix = "cache:announcement:id:"
 
-// AnnouncementRepo announcement 数据访问接口
-type AnnouncementRepo interface {
-	Insert(ctx context.Context, data *announcement.Announcement) error
-	FindOne(ctx context.Context, id int64) (*announcement.Announcement, error)
-	Update(ctx context.Context, data *announcement.Announcement) error
-	Delete(ctx context.Context, id int64) error
-	GetAnnouncementListByPage(ctx context.Context, page, size int, filter announcement.Filter) (int64, []*announcement.Announcement, error)
-}
-
-var _ AnnouncementRepo = (*announcementRepo)(nil)
+var _ repository.AnnouncementRepo = (*announcementRepo)(nil)
 
 type announcementRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newAnnouncementRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) AnnouncementRepo {
+// NewAnnouncementRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewAnnouncementRepo(conn cache.CachedConn) repository.AnnouncementRepo {
 	return &announcementRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "announcement",
 	}
 }
@@ -94,7 +87,7 @@ func (m *announcementRepo) Delete(ctx context.Context, id int64) error {
 func (m *announcementRepo) GetAnnouncementListByPage(ctx context.Context, page, size int, filter announcement.Filter) (int64, []*announcement.Announcement, error) {
 	var list []*announcement.Announcement
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&announcement.Announcement{})
 		if filter.Show != nil {

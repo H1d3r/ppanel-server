@@ -71,13 +71,6 @@ type GormStore struct {
 	support      SupportRepos
 }
 
-// NewGormStore creates a GormStore from this package's default builders (the
-// implementations migrate into their modules incrementally; use
-// NewGormStoreWithBuilders once a module exports its own).
-func NewGormStore(db *gorm.DB, rds *redis.Client) *GormStore {
-	return NewGormStoreWithBuilders(db, rds, DefaultBuilders(rds))
-}
-
 // NewGormStoreWithBuilders assembles the store from the given per-module
 // repo builders.
 func NewGormStoreWithBuilders(db *gorm.DB, rds *redis.Client, builders Builders) *GormStore {
@@ -102,10 +95,11 @@ func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.Invalidat
 	return s
 }
 
-// DefaultBuilders wraps the repository implementations still living in this
+// LegacyBuilders wraps the repository implementations still living in this
 // package. Each entry disappears as its module takes ownership of the
-// implementation and exports its own builder.
-func DefaultBuilders(rds *redis.Client) Builders {
+// implementation and exports its own builder; the composition root fills
+// the moved entries from the module facades.
+func LegacyBuilders(rds *redis.Client) Builders {
 	// The node cache retrier is a background singleton that must survive
 	// per-transaction rebuilds.
 	nodeRetrier := newServerCacheInvalidationRetrier(rds)
@@ -152,14 +146,6 @@ func DefaultBuilders(rds *redis.Client) Builders {
 			return NetworkRepos{
 				Nodes:   newNodeRepo(c.DB, c.Redis, nodeRetrier),
 				Traffic: newTrafficRepo(c.DB),
-			}
-		},
-		Support: func(c ModuleConn) SupportRepos {
-			return SupportRepos{
-				Tickets:       newTicketRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				Announcements: newAnnouncementRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				Ads:           newAdsRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				Documents:     newDocumentRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
 			}
 		},
 	}

@@ -374,7 +374,7 @@ func (m *nodeRepo) FilterServerList(ctx context.Context, params *node.FilterPara
 			Size: 10,
 		}
 	}
-	params.Page, params.Size = normalizePageFloor(params.Page, params.Size)
+	params.Page, params.Size = NormalizePageFloor(params.Page, params.Size)
 	if params.Search != "" {
 		query = query.Scopes(orm.PrefixLike([]string{"name", "address"}, params.Search))
 	}
@@ -417,7 +417,7 @@ func (m *nodeRepo) FilterNodeList(ctx context.Context, params *node.FilterNodePa
 			Size: 10,
 		}
 	}
-	params.Page, params.Size = normalizePageFloor(params.Page, params.Size)
+	params.Page, params.Size = NormalizePageFloor(params.Page, params.Size)
 	if params.Search != "" {
 		pattern := orm.LikePrefixPattern(params.Search)
 		condition := "(name LIKE ?" + orm.LikeEscapeClause() + " OR address LIKE ?" + orm.LikeEscapeClause() + " OR tags LIKE ?" + orm.LikeEscapeClause()

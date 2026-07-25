@@ -630,9 +630,9 @@ func TestNormalizePage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotPage, gotSize := normalizePage(tt.page, tt.size)
+			gotPage, gotSize := NormalizePage(tt.page, tt.size)
 			if gotPage != tt.wantPage || gotSize != tt.wantSize {
-				t.Fatalf("normalizePage(%d, %d) = (%d, %d), want (%d, %d)",
+				t.Fatalf("NormalizePage(%d, %d) = (%d, %d), want (%d, %d)",
 					tt.page, tt.size, gotPage, gotSize, tt.wantPage, tt.wantSize)
 			}
 		})
@@ -640,8 +640,8 @@ func TestNormalizePage(t *testing.T) {
 }
 
 func TestNormalizePageFloor(t *testing.T) {
-	gotPage, gotSize := normalizePageFloor(0, maxPageSize+1)
+	gotPage, gotSize := NormalizePageFloor(0, maxPageSize+1)
 	if gotPage != 1 || gotSize != maxPageSize+1 {
-		t.Fatalf("normalizePageFloor() = (%d, %d), want (1, %d)", gotPage, gotSize, maxPageSize+1)
+		t.Fatalf("NormalizePageFloor() = (%d, %d), want (1, %d)", gotPage, gotSize, maxPageSize+1)
 	}
 }

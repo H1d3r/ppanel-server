@@ -67,7 +67,7 @@ func (m *logRepo) FilterSystemLog(ctx context.Context, filter *log.FilterParams)
 		}
 	}
 
-	filter.Page, filter.Size = normalizePage(filter.Page, filter.Size)
+	filter.Page, filter.Size = NormalizePage(filter.Page, filter.Size)
 
 	if filter.Type != 0 {
 		tx = tx.Where("type = ?", filter.Type)

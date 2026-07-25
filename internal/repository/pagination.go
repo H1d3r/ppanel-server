@@ -5,7 +5,8 @@ const (
 	maxPageSize     = 100
 )
 
-func normalizePage(page, size int) (int, int) {
+// NormalizePage clamps pagination inputs; module repo implementations share it.
+func NormalizePage(page, size int) (int, int) {
 	if page < 1 {
 		page = 1
 	}
@@ -18,7 +19,8 @@ func normalizePage(page, size int) (int, int) {
 	return page, size
 }
 
-func normalizePageFloor(page, size int) (int, int) {
+// NormalizePageFloor clamps pagination inputs without a minimum page size.
+func NormalizePageFloor(page, size int) (int, int) {
 	if page < 1 {
 		page = 1
 	}

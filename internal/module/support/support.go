@@ -15,6 +15,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/support/internal/announcement"
 	"github.com/perfect-panel/server/internal/module/support/internal/document"
 	"github.com/perfect-panel/server/internal/module/support/internal/marketing"
+	"github.com/perfect-panel/server/internal/module/support/internal/repo"
 	"github.com/perfect-panel/server/internal/module/support/internal/ticket"
 	"github.com/perfect-panel/server/internal/repository"
 )
@@ -125,6 +126,20 @@ type Deps struct {
 	QuotaTargets  SubscriptionSelector
 	Queue         MarketingQueue
 	EmailStopper  BatchEmailStopper
+}
+
+// NewRepoBuilder exports the module-owned repository implementations for
+// store assembly (ADR-001 step-6 preparation).
+func NewRepoBuilder() repository.SupportBuilder {
+	return func(c repository.ModuleConn) repository.SupportRepos {
+		conn := c.Conn()
+		return repository.SupportRepos{
+			Tickets:       repo.NewTicketRepo(conn),
+			Announcements: repo.NewAnnouncementRepo(conn),
+			Ads:           repo.NewAdsRepo(conn),
+			Documents:     repo.NewDocumentRepo(conn),
+		}
+	}
 }
 
 func New(deps Deps) Service {

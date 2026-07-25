@@ -55,7 +55,7 @@ func (m *taskRepo) QueryTaskList(ctx context.Context, filter *task.Filter) (int6
 			Size: defaultPageSize,
 		}
 	}
-	filter.Page, filter.Size = normalizePage(filter.Page, filter.Size)
+	filter.Page, filter.Size = NormalizePage(filter.Page, filter.Size)
 
 	query := m.db.WithContext(ctx).Model(&task.Task{})
 	if filter.Type != task.Undefined {

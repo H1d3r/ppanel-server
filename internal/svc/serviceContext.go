@@ -81,7 +81,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		panic(err.Error())
 	}
 	authLimiter := limit.NewPeriodLimit(86400, 15, rds, config.SendCountLimitKeyPrefix, limit.Align())
-	store := repository.NewGormStore(db, rds)
+	store := NewStore(db, rds)
 	queue := NewAsynqClient(c)
 	rate := exchangeRate.NewCache(0)
 	srv := &ServiceContext{

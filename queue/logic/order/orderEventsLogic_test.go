@@ -11,7 +11,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/inbox"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/orderstream"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
@@ -39,7 +38,7 @@ func TestPublishOrderEventsDeliversDurableOutboxThenMarksPublished(t *testing.T)
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	logic := NewPublishOrderEventsLogic(&svc.ServiceContext{Store: repository.NewGormStore(db, redisClient), Redis: redisClient})
+	logic := NewPublishOrderEventsLogic(&svc.ServiceContext{Store: svc.NewStore(db, redisClient), Redis: redisClient})
 	if err := logic.ProcessTask(context.Background(), asynq.NewTask("test", nil)); err != nil {
 		t.Fatalf("publish outbox: %v", err)
 	}
@@ -81,7 +80,7 @@ func TestCleanupOrderEventsKeepsUnpublishedRecords(t *testing.T) {
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	logic := NewCleanupOrderEventsLogic(&svc.ServiceContext{Store: repository.NewGormStore(db, redisClient)})
+	logic := NewCleanupOrderEventsLogic(&svc.ServiceContext{Store: svc.NewStore(db, redisClient)})
 	if err := logic.ProcessTask(context.Background(), asynq.NewTask("test", nil)); err != nil {
 		t.Fatalf("cleanup events: %v", err)
 	}

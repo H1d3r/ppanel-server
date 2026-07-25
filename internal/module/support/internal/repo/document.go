@@ -1,41 +1,32 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/document"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 var cacheDocumentIdPrefix = "cache:document:id:"
 
-// DocumentRepo document 数据访问接口
-type DocumentRepo interface {
-	Insert(ctx context.Context, data *document.Document) error
-	FindOne(ctx context.Context, id int64) (*document.Document, error)
-	Update(ctx context.Context, data *document.Document) error
-	Delete(ctx context.Context, id int64) error
-	QueryDocumentDetail(ctx context.Context, id int64) (*document.Document, error)
-	QueryDocumentList(ctx context.Context, page, size int, tag string, search string) (int64, []*document.Document, error)
-	GetDocumentListByAll(ctx context.Context) (int64, []*document.Document, error)
-}
-
-var _ DocumentRepo = (*documentRepo)(nil)
+var _ repository.DocumentRepo = (*documentRepo)(nil)
 
 type documentRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newDocumentRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) DocumentRepo {
+// NewDocumentRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewDocumentRepo(conn cache.CachedConn) repository.DocumentRepo {
 	return &documentRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "document",
 	}
 }
@@ -121,7 +112,7 @@ func (m *documentRepo) QueryDocumentDetail(ctx context.Context, id int64) (*docu
 func (m *documentRepo) QueryDocumentList(ctx context.Context, page, size int, tag string, search string) (int64, []*document.Document, error) {
 	var data []*document.Document
 	var total int64
-	page, size = normalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		db := conn.Model(&document.Document{})
 		if tag != "" {
