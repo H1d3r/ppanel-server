@@ -88,17 +88,24 @@ func (l *CreateUserLogic) CreateUser(req *dto.CreateUserRequest) error {
 		newUser.RefererId = u.Id
 	}
 
-	// Account creation and the initial wallet credit commit atomically; a
-	// half-created account would otherwise block the retry on "email
-	// exists". The generic transaction is deliberate: this admin flow spans
-	// identity (account) and billing (initial money) by design.
-	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
+	// Two sequential domain transactions replace the old cross-domain one:
+	// the identity transaction creates the account (and its zero wallet
+	// row); the billing transaction credits the initial money. A failure
+	// between them leaves an uncredited account the admin can adjust — the
+	// same partial-failure surface the flows will have as services.
+	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		if err := store.User().Insert(l.ctx, newUser); err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert user failed: %v", err.Error())
 		}
-		if req.Balance == 0 && req.Commission == 0 && req.GiftAmount == 0 {
-			return nil
-		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if req.Balance == 0 && req.Commission == 0 && req.GiftAmount == 0 {
+		return nil
+	}
+	return l.deps.Store.InBillingTx(l.ctx, func(store repository.BillingStore) error {
 		w, err := store.Wallet().FindOneForUpdate(l.ctx, newUser.Id)
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "load new user wallet failed: %v", err.Error())
@@ -114,5 +121,4 @@ func (l *CreateUserLogic) CreateUser(req *dto.CreateUserRequest) error {
 		}
 		return nil
 	})
-	return err
 }

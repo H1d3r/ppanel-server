@@ -34,19 +34,13 @@ func newUpdateUserBasicInfoLogic(ctx context.Context, deps Deps) *UpdateUserBasi
 func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasiceInfoRequest) error {
 	isDemo := strings.ToLower(os.Getenv("PPANEL_MODE")) == "demo"
 	// The admin edit spans two domains by design — identity profile fields
-	// and a billing money adjustment — so it stays on the generic
-	// transaction; when the domains split into services this becomes two
-	// calls without cross-entity atomicity.
-	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
-		// Financial adjustments must compare and write the latest values
-		// under a lock, with their audit logs in the same transaction.
-		// Lock-ordering contract (ADR-001 step 5): the wallet lock comes
-		// before the user-row lock, matching every wallet movement's
-		// wallet-then-user write order.
-		walletInfo, err := store.Wallet().FindOneForUpdate(l.ctx, req.UserId)
-		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Wallet Error")
-		}
+	// and a billing money adjustment — so it runs as two sequential domain
+	// transactions. The identity transaction goes first because it carries
+	// the request validations (avatar, demo-mode password): a rejected edit
+	// then leaves the money untouched. A failure after the profile commit
+	// leaves the money unadjusted for the admin to retry — the same
+	// partial-failure surface the flows will have as services.
+	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		userInfo, err := store.User().FindOneForUpdate(l.ctx, req.UserId)
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Error")
@@ -54,35 +48,6 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 		if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
 			return err
 		}
-		if walletInfo.Balance != req.Balance {
-			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: req.Balance - walletInfo.Balance, Balance: req.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: userInfo.Id, Content: string(content)}); err != nil {
-				return err
-			}
-		}
-		if walletInfo.GiftAmount != req.GiftAmount {
-			changeType := log.GiftTypeReduce
-			if req.GiftAmount > walletInfo.GiftAmount {
-				changeType = log.GiftTypeIncrease
-			}
-			content, _ := (&log.Gift{Type: changeType, Amount: req.GiftAmount - walletInfo.GiftAmount, Balance: req.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: userInfo.Id, Content: string(content)}); err != nil {
-				return err
-			}
-		}
-		if walletInfo.Commission != req.Commission {
-			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: req.Commission - walletInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: userInfo.Id, Content: string(content)}); err != nil {
-				return err
-			}
-		}
-
-		walletChanged := walletInfo.Balance != req.Balance ||
-			walletInfo.GiftAmount != req.GiftAmount ||
-			walletInfo.Commission != req.Commission
-		walletInfo.Balance = req.Balance
-		walletInfo.GiftAmount = req.GiftAmount
-		walletInfo.Commission = req.Commission
 		userInfo.Avatar = req.Avatar
 		userInfo.ReferCode = req.ReferCode
 		userInfo.RefererId = req.RefererId
@@ -98,24 +63,61 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 			userInfo.Algo = tool.PasswordAlgoArgon2id
 			userInfo.Salt = ""
 		}
-		if err := store.User().Update(l.ctx, userInfo); err != nil {
-			return err
-		}
 		// The profile save skips the billing-owned money columns; the
-		// admin's wallet adjustment goes through the wallet view under the
-		// same row lock (their audit logs are recorded above).
-		if walletChanged {
-			if err := store.Wallet().UpdateBalanceFields(l.ctx, walletInfo); err != nil {
-				return err
-			}
-			if err := store.Wallet().UpdateCommission(l.ctx, walletInfo); err != nil {
-				return err
-			}
-		}
-		return nil
+		// admin's wallet adjustment runs in its own billing transaction
+		// below.
+		return store.User().Update(l.ctx, userInfo)
 	})
 	if err != nil {
 		l.Errorw("[UpdateUserBasicInfoLogic] Update User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update User Error")
+	}
+
+	err = l.deps.Store.InBillingTx(l.ctx, func(store repository.BillingStore) error {
+		// Financial adjustments must compare and write the latest values
+		// under the wallet lock, with their audit logs in the same
+		// transaction.
+		walletInfo, err := store.Wallet().FindOneForUpdate(l.ctx, req.UserId)
+		if err != nil {
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Wallet Error")
+		}
+		if walletInfo.Balance == req.Balance &&
+			walletInfo.GiftAmount == req.GiftAmount &&
+			walletInfo.Commission == req.Commission {
+			return nil
+		}
+		if walletInfo.Balance != req.Balance {
+			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: req.Balance - walletInfo.Balance, Balance: req.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
+			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
+				return err
+			}
+		}
+		if walletInfo.GiftAmount != req.GiftAmount {
+			changeType := log.GiftTypeReduce
+			if req.GiftAmount > walletInfo.GiftAmount {
+				changeType = log.GiftTypeIncrease
+			}
+			content, _ := (&log.Gift{Type: changeType, Amount: req.GiftAmount - walletInfo.GiftAmount, Balance: req.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
+			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
+				return err
+			}
+		}
+		if walletInfo.Commission != req.Commission {
+			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: req.Commission - walletInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
+			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
+				return err
+			}
+		}
+		walletInfo.Balance = req.Balance
+		walletInfo.GiftAmount = req.GiftAmount
+		walletInfo.Commission = req.Commission
+		if err := store.Wallet().UpdateBalanceFields(l.ctx, walletInfo); err != nil {
+			return err
+		}
+		return store.Wallet().UpdateCommission(l.ctx, walletInfo)
+	})
+	if err != nil {
+		l.Errorw("[UpdateUserBasicInfoLogic] Adjust User Wallet Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update User Error")
 	}
 
