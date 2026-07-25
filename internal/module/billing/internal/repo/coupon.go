@@ -1,15 +1,15 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 	"strconv"
 
 	"github.com/perfect-panel/server/internal/model/entity/coupon"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -18,30 +18,18 @@ var (
 	cacheCouponCodePrefix = "cache:coupon:code:"
 )
 
-// CouponRepo coupon 数据访问接口
-type CouponRepo interface {
-	Insert(ctx context.Context, data *coupon.Coupon) error
-	FindOne(ctx context.Context, id int64) (*coupon.Coupon, error)
-	FindOneByCode(ctx context.Context, code string) (*coupon.Coupon, error)
-	Update(ctx context.Context, data *coupon.Coupon) error
-	Delete(ctx context.Context, id int64) error
-	UpdateCount(ctx context.Context, code string) error
-	ReserveUsage(ctx context.Context, code string, now int64, tx ...*gorm.DB) (bool, error)
-	ReleaseUsage(ctx context.Context, code string, tx ...*gorm.DB) error
-	QueryCouponListByPage(ctx context.Context, page, size int, subscribe int64, search string) (total int64, list []*coupon.Coupon, err error)
-	BatchDelete(ctx context.Context, ids []int64) error
-}
-
-var _ CouponRepo = (*couponRepo)(nil)
+var _ repository.CouponRepo = (*couponRepo)(nil)
 
 type couponRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newCouponRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) CouponRepo {
+// NewCouponRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewCouponRepo(conn cache.CachedConn) repository.CouponRepo {
 	return &couponRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "coupon",
 	}
 }
@@ -131,7 +119,7 @@ func (m *couponRepo) Delete(ctx context.Context, id int64) error {
 
 // QueryCouponListByPage query coupon list by page
 func (m *couponRepo) QueryCouponListByPage(ctx context.Context, page, size int, subscribe int64, search string) (total int64, list []*coupon.Coupon, err error) {
-	page, size = NormalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err = m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		db := conn.Model(&coupon.Coupon{})
 		if subscribe != 0 {

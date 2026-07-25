@@ -1,15 +1,15 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/payment"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -18,28 +18,18 @@ var (
 	cachePaymentTokenPrefix = "cache:payment:token:"
 )
 
-// PaymentRepo payment 数据访问接口
-type PaymentRepo interface {
-	Insert(ctx context.Context, data *payment.Payment, tx ...*gorm.DB) error
-	FindOne(ctx context.Context, id int64) (*payment.Payment, error)
-	Update(ctx context.Context, data *payment.Payment, tx ...*gorm.DB) error
-	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
-	FindOneByPaymentToken(ctx context.Context, token string) (*payment.Payment, error)
-	FindAll(ctx context.Context) ([]*payment.Payment, error)
-	FindListByPage(ctx context.Context, page, size int, req *payment.Filter) (int64, []*payment.Payment, error)
-	FindAvailableMethods(ctx context.Context) ([]*payment.Payment, error)
-}
-
-var _ PaymentRepo = (*paymentRepo)(nil)
+var _ repository.PaymentRepo = (*paymentRepo)(nil)
 
 type paymentRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newPaymentRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) PaymentRepo {
+// NewPaymentRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewPaymentRepo(conn cache.CachedConn) repository.PaymentRepo {
 	return &paymentRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "Payment",
 	}
 }
@@ -139,7 +129,7 @@ func (m *paymentRepo) FindAvailableMethods(ctx context.Context) ([]*payment.Paym
 func (m *paymentRepo) FindListByPage(ctx context.Context, page, size int, req *payment.Filter) (int64, []*payment.Payment, error) {
 	var resp []*payment.Payment
 	var total int64
-	page, size = NormalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&payment.Payment{})
 		if req != nil {

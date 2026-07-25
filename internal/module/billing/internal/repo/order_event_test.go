@@ -1,9 +1,10 @@
-package repository
+package repo
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/perfect-panel/server/internal/repository"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestOrderRepoWritesDurableEventsWithStateTransitions(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	repo := newOrderRepo(db, redisClient)
+	repo := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn())
 	created := &order.Order{OrderNo: "v2-order-1", Status: 1}
 	if err := repo.Insert(context.Background(), created); err != nil {
 		t.Fatalf("insert order: %v", err)
@@ -89,7 +90,7 @@ func TestOrderEventRepoReplaysByOrderAndMarksPublished(t *testing.T) {
 			t.Fatalf("insert event: %v", err)
 		}
 	}
-	repo := newOrderEventRepo(db)
+	repo := NewOrderEventRepo(db)
 	events, err := repo.ListAfter(context.Background(), "order-a", 1, 100)
 	if err != nil {
 		t.Fatalf("list after: %v", err)
@@ -136,7 +137,7 @@ func TestOrderStatusTransitionRollsBackWhenOutboxWriteFails(t *testing.T) {
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	repo := newOrderRepo(db, redisClient)
+	repo := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn())
 	updated, err := repo.UpdateOrderStatusFrom(context.Background(), pending.OrderNo, 1, 2)
 	if err == nil || updated {
 		t.Fatalf("transition with missing event table = (%v, %v), want (false, error)", updated, err)
@@ -161,7 +162,7 @@ func TestOrderRepoUpdateRejectsStateMutationOutsideTransition(t *testing.T) {
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	repo := newOrderRepo(db, redisClient)
+	repo := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn())
 	pending := &order.Order{OrderNo: "guard-order", Status: 1}
 	if err := repo.Insert(context.Background(), pending); err != nil {
 		t.Fatalf("insert order: %v", err)
@@ -198,7 +199,7 @@ func TestOrderRepoUpdatePreservesIdempotencyAndGuestHashes(t *testing.T) {
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	repo := newOrderRepo(db, redisClient)
+	repo := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn())
 
 	// Two V1-style orders have SQL NULL idempotency columns.  Before the fix,
 	// Select("*") changed both to the same empty string and the second update

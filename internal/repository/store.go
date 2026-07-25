@@ -104,16 +104,6 @@ func LegacyBuilders(rds *redis.Client) Builders {
 	// per-transaction rebuilds.
 	nodeRetrier := newServerCacheInvalidationRetrier(rds)
 	return Builders{
-		Billing: func(c ModuleConn) BillingRepos {
-			return BillingRepos{
-				Orders:      newOrderRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				OrderEvents: newOrderEventRepo(c.DB),
-				Payments:    newPaymentRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				Coupons:     newCouponRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				Withdrawals: newUserBillingRepo(c.Conn()),
-				Wallets:     newUserBillingRepo(c.Conn()),
-			}
-		},
 		Subscription: func(c ModuleConn) SubscriptionRepos {
 			subs := newUserSubscriptionRepo(c.Conn())
 			return SubscriptionRepos{

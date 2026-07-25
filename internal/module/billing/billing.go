@@ -17,6 +17,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/internal/module/billing/internal/coupon"
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
+	"github.com/perfect-panel/server/internal/module/billing/internal/repo"
 	"github.com/perfect-panel/server/internal/module/billing/internal/userorder"
 	v2orch "github.com/perfect-panel/server/internal/module/billing/internal/v2"
 	"github.com/perfect-panel/server/internal/module/billing/internal/wallet"
@@ -210,6 +211,23 @@ type Deps struct {
 	ActivationQueue    ActivationTaskQueue
 	ExchangeRate       ExchangeRateCache
 	Portal             PortalConfig
+}
+
+// NewRepoBuilder exports the module-owned repository implementations for
+// store assembly (ADR-001 step-6 preparation).
+func NewRepoBuilder() repository.BillingBuilder {
+	return func(c repository.ModuleConn) repository.BillingRepos {
+		conn := c.Conn()
+		wallets := repo.NewWalletRepo(conn)
+		return repository.BillingRepos{
+			Orders:      repo.NewOrderRepo(conn),
+			OrderEvents: repo.NewOrderEventRepo(c.DB),
+			Payments:    repo.NewPaymentRepo(conn),
+			Coupons:     repo.NewCouponRepo(conn),
+			Withdrawals: wallets,
+			Wallets:     wallets,
+		}
+	}
 }
 
 func New(deps Deps) Service {

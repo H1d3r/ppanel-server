@@ -1,15 +1,15 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -21,46 +21,18 @@ var (
 	cacheOrderNoPrefix = "cache:order:no:"
 )
 
-// OrderRepo order 数据访问接口
-type OrderRepo interface {
-	Insert(ctx context.Context, data *order.Order, tx ...*gorm.DB) error
-	FindOne(ctx context.Context, id int64) (*order.Order, error)
-	FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error)
-	FindOneByIdempotencyKey(ctx context.Context, key string) (*order.Order, error)
-	FindOneByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error)
-	Update(ctx context.Context, data *order.Order, tx ...*gorm.DB) error
-	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
-	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8, tx ...*gorm.DB) (bool, error)
-	UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string, tx ...*gorm.DB) (bool, error)
-	SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string, tx ...*gorm.DB) (bool, error)
-	MarkOrderPaid(ctx context.Context, orderNo, tradeNo string, tx ...*gorm.DB) (bool, error)
-	CountPendingByPaymentID(ctx context.Context, paymentID int64) (int64, error)
-	QueryOrdersByStatusAfterID(ctx context.Context, status uint8, afterID int64, limit int) ([]*order.Order, error)
-	CountUserCouponUsage(ctx context.Context, userID int64, coupon string) (int64, error)
-	QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error)
-	FindOneDetails(ctx context.Context, id int64) (*order.Details, error)
-	FindOneDetailsByOrderNo(ctx context.Context, orderNo string) (*order.Details, error)
-	QueryMonthlyOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error)
-	QueryDateOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error)
-	QueryTotalOrders(ctx context.Context) (order.OrdersTotal, error)
-	QueryMonthlyUserCounts(ctx context.Context, date time.Time) (int64, int64, error)
-	QueryDateUserCounts(ctx context.Context, date time.Time) (int64, int64, error)
-	QueryTotalUserCounts(ctx context.Context) (int64, int64, error)
-	IsUserEligibleForNewOrder(ctx context.Context, userID int64) (bool, error)
-	QueryDailyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
-	QueryMonthlyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
-}
-
-var _ OrderRepo = (*orderRepo)(nil)
+var _ repository.OrderRepo = (*orderRepo)(nil)
 
 type orderRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newOrderRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) OrderRepo {
+// NewOrderRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewOrderRepo(conn cache.CachedConn) repository.OrderRepo {
 	return &orderRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "order",
 	}
 }
@@ -208,7 +180,7 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 func (m *orderRepo) QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error) {
 	var list []*order.Details
 	var total int64
-	page, size = NormalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&order.Order{})
 		conn = applyOrderListFilters(conn, status, user, subscribe, search)

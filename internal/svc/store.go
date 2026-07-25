@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/support"
 	"github.com/perfect-panel/server/internal/repository"
@@ -16,5 +17,6 @@ func NewStore(db *gorm.DB, rds *redis.Client) *repository.GormStore {
 	builders := repository.LegacyBuilders(rds)
 	builders.Support = support.NewRepoBuilder()
 	builders.Platform = platform.NewRepoBuilder()
+	builders.Billing = billing.NewRepoBuilder()
 	return repository.NewGormStoreWithBuilders(db, rds, builders)
 }

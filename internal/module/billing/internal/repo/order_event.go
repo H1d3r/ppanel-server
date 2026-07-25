@@ -1,8 +1,9 @@
-package repository
+package repo
 
 import (
 	"context"
 	"encoding/json"
+	"github.com/perfect-panel/server/internal/repository"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
@@ -16,18 +17,6 @@ const (
 	orderEventClosed      = "order.closed"
 	orderEventStateChange = "order.state_changed"
 )
-
-// OrderEventRepo is deliberately separate from OrderRepo: order mutations
-// write outbox rows atomically, while delivery workers and SSE handlers only
-// need to read and mark these durable records.
-type OrderEventRepo interface {
-	FindOne(ctx context.Context, id int64) (*order.Event, error)
-	ListAfter(ctx context.Context, orderNo string, afterID int64, limit int) ([]*order.Event, error)
-	EarliestID(ctx context.Context, orderNo string) (int64, error)
-	ListUnpublished(ctx context.Context, limit int) ([]*order.Event, error)
-	MarkPublished(ctx context.Context, id int64, publishedAt time.Time) (bool, error)
-	DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error)
-}
 
 type orderEventRepo struct {
 	db *gorm.DB
@@ -44,7 +33,8 @@ func withOrderEventTransaction(conn *gorm.DB, fn func(*gorm.DB) error) error {
 	return conn.Transaction(fn)
 }
 
-func newOrderEventRepo(db *gorm.DB) OrderEventRepo {
+// NewOrderEventRepo builds the module-owned implementation.
+func NewOrderEventRepo(db *gorm.DB) repository.OrderEventRepo {
 	return &orderEventRepo{db: db}
 }
 

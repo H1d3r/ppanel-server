@@ -1,20 +1,38 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
+	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/cache"
 
 	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
+// WalletRepo is the billing-owned wallet/withdrawal implementation.
+type WalletRepo struct {
+	cache.CachedConn
+}
+
+var (
+	_ repository.WalletRepo         = (*WalletRepo)(nil)
+	_ repository.UserWithdrawalRepo = (*WalletRepo)(nil)
+)
+
+// NewWalletRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewWalletRepo(conn cache.CachedConn) *WalletRepo {
+	return &WalletRepo{CachedConn: conn}
+}
+
 // Billing-domain methods of the user repository family: the wallet table and
 // withdrawal records (ADR-001 step 5).
 
 // FindOneForUpdate locks the billing-owned wallet row, creating it on first
 // use so every account has a wallet once money moves.
-func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
+func (m *WalletRepo) FindOneForUpdate(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
 	var result *walletEntity.Wallet
 	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
 		var w walletEntity.Wallet
@@ -39,7 +57,7 @@ func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, userId int64) (*
 
 // FindWallet reads the wallet row without locking. A nil result (no error)
 // means the account has no wallet row yet; callers treat it as zero values.
-func (m *userBillingRepo) FindWallet(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
+func (m *WalletRepo) FindWallet(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
 	var w *walletEntity.Wallet
 	err := m.QueryNoCacheCtx(ctx, &w, func(conn *gorm.DB, v interface{}) error {
 		var row walletEntity.Wallet
@@ -61,7 +79,7 @@ func (m *userBillingRepo) FindWallet(ctx context.Context, userId int64) (*wallet
 
 // FindWalletsByUserIds batch-reads wallet rows for display lists; missing
 // rows are absent from the map (treat as zero values).
-func (m *userBillingRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*walletEntity.Wallet, error) {
+func (m *WalletRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*walletEntity.Wallet, error) {
 	result := make(map[int64]*walletEntity.Wallet, len(userIds))
 	if len(userIds) == 0 {
 		return result, nil
@@ -81,7 +99,7 @@ func (m *userBillingRepo) FindWalletsByUserIds(ctx context.Context, userIds []in
 
 // UpdateBalanceFields persists the balance and gift columns of a wallet row
 // previously locked by FindOneForUpdate.
-func (m *userBillingRepo) UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
+func (m *WalletRepo) UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]
@@ -97,7 +115,7 @@ func (m *userBillingRepo) UpdateBalanceFields(ctx context.Context, data *walletE
 
 // UpdateCommission persists only the commission column: balance movements
 // and commission credits may race on different flows.
-func (m *userBillingRepo) UpdateCommission(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
+func (m *WalletRepo) UpdateCommission(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]
@@ -110,7 +128,7 @@ func (m *userBillingRepo) UpdateCommission(ctx context.Context, data *walletEnti
 
 // --- withdrawal ---
 
-func (m *userBillingRepo) InsertWithdrawal(ctx context.Context, data *walletEntity.Withdrawal, tx ...*gorm.DB) error {
+func (m *WalletRepo) InsertWithdrawal(ctx context.Context, data *walletEntity.Withdrawal, tx ...*gorm.DB) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]

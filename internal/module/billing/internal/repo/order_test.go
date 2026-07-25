@@ -1,8 +1,9 @@
-package repository
+package repo
 
 import (
 	"bytes"
 	"context"
+	"github.com/perfect-panel/server/internal/repository"
 	"log"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func TestOrderRepoMarkOrderPaidUsesPendingCondition(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	updated, err := newOrderRepo(db, redisClient).MarkOrderPaid(context.Background(), "order-123", "trade-456")
+	updated, err := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn()).MarkOrderPaid(context.Background(), "order-123", "trade-456")
 	if err != nil {
 		t.Fatalf("MarkOrderPaid: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestOrderRepoFindOneByOrderNoForUpdateUsesRowLock(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	if _, err := newOrderRepo(db, redisClient).FindOneByOrderNoForUpdate(context.Background(), "order-123"); err != nil {
+	if _, err := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn()).FindOneByOrderNoForUpdate(context.Background(), "order-123"); err != nil {
 		t.Fatalf("FindOneByOrderNoForUpdate: %v", err)
 	}
 	sql := logs.String()
@@ -96,7 +97,7 @@ func TestOrderRepoUpdateOrderStatusFromUsesPendingCondition(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	updated, err := newOrderRepo(db, redisClient).UpdateOrderStatusFrom(context.Background(), "order-123", 1, 2)
+	updated, err := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn()).UpdateOrderStatusFrom(context.Background(), "order-123", 1, 2)
 	if err != nil {
 		t.Fatalf("UpdateOrderStatusFrom: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestOrderRepoUpdatePaymentExpectationOnlyInitializesSnapshot(t *testing.T) 
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	if _, err := newOrderRepo(db, redisClient).UpdatePaymentExpectation(context.Background(), "order-123", 1000, "CNY"); err != nil {
+	if _, err := NewOrderRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn()).UpdatePaymentExpectation(context.Background(), "order-123", 1000, "CNY"); err != nil {
 		t.Fatalf("UpdatePaymentExpectation: %v", err)
 	}
 	sql := logs.String()
