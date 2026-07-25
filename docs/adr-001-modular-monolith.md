@@ -178,8 +178,13 @@ internal/module/<name>/
    的激活 saga、`queue/logic/subscription` 的到期检查等改为调用模块门面（saga 归属
    billing，作为订单流程属主）。
 
-过渡期约定：模块实现**暂时允许** import `internal/repository`（包装存量 repo 起步），
-目标在第 6 步前置工作中归零；不允许 import `internal/svc` 与 `internal/logic`（测试强制）。
+**仓储切割已完成（2026-07-25，伪多进程形态）**：`internal/repository` 收缩为纯契约与
+组装包——repo 接口、领域视图、作用域事务、以及由六个模块导出的 builder 拼装出的
+`GormStore`（共享连接池）。各模块的 gorm 实现位于 `internal/module/<m>/internal/repo`，
+经门面 `NewRepoBuilder` 导出；identity 的跨域缓存级联经 `SubscriptionCacheBridge`
+显式注入。实体包按表归属拆分（`entity/usersub`、`entity/wallet`）。模块 import
+`internal/repository` 自此为"依赖共享契约"，不再是过渡债务；拆库时每模块把自己的
+builder 指向独立连接即可。不允许 import `internal/svc` 与 `internal/logic`（测试强制）。
 
 **svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩至 48，剩余条目全部为
 组装根/传输层性质——`cmd`、`initialize`、`internal`（server）、`internal/handler/**`
