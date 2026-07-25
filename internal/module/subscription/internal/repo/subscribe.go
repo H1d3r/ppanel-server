@@ -1,9 +1,10 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 	"strings"
 
 	"github.com/perfect-panel/server/internal/model/entity/node"
@@ -12,7 +13,6 @@ import (
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/perfect-panel/server/pkg/tool"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -21,36 +21,18 @@ var (
 	cacheSubscribeIdPrefix = "cache:subscribe:id:"
 )
 
-// SubscribeRepo subscribe 数据访问接口
-type SubscribeRepo interface {
-	Insert(ctx context.Context, data *subscribe.Subscribe, tx ...*gorm.DB) error
-	FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error)
-	Update(ctx context.Context, data *subscribe.Subscribe, tx ...*gorm.DB) error
-	ReserveInventory(ctx context.Context, id int64, tx ...*gorm.DB) (bool, error)
-	RestoreInventory(ctx context.Context, id int64, tx ...*gorm.DB) error
-	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
-	FilterList(ctx context.Context, params *subscribe.FilterParams) (int64, []*subscribe.Subscribe, error)
-	ClearCache(ctx context.Context, id ...int64) error
-	QuerySubscribeMinSortByIds(ctx context.Context, ids []int64) (int64, error)
-	QueryResetCycleSubscribeIds(ctx context.Context, resetCycle int) ([]int64, error)
-	UpdateSort(ctx context.Context, data []*subscribe.Subscribe) error
-	QueryGroupList(ctx context.Context) (int64, []*subscribe.Group, error)
-	CreateGroup(ctx context.Context, data *subscribe.Group) error
-	UpdateGroup(ctx context.Context, data *subscribe.Group) error
-	DeleteGroup(ctx context.Context, id int64) error
-	BatchDeleteGroup(ctx context.Context, ids []int64) error
-}
-
-var _ SubscribeRepo = (*subscribeRepo)(nil)
+var _ repository.SubscribeRepo = (*subscribeRepo)(nil)
 
 type subscribeRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newSubscribeRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) SubscribeRepo {
+// NewSubscribeRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewSubscribeRepo(conn cache.CachedConn) repository.SubscribeRepo {
 	return &subscribeRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "subscribe",
 	}
 }

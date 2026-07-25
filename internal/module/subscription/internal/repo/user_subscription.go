@@ -1,8 +1,10 @@
-package repository
+package repo
 
 import (
 	"context"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/cache"
 	"sort"
 	"strings"
 	"time"
@@ -13,17 +15,48 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// Subscription-domain methods of the user repository: user_subscribe rows,
-// traffic accounting, expiry/reset sweeps (ADR-001 step 5).
+// Cache key prefixes shared with the usersub entity's key derivation.
+const (
+	cacheUserSubscribeTokenPrefix = "cache:user:subscribe:token:"
+	cacheUserSubscribeUserPrefix  = "cache:user:subscribe:user:v3:"
+	cacheUserSubscribeIdPrefix    = "cache:user:subscribe:id:"
+)
+
+func userSubscribeColumn(db *gorm.DB, column string) string {
+	table := (&usersub.Subscribe{}).TableName()
+	if db != nil && db.Statement != nil {
+		return db.Statement.Quote(clause.Column{Table: table, Name: column})
+	}
+	return table + "." + column
+}
+
+// UserSubscriptionRepo is the subscription-owned implementation of the
+// user-subscription and traffic contracts (plus the identity bundle's cache
+// bridge): user_subscribe rows, traffic accounting, expiry/reset sweeps.
+type UserSubscriptionRepo struct {
+	cache.CachedConn
+}
+
+var (
+	_ repository.UserSubscriptionRepo    = (*UserSubscriptionRepo)(nil)
+	_ repository.SubscriptionTrafficRepo = (*UserSubscriptionRepo)(nil)
+	_ repository.SubscriptionCacheBridge = (*UserSubscriptionRepo)(nil)
+)
+
+// NewUserSubscriptionRepo builds the module-owned implementation over the
+// shared cached connection.
+func NewUserSubscriptionRepo(conn cache.CachedConn) *UserSubscriptionRepo {
+	return &UserSubscriptionRepo{CachedConn: conn}
+}
 
 // --- subscribe ---
 
-func (m *userSubscriptionRepo) UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error {
+func (m *UserSubscriptionRepo) UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error {
 	return m.ClearSubscribeCache(ctx, data)
 }
 
 // QueryActiveSubscriptions returns the number of active subscriptions.
-func (m *userSubscriptionRepo) QueryActiveSubscriptions(ctx context.Context, subscribeId ...int64) (map[int64]int64, error) {
+func (m *UserSubscriptionRepo) QueryActiveSubscriptions(ctx context.Context, subscribeId ...int64) (map[int64]int64, error) {
 	type SubscriptionCount struct {
 		SubscribeId int64
 		Total       int64
@@ -50,7 +83,7 @@ func (m *userSubscriptionRepo) QueryActiveSubscriptions(ctx context.Context, sub
 	return resultMap, nil
 }
 
-func (m *userSubscriptionRepo) FindOneSubscribeByOrderId(ctx context.Context, orderId int64) (*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindOneSubscribeByOrderId(ctx context.Context, orderId int64) (*usersub.Subscribe, error) {
 	var data usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).Where("order_id = ?", orderId).First(&data).Error
@@ -58,7 +91,7 @@ func (m *userSubscriptionRepo) FindOneSubscribeByOrderId(ctx context.Context, or
 	return &data, err
 }
 
-func (m *userSubscriptionRepo) FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error) {
 	var data usersub.Subscribe
 	key := fmt.Sprintf("%s%d", cacheUserSubscribeIdPrefix, id)
 	err := m.QueryCtx(ctx, &data, key, func(conn *gorm.DB, v interface{}) error {
@@ -67,7 +100,7 @@ func (m *userSubscriptionRepo) FindOneSubscribe(ctx context.Context, id int64) (
 	return &data, err
 }
 
-func (m *userSubscriptionRepo) FindOneSubscribeForUpdate(ctx context.Context, id int64) (*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindOneSubscribeForUpdate(ctx context.Context, id int64) (*usersub.Subscribe, error) {
 	var data usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -78,7 +111,7 @@ func (m *userSubscriptionRepo) FindOneSubscribeForUpdate(ctx context.Context, id
 	return &data, err
 }
 
-func (m *userSubscriptionRepo) FindUsersSubscribeBySubscribeId(ctx context.Context, subscribeId int64) ([]*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindUsersSubscribeBySubscribeId(ctx context.Context, subscribeId int64) ([]*usersub.Subscribe, error) {
 	var data []*usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).Where("subscribe_id = ? AND status IN ?", subscribeId, []int64{1, 0}).Find(v).Error
@@ -86,7 +119,7 @@ func (m *userSubscriptionRepo) FindUsersSubscribeBySubscribeId(ctx context.Conte
 	return data, err
 }
 
-func (m *userSubscriptionRepo) FindUserSubscribesByStatus(ctx context.Context, status ...int64) ([]*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindUserSubscribesByStatus(ctx context.Context, status ...int64) ([]*usersub.Subscribe, error) {
 	var data []*usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&usersub.Subscribe{})
@@ -98,7 +131,7 @@ func (m *userSubscriptionRepo) FindUserSubscribesByStatus(ctx context.Context, s
 	return data, err
 }
 
-func (m *userSubscriptionRepo) ActivatePendingSubscribesBySubscribeId(ctx context.Context, subscribeId int64) error {
+func (m *UserSubscriptionRepo) ActivatePendingSubscribesBySubscribeId(ctx context.Context, subscribeId int64) error {
 	var pending []*usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &pending, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).Where("subscribe_id = ? AND status = ?", subscribeId, 0).Find(v).Error
@@ -117,7 +150,7 @@ func (m *userSubscriptionRepo) ActivatePendingSubscribesBySubscribeId(ctx contex
 	}, cacheKeys...)
 }
 
-func (m *userSubscriptionRepo) CountUserSubscribesBySubscribeIdAndStatus(ctx context.Context, subscribeId int64, status ...int64) (int64, error) {
+func (m *UserSubscriptionRepo) CountUserSubscribesBySubscribeIdAndStatus(ctx context.Context, subscribeId int64, status ...int64) (int64, error) {
 	var total int64
 	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
 		conn = conn.Model(&usersub.Subscribe{}).Where("subscribe_id = ?", subscribeId)
@@ -129,7 +162,7 @@ func (m *userSubscriptionRepo) CountUserSubscribesBySubscribeIdAndStatus(ctx con
 	return total, err
 }
 
-func (m *userSubscriptionRepo) CountQuotaConsumingSubscriptions(ctx context.Context, userId, subscribeId int64) (int64, error) {
+func (m *UserSubscriptionRepo) CountQuotaConsumingSubscriptions(ctx context.Context, userId, subscribeId int64) (int64, error) {
 	var total int64
 	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).
@@ -139,7 +172,7 @@ func (m *userSubscriptionRepo) CountQuotaConsumingSubscriptions(ctx context.Cont
 	return total, err
 }
 
-func (m *userSubscriptionRepo) HasBlockingSubscription(ctx context.Context, userId int64) (bool, error) {
+func (m *UserSubscriptionRepo) HasBlockingSubscription(ctx context.Context, userId int64) (bool, error) {
 	var total int64
 	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).
@@ -150,7 +183,7 @@ func (m *userSubscriptionRepo) HasBlockingSubscription(ctx context.Context, user
 }
 
 // QueryUserSubscribe returns the complete cached subscription history for a user.
-func (m *userSubscriptionRepo) QueryUserSubscribe(ctx context.Context, userId int64, status ...int64) ([]*usersub.SubscribeDetails, error) {
+func (m *UserSubscriptionRepo) QueryUserSubscribe(ctx context.Context, userId int64, status ...int64) ([]*usersub.SubscribeDetails, error) {
 	var all []*usersub.SubscribeDetails
 	key := fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, userId)
 	err := m.QueryCtx(ctx, &all, key, func(conn *gorm.DB, v interface{}) error {
@@ -191,7 +224,7 @@ func filterUserSubscribeByStatus(list []*usersub.SubscribeDetails, status []int6
 }
 
 // FindOneUserSubscribe  finds a subscribeDetails by id.
-func (m *userSubscriptionRepo) FindOneUserSubscribe(ctx context.Context, id int64) (subscribeDetails *usersub.SubscribeDetails, err error) {
+func (m *UserSubscriptionRepo) FindOneUserSubscribe(ctx context.Context, id int64) (subscribeDetails *usersub.SubscribeDetails, err error) {
 	//TODO cache
 	//key := fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, userId)
 	subscribeDetails = new(usersub.SubscribeDetails)
@@ -201,7 +234,7 @@ func (m *userSubscriptionRepo) FindOneUserSubscribe(ctx context.Context, id int6
 	return
 }
 
-func (m *userSubscriptionRepo) UpdateUserSubscribeWithTraffic(ctx context.Context, id, download, upload int64, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) UpdateUserSubscribeWithTraffic(ctx context.Context, id, download, upload int64, tx ...*gorm.DB) error {
 	sub, err := m.FindOneSubscribe(ctx, id)
 	if err != nil {
 		return err
@@ -225,7 +258,7 @@ func (m *userSubscriptionRepo) UpdateUserSubscribeWithTraffic(ctx context.Contex
 	})
 }
 
-func (m *userSubscriptionRepo) BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta, tx ...*gorm.DB) error {
 	deltas = mergeSubscribeTrafficDeltas(deltas)
 	if len(deltas) == 0 {
 		return nil
@@ -320,7 +353,7 @@ func userSubscribeTrafficZeroExpr(db *gorm.DB) string {
 }
 
 // FindOneSubscribeByToken  finds a record by token.
-func (m *userSubscriptionRepo) FindOneSubscribeByToken(ctx context.Context, token string) (*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindOneSubscribeByToken(ctx context.Context, token string) (*usersub.Subscribe, error) {
 	var data usersub.Subscribe
 	key := fmt.Sprintf("%s%s", cacheUserSubscribeTokenPrefix, token)
 	err := m.QueryCtx(ctx, &data, key, func(conn *gorm.DB, v interface{}) error {
@@ -329,7 +362,7 @@ func (m *userSubscriptionRepo) FindOneSubscribeByToken(ctx context.Context, toke
 	return &data, err
 }
 
-func (m *userSubscriptionRepo) FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*usersub.Subscribe, error) {
 	var data usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -341,7 +374,7 @@ func (m *userSubscriptionRepo) FindOneSubscribeByTokenForUpdate(ctx context.Cont
 }
 
 // UpdateSubscribe updates a record.
-func (m *userSubscriptionRepo) UpdateSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) UpdateSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error {
 	old, err := m.FindOneSubscribe(ctx, data.Id)
 	if err != nil {
 		return err
@@ -363,7 +396,7 @@ func (m *userSubscriptionRepo) UpdateSubscribe(ctx context.Context, data *usersu
 }
 
 // DeleteSubscribe deletes a record.
-func (m *userSubscriptionRepo) DeleteSubscribe(ctx context.Context, token string, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) DeleteSubscribe(ctx context.Context, token string, tx ...*gorm.DB) error {
 	data, err := m.FindOneSubscribeByToken(ctx, token)
 	if err != nil {
 		return err
@@ -385,7 +418,7 @@ func (m *userSubscriptionRepo) DeleteSubscribe(ctx context.Context, token string
 }
 
 // InsertSubscribe insert Subscribe into the database.
-func (m *userSubscriptionRepo) InsertSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) InsertSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error {
 	// 使用 defer 确保插入后清理相关缓存
 	defer func() {
 		if clearErr := m.ClearSubscribeCache(ctx, data); clearErr != nil {
@@ -401,7 +434,7 @@ func (m *userSubscriptionRepo) InsertSubscribe(ctx context.Context, data *usersu
 	})
 }
 
-func (m *userSubscriptionRepo) DeleteSubscribeById(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) DeleteSubscribeById(ctx context.Context, id int64, tx ...*gorm.DB) error {
 	data, err := m.FindOneSubscribe(ctx, id)
 	if err != nil {
 		return err
@@ -422,7 +455,7 @@ func (m *userSubscriptionRepo) DeleteSubscribeById(ctx context.Context, id int64
 	})
 }
 
-func (m *userSubscriptionRepo) ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error {
+func (m *UserSubscriptionRepo) ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -437,7 +470,7 @@ func (m *userSubscriptionRepo) ClearSubscribeCache(ctx context.Context, data ...
 
 // --- subscription checks (expired / traffic exceeded) ---
 
-func (m *userSubscriptionRepo) FindTrafficExceededSubscribes(ctx context.Context) ([]*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindTrafficExceededSubscribes(ctx context.Context) ([]*usersub.Subscribe, error) {
 	var list []*usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).
@@ -447,7 +480,7 @@ func (m *userSubscriptionRepo) FindTrafficExceededSubscribes(ctx context.Context
 	return list, err
 }
 
-func (m *userSubscriptionRepo) FindExpiredSubscribes(ctx context.Context, now time.Time) ([]*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindExpiredSubscribes(ctx context.Context, now time.Time) ([]*usersub.Subscribe, error) {
 	var list []*usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&usersub.Subscribe{}).
@@ -457,7 +490,7 @@ func (m *userSubscriptionRepo) FindExpiredSubscribes(ctx context.Context, now ti
 	return list, err
 }
 
-func (m *userSubscriptionRepo) MarkSubscribesFinished(ctx context.Context, ids []int64, status uint8, finishedAt time.Time, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) MarkSubscribesFinished(ctx context.Context, ids []int64, status uint8, finishedAt time.Time, tx ...*gorm.DB) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -474,7 +507,7 @@ func (m *userSubscriptionRepo) MarkSubscribesFinished(ctx context.Context, ids [
 
 // --- reset traffic ---
 
-func (m *userSubscriptionRepo) QueryMonthlyResetSubscribeIds(ctx context.Context, subscribeIds []int64, now time.Time) ([]int64, error) {
+func (m *UserSubscriptionRepo) QueryMonthlyResetSubscribeIds(ctx context.Context, subscribeIds []int64, now time.Time) ([]int64, error) {
 	var ids []int64
 	if len(subscribeIds) == 0 {
 		return ids, nil
@@ -485,7 +518,7 @@ func (m *userSubscriptionRepo) QueryMonthlyResetSubscribeIds(ctx context.Context
 	return ids, err
 }
 
-func (m *userSubscriptionRepo) QueryFirstResetSubscribeIds(ctx context.Context, subscribeIds []int64, now time.Time) ([]int64, error) {
+func (m *UserSubscriptionRepo) QueryFirstResetSubscribeIds(ctx context.Context, subscribeIds []int64, now time.Time) ([]int64, error) {
 	var ids []int64
 	if len(subscribeIds) == 0 {
 		return ids, nil
@@ -496,7 +529,7 @@ func (m *userSubscriptionRepo) QueryFirstResetSubscribeIds(ctx context.Context, 
 	return ids, err
 }
 
-func (m *userSubscriptionRepo) QueryYearlyResetSubscribeIds(ctx context.Context, subscribeIds []int64, now time.Time) ([]int64, error) {
+func (m *UserSubscriptionRepo) QueryYearlyResetSubscribeIds(ctx context.Context, subscribeIds []int64, now time.Time) ([]int64, error) {
 	var ids []int64
 	if len(subscribeIds) == 0 {
 		return ids, nil
@@ -507,7 +540,7 @@ func (m *userSubscriptionRepo) QueryYearlyResetSubscribeIds(ctx context.Context,
 	return ids, err
 }
 
-func (m *userSubscriptionRepo) ResetSubscribeTrafficByIds(ctx context.Context, ids []int64, tx ...*gorm.DB) error {
+func (m *UserSubscriptionRepo) ResetSubscribeTrafficByIds(ctx context.Context, ids []int64, tx ...*gorm.DB) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -602,7 +635,7 @@ func subscribeFilterQuery(conn *gorm.DB, filter *usersub.SubscribeFilter) *gorm.
 	return query
 }
 
-func (m *userSubscriptionRepo) QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error) {
+func (m *UserSubscriptionRepo) QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error) {
 	var ids []int64
 	err := m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
 		return subscribeFilterQuery(conn, filter).Pluck("id", v).Error
@@ -610,7 +643,7 @@ func (m *userSubscriptionRepo) QuerySubscribeIdsByFilter(ctx context.Context, fi
 	return ids, err
 }
 
-func (m *userSubscriptionRepo) CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error) {
+func (m *UserSubscriptionRepo) CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error) {
 	var total int64
 	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
 		return subscribeFilterQuery(conn, filter).Count(&total).Error
@@ -618,7 +651,7 @@ func (m *userSubscriptionRepo) CountSubscribesByFilter(ctx context.Context, filt
 	return total, err
 }
 
-func (m *userSubscriptionRepo) FindSubscribesByIds(ctx context.Context, ids []int64) ([]*usersub.Subscribe, error) {
+func (m *UserSubscriptionRepo) FindSubscribesByIds(ctx context.Context, ids []int64) ([]*usersub.Subscribe, error) {
 	var subscribes []*usersub.Subscribe
 	if len(ids) == 0 {
 		return subscribes, nil
@@ -629,7 +662,7 @@ func (m *userSubscriptionRepo) FindSubscribesByIds(ctx context.Context, ids []in
 	return subscribes, err
 }
 
-func (m *userSubscriptionRepo) FindOneSubscribeDetailsById(ctx context.Context, id int64) (*usersub.SubscribeDetails, error) {
+func (m *UserSubscriptionRepo) FindOneSubscribeDetailsById(ctx context.Context, id int64) (*usersub.SubscribeDetails, error) {
 	var data usersub.SubscribeDetails
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
 		// Subscribe is a same-domain association; the identity-domain User

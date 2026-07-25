@@ -104,15 +104,6 @@ func LegacyBuilders(rds *redis.Client) Builders {
 	// per-transaction rebuilds.
 	nodeRetrier := newServerCacheInvalidationRetrier(rds)
 	return Builders{
-		Subscription: func(c ModuleConn) SubscriptionRepos {
-			subs := newUserSubscriptionRepo(c.Conn())
-			return SubscriptionRepos{
-				Plans:       newSubscribeRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-				UserSubs:    subs,
-				Traffic:     subs,
-				CacheBridge: subs,
-			}
-		},
 		Identity: func(c ModuleConn, subs SubscriptionCacheBridge) IdentityRepos {
 			u := newUserRepo(c.Conn(), subs)
 			return IdentityRepos{

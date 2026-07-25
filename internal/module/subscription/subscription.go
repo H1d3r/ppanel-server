@@ -12,6 +12,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/fulfillment"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/quotatask"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/repo"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/sweep"
@@ -137,6 +138,21 @@ type Deps struct {
 	// email lookup and the owner notification channel.
 	UserAuths       sweep.OwnerEmailReader
 	LifecycleNotify sweep.Notifier
+}
+
+// NewRepoBuilder exports the module-owned repository implementations for
+// store assembly (ADR-001 step-6 preparation).
+func NewRepoBuilder() repository.SubscriptionBuilder {
+	return func(c repository.ModuleConn) repository.SubscriptionRepos {
+		conn := c.Conn()
+		subs := repo.NewUserSubscriptionRepo(conn)
+		return repository.SubscriptionRepos{
+			Plans:       repo.NewSubscribeRepo(conn),
+			UserSubs:    subs,
+			Traffic:     subs,
+			CacheBridge: subs,
+		}
+	}
 }
 
 func New(deps Deps) Service {

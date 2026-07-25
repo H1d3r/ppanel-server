@@ -263,12 +263,16 @@ func authMethodsColumn(db *gorm.DB, column string) string {
 	return userQuoteColumn(db, (&user.AuthMethods{}).TableName(), column)
 }
 
-func userSubscribeTableName(db *gorm.DB) string {
-	return userQuoteTable(db, (&usersub.Subscribe{}).TableName())
-}
-
+// userSubscribeColumn quotes a user_subscribe column: the email-recipient
+// scope filter still queries the subscription table from the identity repo
+// (two-phase read, ADR-001 step 5); it moves behind a subscription port when
+// the identity implementation joins its module.
 func userSubscribeColumn(db *gorm.DB, column string) string {
 	return userQuoteColumn(db, (&usersub.Subscribe{}).TableName(), column)
+}
+
+func userSubscribeTableName(db *gorm.DB) string {
+	return userQuoteTable(db, (&usersub.Subscribe{}).TableName())
 }
 
 func userQuoteTable(db *gorm.DB, table string) string {

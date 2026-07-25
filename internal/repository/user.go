@@ -146,8 +146,6 @@ var _ UserRepo = (*userRepo)(nil)
 var _ UserAuthRepo = (*userRepo)(nil)
 var _ UserDeviceRepo = (*userRepo)(nil)
 var _ UserCacheRepo = (*userRepo)(nil)
-var _ UserSubscriptionRepo = (*userSubscriptionRepo)(nil)
-var _ SubscriptionTrafficRepo = (*userSubscriptionRepo)(nil)
 
 type userRepo struct {
 	cache.CachedConn
@@ -158,20 +156,12 @@ type userRepo struct {
 	subs SubscriptionCacheBridge
 }
 
-type userSubscriptionRepo struct {
-	cache.CachedConn
-}
-
 func newUserRepo(conn cache.CachedConn, subs SubscriptionCacheBridge) *userRepo {
 	return &userRepo{
 		CachedConn: conn,
 		table:      "user",
 		subs:       subs,
 	}
-}
-
-func newUserSubscriptionRepo(conn cache.CachedConn) *userSubscriptionRepo {
-	return &userSubscriptionRepo{CachedConn: conn}
 }
 
 // --- internal helpers ---

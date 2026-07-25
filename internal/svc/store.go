@@ -3,6 +3,7 @@ package svc
 import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/platform"
+	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -18,5 +19,6 @@ func NewStore(db *gorm.DB, rds *redis.Client) *repository.GormStore {
 	builders.Support = support.NewRepoBuilder()
 	builders.Platform = platform.NewRepoBuilder()
 	builders.Billing = billing.NewRepoBuilder()
+	builders.Subscription = subscription.NewRepoBuilder()
 	return repository.NewGormStoreWithBuilders(db, rds, builders)
 }
