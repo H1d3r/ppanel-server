@@ -13,7 +13,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/subscribe"
-	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -56,7 +55,6 @@ type Outcome struct {
 // transaction (entities stay inside the module).
 type outcomeParts struct {
 	order      *order.Order
-	user       *user.User
 	subscribe  *subscribe.Subscribe
 	userSub    *usersub.Subscribe
 	notifyType string
@@ -67,9 +65,8 @@ type outcomeParts struct {
 type Deps struct {
 	// Orders is the billing-domain read port resolving the paid order.
 	Orders repository.OrderRepo
-	// Store carries the fulfillment transaction. It stays on the generic
-	// transaction deliberately: the user row lock inside serialises
-	// per-user quota checks across domains (ADR-001 step 5 note).
+	// Store carries the subscription-scoped fulfillment transaction; the
+	// per-user quota serialization uses the domain's own serial lock.
 	Store    repository.Store
 	UserSubs repository.UserSubscriptionRepo
 	Plans    repository.SubscribeRepo
@@ -105,7 +102,7 @@ func (s *Service) FulfillPaidOrder(ctx context.Context, orderNo string) (*Outcom
 	if mark != nil {
 		parts, err = s.loadOutcome(ctx, orderInfo)
 	} else {
-		err = s.deps.Store.InTx(ctx, func(store repository.Store) error {
+		err = s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 			var txErr error
 			parts, txErr = s.processOrderByTypeInTx(ctx, store, orderInfo)
 			if txErr != nil {
@@ -183,7 +180,7 @@ func (s *Service) afterCommit(ctx context.Context, parts *outcomeParts) {
 	}
 }
 
-func (s *Service) processOrderByTypeInTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*outcomeParts, error) {
+func (s *Service) processOrderByTypeInTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*outcomeParts, error) {
 	switch orderInfo.Type {
 	case OrderTypeSubscribe:
 		return s.activateNewPurchaseTx(ctx, store, orderInfo)
@@ -196,13 +193,12 @@ func (s *Service) processOrderByTypeInTx(ctx context.Context, store repository.S
 	}
 }
 
-func (s *Service) activateNewPurchaseTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*outcomeParts, error) {
+func (s *Service) activateNewPurchaseTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*outcomeParts, error) {
 	// Guest accounts are created by ensureGuestAccount before this stage, so
-	// UserId is always set here. The user row lock is a transitional
-	// serialisation point for per-user quota checks; the subscription module
-	// takes over that concern once it owns its data (ADR-001 step 5).
-	userInfo, err := store.User().FindOneForUpdate(ctx, orderInfo.UserId)
-	if err != nil {
+	// UserId is always set here. The domain's serial lock serialises
+	// per-user quota checks and subscription creation (it replaced the
+	// cross-domain user-row lock).
+	if err := store.UserSubscription().LockUserSerial(ctx, orderInfo.UserId); err != nil {
 		return nil, err
 	}
 
@@ -214,10 +210,10 @@ func (s *Service) activateNewPurchaseTx(ctx context.Context, store repository.St
 	if err != nil {
 		return nil, err
 	}
-	return &outcomeParts{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: NotifyPurchase}, nil
+	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyPurchase}, nil
 }
 
-func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository.Store, orderInfo *order.Order, sub *subscribe.Subscribe) (*usersub.Subscribe, error) {
+func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order, sub *subscribe.Subscribe) (*usersub.Subscribe, error) {
 	if s.deps.SingleModel() {
 		hasBlockingSubscription, err := store.UserSubscription().HasBlockingSubscription(ctx, orderInfo.UserId)
 		if err != nil {
@@ -254,11 +250,7 @@ func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository
 	return userSub, nil
 }
 
-func (s *Service) activateRenewalTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*outcomeParts, error) {
-	userInfo, err := store.User().FindOne(ctx, orderInfo.UserId)
-	if err != nil {
-		return nil, err
-	}
+func (s *Service) activateRenewalTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*outcomeParts, error) {
 	userSub, err := store.UserSubscription().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
 	if err != nil {
 		return nil, err
@@ -273,10 +265,10 @@ func (s *Service) activateRenewalTx(ctx context.Context, store repository.Store,
 	if err := s.updateSubscriptionForRenewalTx(ctx, store, userSub, sub, orderInfo); err != nil {
 		return nil, err
 	}
-	return &outcomeParts{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: NotifyRenewal}, nil
+	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyRenewal}, nil
 }
 
-func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repository.Store, userSub *usersub.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order) error {
+func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repository.SubscriptionStore, userSub *usersub.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order) error {
 	now := timeutil.Now()
 	if userSub.ExpireTime.Before(now) {
 		userSub.ExpireTime = now
@@ -299,11 +291,7 @@ func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repo
 	return store.UserSubscription().UpdateSubscribe(ctx, userSub)
 }
 
-func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.Store, orderInfo *order.Order) (*outcomeParts, error) {
-	userInfo, err := store.User().FindOne(ctx, orderInfo.UserId)
-	if err != nil {
-		return nil, err
-	}
+func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*outcomeParts, error) {
 	userSub, err := store.UserSubscription().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
 	if err != nil {
 		return nil, err
@@ -324,7 +312,7 @@ func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.S
 	}
 	resetLog := &log.ResetSubscribe{
 		Type:      log.ResetSubscribeTypePaid,
-		UserId:    userInfo.Id,
+		UserId:    orderInfo.UserId,
 		OrderNo:   orderInfo.OrderNo,
 		Timestamp: timeutil.Now().UnixMilli(),
 	}
@@ -340,5 +328,5 @@ func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.S
 	}); err != nil {
 		return nil, err
 	}
-	return &outcomeParts{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: NotifyResetTraffic}, nil
+	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyResetTraffic}, nil
 }

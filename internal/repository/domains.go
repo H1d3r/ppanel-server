@@ -44,6 +44,7 @@ type BillingStore interface {
 	UserWithdrawal() UserWithdrawalRepo
 	Wallet() WalletRepo
 	Inbox() InboxRepo
+	Outbox() OutboxRepo
 	Log() LogRepo
 }
 
@@ -54,6 +55,7 @@ type SubscriptionStore interface {
 	UserSubscription() UserSubscriptionRepo
 	SubscriptionTraffic() SubscriptionTrafficRepo
 	Inbox() InboxRepo
+	Outbox() OutboxRepo
 	Log() LogRepo
 }
 
@@ -65,6 +67,7 @@ type IdentityStore interface {
 	UserDevice() UserDeviceRepo
 	Auth() AuthRepo
 	Inbox() InboxRepo
+	Outbox() OutboxRepo
 	Log() LogRepo
 }
 
@@ -74,6 +77,7 @@ type NetworkStore interface {
 	Node() NodeRepo
 	TrafficLog() TrafficRepo
 	Inbox() InboxRepo
+	Outbox() OutboxRepo
 	Log() LogRepo
 }
 
@@ -83,6 +87,7 @@ type PlatformStore interface {
 	System() SystemRepo
 	Log() LogRepo
 	Inbox() InboxRepo
+	Outbox() OutboxRepo
 }
 
 // The full store satisfies every domain view; the scoped transactions below

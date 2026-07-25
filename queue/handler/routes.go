@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/svc"
+	"github.com/perfect-panel/server/queue/logic/events"
 	orderLogic "github.com/perfect-panel/server/queue/logic/order"
 	smslogic "github.com/perfect-panel/server/queue/logic/sms"
 	"github.com/perfect-panel/server/queue/logic/subscription"
@@ -30,6 +31,7 @@ func RegisterHandlers(mux *asynq.ServeMux, serverCtx *svc.ServiceContext) {
 	// Deliver durable order events to Redis Pub/Sub. The database remains the
 	// source of truth for SSE replay when publication is delayed or duplicated.
 	mux.Handle(types.SchedulerPublishOrderEvents, orderLogic.NewPublishOrderEventsLogic(serverCtx))
+	mux.Handle(types.SchedulerDispatchDomainEvents, events.NewDispatchDomainEventsLogic(serverCtx))
 	mux.Handle(types.SchedulerCleanupOrderEvents, orderLogic.NewCleanupOrderEventsLogic(serverCtx))
 
 	// Forthwith traffic statistics

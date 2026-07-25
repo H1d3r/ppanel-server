@@ -52,6 +52,12 @@ func (m *Service) Start() {
 	if _, err := m.server.Register("@every 5s", publishOrderEventsTask, asynq.MaxRetry(3)); err != nil {
 		logger.Errorf("register order event publisher task failed: %s", err.Error())
 	}
+	// Drain the generic domain-event outbox: registration trials and future
+	// cross-module events ride on it.
+	dispatchDomainEventsTask := asynq.NewTask(types.SchedulerDispatchDomainEvents, nil)
+	if _, err := m.server.Register("@every 5s", dispatchDomainEventsTask, asynq.MaxRetry(3)); err != nil {
+		logger.Errorf("register domain event dispatcher task failed: %s", err.Error())
+	}
 	cleanupOrderEventsTask := asynq.NewTask(types.SchedulerCleanupOrderEvents, nil)
 	if _, err := m.server.Register("0 3 * * *", cleanupOrderEventsTask, asynq.MaxRetry(3)); err != nil {
 		logger.Errorf("register order event cleanup task failed: %s", err.Error())

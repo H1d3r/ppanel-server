@@ -3,19 +3,18 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/jwt"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/uuidx"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -171,7 +170,6 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 	}
 
 	var userInfo *user.User
-	var trialSubscribe *usersub.Subscribe
 	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		// Create new user
 		userInfo = &user.User{
@@ -231,13 +229,11 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert device failed: %v", err)
 		}
 
-		// Activate trial if enabled
-		if l.deps.Config.TrialEnabled {
-			var trialErr error
-			trialSubscribe, trialErr = l.activeTrial(store, userInfo.Id)
-			if trialErr != nil {
-				return trialErr
-			}
+		// Registration emits the domain event; the subscription module
+		// grants the trial when it consumes it (idempotent, retried by
+		// the dispatcher).
+		if err := store.Outbox().Append(l.ctx, "identity.user_registered", strconv.FormatInt(userInfo.Id, 10), "{}"); err != nil {
+			return err
 		}
 
 		return nil
@@ -250,7 +246,6 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 		)
 		return nil, err
 	}
-	l.clearTrialSubscribeCache(trialSubscribe)
 
 	l.Infow("device registration completed successfully",
 		logger.Field("user_id", userInfo.Id),
@@ -282,70 +277,4 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 	}
 
 	return userInfo, nil
-}
-
-func (l *DeviceLoginLogic) clearTrialSubscribeCache(trialSub *usersub.Subscribe) {
-	if trialSub == nil {
-		return
-	}
-	if err := l.deps.Store.UserCache().ClearSubscribeCache(l.ctx, trialSub); err != nil {
-		l.Errorw("ClearSubscribeCache failed",
-			logger.Field("error", err.Error()),
-			logger.Field("user_subscribe_id", trialSub.Id),
-		)
-	}
-	if err := l.deps.Store.Subscribe().ClearCache(l.ctx, trialSub.SubscribeId); err != nil {
-		l.Errorw("Clear subscribe cache failed",
-			logger.Field("error", err.Error()),
-			logger.Field("subscribe_id", trialSub.SubscribeId),
-		)
-	}
-}
-
-func (l *DeviceLoginLogic) activeTrial(store repository.Store, userId int64) (*usersub.Subscribe, error) {
-	sub, err := store.Subscribe().FindOne(l.ctx, l.deps.Config.TrialSubscribeID)
-	if err != nil {
-		l.Errorw("failed to find trial subscription template",
-			logger.Field("user_id", userId),
-			logger.Field("trial_subscribe_id", l.deps.Config.TrialSubscribeID),
-			logger.Field("error", err.Error()),
-		)
-		return nil, err
-	}
-
-	startTime := timeutil.Now()
-	expireTime := tool.AddTime(l.deps.Config.TrialTimeUnit, l.deps.Config.TrialTime, startTime)
-	subscribeToken := uuidx.SubscribeToken(fmt.Sprintf("Trial-%v-%s", userId, uuidx.NewUUID().String()))
-	subscribeUUID := uuidx.NewUUID().String()
-
-	userSub := &usersub.Subscribe{
-		UserId:      userId,
-		OrderId:     0,
-		SubscribeId: sub.Id,
-		StartTime:   startTime,
-		ExpireTime:  expireTime,
-		Traffic:     sub.Traffic,
-		Download:    0,
-		Upload:      0,
-		Token:       subscribeToken,
-		UUID:        subscribeUUID,
-		Status:      1,
-	}
-
-	if err := store.UserSubscription().InsertSubscribe(l.ctx, userSub); err != nil {
-		l.Errorw("failed to insert trial subscription",
-			logger.Field("user_id", userId),
-			logger.Field("error", err.Error()),
-		)
-		return nil, err
-	}
-
-	l.Infow("trial subscription activated successfully",
-		logger.Field("user_id", userId),
-		logger.Field("subscribe_id", sub.Id),
-		logger.Field("expire_time", expireTime),
-		logger.Field("traffic", sub.Traffic),
-	)
-
-	return userSub, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/auth"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/jwt"
@@ -463,7 +463,6 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, reques
 	}
 
 	var userInfo *user.User
-	var trialSubscribe *usersub.Subscribe
 	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		if email != "" {
 			l.Debugw("checking if email already exists",
@@ -515,16 +514,11 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, reques
 			}
 		}
 
-		if l.deps.Config.TrialEnabled {
-			l.Debugw("activating trial subscription",
-				logger.Field("request_id", requestID),
-				logger.Field("user_id", userInfo.Id),
-			)
-			var trialErr error
-			trialSubscribe, trialErr = l.activeTrial(store, userInfo.Id, requestID)
-			if trialErr != nil {
-				return trialErr
-			}
+		// Registration emits the domain event; the subscription module
+		// grants the trial when it consumes it (idempotent, retried by
+		// the dispatcher).
+		if err := store.Outbox().Append(l.ctx, "identity.user_registered", strconv.FormatInt(userInfo.Id, 10), "{}"); err != nil {
+			return err
 		}
 
 		return nil
@@ -539,7 +533,6 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, reques
 		)
 		return userInfo, err
 	}
-	clearTrialSubscribeCache(l.ctx, l.deps.Store.UserCache(), l.deps.Store.Subscribe(), trialSubscribe)
 
 	l.Infow("user registration completed successfully",
 		logger.Field("request_id", requestID),
@@ -961,72 +954,4 @@ func (l *OAuthLoginGetTokenLogic) findOrRegisterUser(authType, openID, email, av
 	)
 
 	return userInfo, nil
-}
-
-func (l *OAuthLoginGetTokenLogic) activeTrial(store repository.Store, uid int64, requestID string) (*usersub.Subscribe, error) {
-	l.Debugw("fetching trial subscription template",
-		logger.Field("request_id", requestID),
-		logger.Field("user_id", uid),
-		logger.Field("trial_subscribe_id", l.deps.Config.TrialSubscribeID),
-	)
-
-	sub, err := store.Subscribe().FindOne(l.ctx, l.deps.Config.TrialSubscribeID)
-	if err != nil {
-		l.Errorw("failed to find trial subscription template",
-			logger.Field("request_id", requestID),
-			logger.Field("user_id", uid),
-			logger.Field("trial_subscribe_id", l.deps.Config.TrialSubscribeID),
-			logger.Field("error", err.Error()),
-		)
-		return nil, err
-	}
-
-	startTime := timeutil.Now()
-	expireTime := tool.AddTime(l.deps.Config.TrialTimeUnit, l.deps.Config.TrialTime, startTime)
-	subscribeToken := uuidx.SubscribeToken(fmt.Sprintf("Trial-%v-%s", uid, uuidx.NewUUID().String()))
-	subscribeUUID := uuidx.NewUUID().String()
-
-	l.Debugw("creating trial subscription",
-		logger.Field("request_id", requestID),
-		logger.Field("user_id", uid),
-		logger.Field("subscribe_id", sub.Id),
-		logger.Field("start_time", startTime),
-		logger.Field("expire_time", expireTime),
-		logger.Field("traffic", sub.Traffic),
-		logger.Field("token", subscribeToken),
-		logger.Field("uuid", subscribeUUID),
-	)
-
-	userSub := &usersub.Subscribe{
-		Id:          0,
-		UserId:      uid,
-		OrderId:     0,
-		SubscribeId: sub.Id,
-		StartTime:   startTime,
-		ExpireTime:  expireTime,
-		Traffic:     sub.Traffic,
-		Download:    0,
-		Upload:      0,
-		Token:       subscribeToken,
-		UUID:        subscribeUUID,
-		Status:      1,
-	}
-
-	if err := store.UserSubscription().InsertSubscribe(l.ctx, userSub); err != nil {
-		l.Errorw("failed to insert trial subscription",
-			logger.Field("request_id", requestID),
-			logger.Field("user_id", uid),
-			logger.Field("error", err.Error()),
-		)
-		return nil, err
-	}
-
-	l.Infow("trial subscription activated successfully",
-		logger.Field("request_id", requestID),
-		logger.Field("user_id", uid),
-		logger.Field("subscribe_id", sub.Id),
-		logger.Field("expire_time", expireTime),
-		logger.Field("traffic", sub.Traffic),
-	)
-	return userSub, nil
 }

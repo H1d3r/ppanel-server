@@ -52,6 +52,31 @@ func NewUserSubscriptionRepo(conn cache.CachedConn) *UserSubscriptionRepo {
 	return &UserSubscriptionRepo{CachedConn: conn}
 }
 
+// userSerial is the per-user serialization row for subscription-creating
+// flows.
+type userSerial struct {
+	UserId int64 `gorm:"primaryKey"`
+}
+
+func (userSerial) TableName() string {
+	return "subscription_user_serial"
+}
+
+// LockUserSerial seeds (once) and locks the user's serial row inside the
+// current transaction, serializing quota checks and subscription creation
+// per user within the subscription domain.
+func (m *UserSubscriptionRepo) LockUserSerial(ctx context.Context, userID int64) error {
+	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
+		if err := conn.Clauses(clause.OnConflict{DoNothing: true}).
+			Create(&userSerial{UserId: userID}).Error; err != nil {
+			return err
+		}
+		var row userSerial
+		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ?", userID).First(&row).Error
+	})
+}
+
 // --- subscribe ---
 
 func (m *UserSubscriptionRepo) UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error {

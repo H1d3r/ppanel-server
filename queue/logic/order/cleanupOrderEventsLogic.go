@@ -33,6 +33,13 @@ func (l *CleanupOrderEventsLogic) ProcessTask(ctx context.Context, _ *asynq.Task
 	// The idempotent inbox shares the retention contract: every consumer's
 	// replay window (deferred closes, activation retries, bucket flushes)
 	// resolves far inside it.
+	outboxDeleted, err := l.svcCtx.Store.Outbox().DeletePublishedBefore(ctx, time.Now().Add(-orderEventRetention))
+	if err != nil {
+		return err
+	}
+	if outboxDeleted > 0 {
+		logger.WithContext(ctx).Infof("cleaned up %d published domain events", outboxDeleted)
+	}
 	inboxDeleted, err := l.svcCtx.Store.Inbox().DeleteProcessedBefore(ctx, time.Now().Add(-orderEventRetention))
 	if err != nil {
 		return err

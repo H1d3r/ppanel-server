@@ -204,6 +204,10 @@ func (r *activationUserRepo) UpdateUserCache(_ context.Context, _ *userEntity.Us
 	return nil
 }
 
+func (r *activationUserRepo) LockUserSerial(_ context.Context, _ int64) error {
+	return nil
+}
+
 func (r *activationUserRepo) CountQuotaConsumingSubscriptions(_ context.Context, _ int64, _ int64) (int64, error) {
 	r.quotaCountCalls++
 	return r.quotaCount, nil

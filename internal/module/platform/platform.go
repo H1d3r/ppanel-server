@@ -143,6 +143,7 @@ func NewRepoBuilder() repository.PlatformBuilder {
 			Tasks:  repo.NewTaskRepo(c.DB),
 			Client: repo.NewClientRepo(c.DB),
 			Inbox:  repo.NewInboxRepo(c.DB),
+			Outbox: repo.NewOutboxRepo(c.DB),
 		}
 	}
 }

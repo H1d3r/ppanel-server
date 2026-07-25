@@ -7,6 +7,7 @@ import (
 	"github.com/perfect-panel/server/pkg/exchangeRate"
 
 	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/eventbus"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/network"
@@ -42,6 +43,7 @@ type ServiceContext struct {
 	Identity     identity.Service
 	Network      network.Service
 	Notification notification.Service
+	EventBus     *eventbus.Bus
 
 	//NodeCache   *cache.NodeCacheClient
 	Restart func() error
@@ -103,6 +105,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	srv.Identity = newIdentityModule(store, srv)
 	srv.Network = newNetworkModule(store, srv)
 	srv.Notification = newNotificationModule(store, srv)
+	srv.EventBus = newEventBus(store, srv)
 	return srv
 
 }

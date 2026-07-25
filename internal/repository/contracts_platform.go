@@ -7,6 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/client"
 	"github.com/perfect-panel/server/internal/model/entity/inbox"
 	"github.com/perfect-panel/server/internal/model/entity/log"
+	"github.com/perfect-panel/server/internal/model/entity/outbox"
 	"github.com/perfect-panel/server/internal/model/entity/system"
 	"github.com/perfect-panel/server/internal/model/entity/task"
 )
@@ -72,6 +73,16 @@ type ClientRepo interface {
 // records that it processed an event inside its own transaction, so
 // at-least-once deliveries and reconciliation replays never apply the same
 // mutation twice.
+// OutboxRepo is the generic domain-event outbox: Append runs inside the
+// owning domain's transaction; the dispatcher drains unpublished events and
+// marks them published once every subscriber has processed them.
+type OutboxRepo interface {
+	Append(ctx context.Context, topic, eventKey, payload string) error
+	ListUnpublished(ctx context.Context, limit int) ([]*outbox.Event, error)
+	MarkPublished(ctx context.Context, id int64) error
+	DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 type InboxRepo interface {
 	// Find returns the processed marker, or (nil, nil) when the step has not
 	// run yet.

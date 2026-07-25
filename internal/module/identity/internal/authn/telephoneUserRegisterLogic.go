@@ -3,13 +3,13 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/verification"
 	"github.com/perfect-panel/server/pkg/authmethod"
@@ -107,7 +107,6 @@ func (l *TelephoneUserRegisterLogic) TelephoneUserRegister(req *dto.TelephoneReg
 	if referer != nil {
 		userInfo.RefererId = referer.Id
 	}
-	var trialSubscribe *usersub.Subscribe
 	err = l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		// Save user information
 		if err := store.User().Insert(l.ctx, userInfo); err != nil {
@@ -119,19 +118,17 @@ func (l *TelephoneUserRegisterLogic) TelephoneUserRegister(req *dto.TelephoneReg
 		if err := store.User().Update(l.ctx, userInfo); err != nil {
 			return err
 		}
-		if l.deps.Config.TrialEnabled {
-			// Active trial
-			trialSubscribe, err = l.activeTrial(store, userInfo.Id)
-			if err != nil {
-				return err
-			}
+		// Registration emits the domain event; the subscription module
+		// grants the trial when it consumes it (idempotent, retried by
+		// the dispatcher).
+		if err := store.Outbox().Append(l.ctx, "identity.user_registered", strconv.FormatInt(userInfo.Id, 10), "{}"); err != nil {
+			return err
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	l.clearTrialSubscribeCache(trialSubscribe)
 
 	// Bind device to user if identifier is provided
 	if req.Identifier != "" && l.deps.DeviceBinder != nil {
@@ -216,44 +213,4 @@ func (l *TelephoneUserRegisterLogic) TelephoneUserRegister(req *dto.TelephoneReg
 	return &dto.LoginResponse{
 		Token: token,
 	}, nil
-}
-
-func (l *TelephoneUserRegisterLogic) activeTrial(store repository.Store, uid int64) (*usersub.Subscribe, error) {
-	sub, err := store.Subscribe().FindOne(l.ctx, l.deps.Config.TrialSubscribeID)
-	if err != nil {
-		return nil, err
-	}
-	userSub := &usersub.Subscribe{
-		Id:          0,
-		UserId:      uid,
-		OrderId:     0,
-		SubscribeId: sub.Id,
-		StartTime:   timeutil.Now(),
-		ExpireTime:  tool.AddTime(l.deps.Config.TrialTimeUnit, l.deps.Config.TrialTime, timeutil.Now()),
-		Traffic:     sub.Traffic,
-		Download:    0,
-		Upload:      0,
-		Token:       uuidx.SubscribeToken(fmt.Sprintf("Trial-%v-%s", uid, uuidx.NewUUID().String())),
-		UUID:        uuidx.NewUUID().String(),
-		Status:      1,
-	}
-	return userSub, store.UserSubscription().InsertSubscribe(l.ctx, userSub)
-}
-
-func (l *TelephoneUserRegisterLogic) clearTrialSubscribeCache(trialSub *usersub.Subscribe) {
-	if trialSub == nil {
-		return
-	}
-	if err := l.deps.Store.UserCache().ClearSubscribeCache(l.ctx, trialSub); err != nil {
-		l.Errorw("ClearSubscribeCache failed",
-			logger.Field("error", err.Error()),
-			logger.Field("user_subscribe_id", trialSub.Id),
-		)
-	}
-	if err := l.deps.Store.Subscribe().ClearCache(l.ctx, trialSub.SubscribeId); err != nil {
-		l.Errorw("Clear subscribe cache failed",
-			logger.Field("error", err.Error()),
-			logger.Field("subscribe_id", trialSub.SubscribeId),
-		)
-	}
 }

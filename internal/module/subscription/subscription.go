@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/sweep"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/trial"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 )
@@ -34,6 +35,10 @@ type Service interface {
 	// subscription, renewal or traffic reset) exactly once and returns the
 	// notification context.
 	FulfillPaidOrder(ctx context.Context, orderNo string) (*FulfillmentOutcome, error)
+	// GrantTrial consumes the identity.user_registered event: applies the
+	// registration trial exactly once (a disabled policy still consumes the
+	// event).
+	GrantTrial(ctx context.Context, userID int64) error
 
 	// The client-application management for subscription delivery.
 	CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error)
@@ -134,6 +139,10 @@ type Deps struct {
 	// SingleModel forbids holding more than one blocking subscription;
 	// runtime-mutable, read per request.
 	SingleModel func() bool
+	// TrialPolicy snapshots the runtime-mutable registration-trial settings
+	// per call.
+	TrialPolicy func() TrialPolicy
+
 	// UserAuths and LifecycleNotify serve the lifecycle sweep: the identity
 	// email lookup and the owner notification channel.
 	UserAuths       sweep.OwnerEmailReader
@@ -157,6 +166,12 @@ func NewRepoBuilder() repository.SubscriptionBuilder {
 
 func New(deps Deps) Service {
 	return &service{
+		trials: trial.NewService(trial.Deps{
+			Plans:       deps.Plans,
+			Cache:       deps.Cache,
+			Store:       deps.FullStore,
+			TrialPolicy: deps.TrialPolicy,
+		}),
 		fulfil: fulfillment.NewService(fulfillment.Deps{
 			Orders:      deps.Orders,
 			Store:       deps.FullStore,
@@ -228,6 +243,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	trials     *trial.Service
 	fulfil     *fulfillment.Service
 	quota      *quotatask.Service
 	sweeper    *sweep.Service
@@ -427,4 +443,12 @@ const (
 
 func (s *service) FulfillPaidOrder(ctx context.Context, orderNo string) (*FulfillmentOutcome, error) {
 	return s.fulfil.FulfillPaidOrder(ctx, orderNo)
+}
+
+// TrialPolicy re-exports the trial subdomain's policy snapshot for the
+// composition root.
+type TrialPolicy = trial.Policy
+
+func (s *service) GrantTrial(ctx context.Context, userID int64) error {
+	return s.trials.GrantTrial(ctx, userID)
 }

@@ -56,6 +56,11 @@ type UserAuthRepo interface {
 
 // UserSubscriptionRepo manages user subscription records and their lifecycle.
 type UserSubscriptionRepo interface {
+	// LockUserSerial serializes subscription-creating flows per user inside
+	// the current transaction (seed-and-lock on the subscription domain's
+	// serial table). It replaces the fulfillment stage's cross-domain
+	// user-row lock.
+	LockUserSerial(ctx context.Context, userID int64) error
 	InsertSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error
 	FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error)
 	FindOneSubscribeForUpdate(ctx context.Context, id int64) (*usersub.Subscribe, error)

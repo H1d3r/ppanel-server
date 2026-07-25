@@ -49,6 +49,7 @@ type PlatformRepos struct {
 	Tasks  TaskRepo
 	Client ClientRepo
 	Inbox  InboxRepo
+	Outbox OutboxRepo
 }
 
 type PlatformBuilder func(conn ModuleConn) PlatformRepos

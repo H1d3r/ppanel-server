@@ -20,6 +20,8 @@ type Store interface {
 	Coupon() CouponRepo
 	Document() DocumentRepo
 	Inbox() InboxRepo
+	// Outbox appends domain events that commit with the domain transaction.
+	Outbox() OutboxRepo
 	Log() LogRepo
 	Node() NodeRepo
 	Order() OrderRepo
@@ -109,6 +111,7 @@ func (s *GormStore) Client() ClientRepo                           { return s.pla
 func (s *GormStore) Coupon() CouponRepo                           { return s.billing.Coupons }
 func (s *GormStore) Document() DocumentRepo                       { return s.support.Documents }
 func (s *GormStore) Inbox() InboxRepo                             { return s.platform.Inbox }
+func (s *GormStore) Outbox() OutboxRepo                           { return s.platform.Outbox }
 func (s *GormStore) Log() LogRepo                                 { return s.platform.Logs }
 func (s *GormStore) Node() NodeRepo                               { return s.network.Nodes }
 func (s *GormStore) Order() OrderRepo                             { return s.billing.Orders }

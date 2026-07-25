@@ -56,7 +56,7 @@ var svcImporters = map[string]bool{
 	"internal/middleware":     true, "internal/route": true,
 	"internal/transport/httpserver": true,
 	"queue":                         true, "queue/handler": true,
-	"queue/logic/email": true, "queue/logic/order": true, "queue/logic/sms": true,
+	"queue/logic/email": true, "queue/logic/events": true, "queue/logic/order": true, "queue/logic/sms": true,
 	"queue/logic/subscription": true, "queue/logic/task": true, "queue/logic/traffic": true,
 	"scheduler": true,
 }

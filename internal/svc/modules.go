@@ -11,6 +11,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/oschwald/geoip2-golang"
 	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/eventbus"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
@@ -187,16 +188,25 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 		IsTrialPlan: func(planID int64) bool {
 			return srv.Config.Register.EnableTrial && srv.Config.Register.TrialSubscribe == planID
 		},
-		Clients:         store.Client(),
-		Users:           store.User(),
-		Logs:            store.Log(),
-		Devices:         store.UserDevice(),
-		Cache:           store.UserCache(),
-		Traffic:         store.TrafficLog(),
-		Orders:          store.Order(),
-		Inbox:           store.Inbox(),
-		FullStore:       store,
-		SingleModel:     func() bool { return srv.Config.Subscribe.SingleModel },
+		Clients:     store.Client(),
+		Users:       store.User(),
+		Logs:        store.Log(),
+		Devices:     store.UserDevice(),
+		Cache:       store.UserCache(),
+		Traffic:     store.TrafficLog(),
+		Orders:      store.Order(),
+		Inbox:       store.Inbox(),
+		FullStore:   store,
+		SingleModel: func() bool { return srv.Config.Subscribe.SingleModel },
+		TrialPolicy: func() subscription.TrialPolicy {
+			c := srv.Config.Register
+			return subscription.TrialPolicy{
+				Enabled:  c.EnableTrial,
+				PlanID:   c.TrialSubscribe,
+				Duration: c.TrialTime,
+				TimeUnit: c.TrialTimeUnit,
+			}
+		},
 		UserAuths:       store.UserAuth(),
 		LifecycleNotify: lifecycleEmailNotifier{srv: srv},
 		DeliveryConfig: func() subscription.DeliveryConfig {
@@ -372,6 +382,23 @@ func newNetworkModule(store repository.Store, srv *ServiceContext) network.Servi
 			return srv.NodeMultiplierManager.GetMultiplier(at)
 		},
 	})
+}
+
+// newEventBus wires the in-process domain-event bus: producers append to
+// the outbox inside their transactions; the queue's dispatch task drains it
+// through these subscriptions. Handlers call module facades and rely on the
+// modules' inbox idempotency.
+func newEventBus(store repository.Store, srv *ServiceContext) *eventbus.Bus {
+	bus := eventbus.New(store.Outbox())
+	bus.Subscribe("identity.user_registered", "subscription.trial_grant", func(ctx context.Context, event eventbus.Event) error {
+		userID, err := strconv.ParseInt(event.Key, 10, 64)
+		if err != nil {
+			logger.Errorw("[EventBus] corrupt user_registered key; dropping", logger.Field("key", event.Key))
+			return nil
+		}
+		return srv.Subscription.GrantTrial(ctx, userID)
+	})
+	return bus
 }
 
 // newNotificationModule wires the notification module against the legacy
