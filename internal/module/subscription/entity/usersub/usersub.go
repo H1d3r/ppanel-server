@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/perfect-panel/server/internal/model/entity/subscribe"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 )
 
 // Cache key prefixes for the user-subscription cache.

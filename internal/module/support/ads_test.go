@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	adsEntity "github.com/perfect-panel/server/internal/model/entity/ads"
 	"github.com/perfect-panel/server/internal/module/support"
+	adsEntity "github.com/perfect-panel/server/internal/module/support/entity/ads"
 )
 
 type fakeAdsRepo struct {

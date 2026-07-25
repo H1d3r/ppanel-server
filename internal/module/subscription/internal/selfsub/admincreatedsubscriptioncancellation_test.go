@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	usermodel "github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
-	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
+	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
+	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger/logtest"

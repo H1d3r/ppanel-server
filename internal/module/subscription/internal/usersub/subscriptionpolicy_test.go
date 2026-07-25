@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 )
 

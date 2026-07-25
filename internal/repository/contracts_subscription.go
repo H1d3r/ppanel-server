@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/subscribe"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"gorm.io/gorm"
 )
 

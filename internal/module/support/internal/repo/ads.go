@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/perfect-panel/server/internal/repository"
 
-	"github.com/perfect-panel/server/internal/model/entity/ads"
+	"github.com/perfect-panel/server/internal/module/support/entity/ads"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
 	"gorm.io/gorm"

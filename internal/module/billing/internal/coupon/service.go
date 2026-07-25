@@ -7,7 +7,7 @@ import (
 	"math/rand"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	entity "github.com/perfect-panel/server/internal/model/entity/coupon"
+	entity "github.com/perfect-panel/server/internal/module/billing/entity/coupon"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"

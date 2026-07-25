@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/perfect-panel/server/internal/model/entity/inbox"
+	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
 )

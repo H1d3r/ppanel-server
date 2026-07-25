@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/perfect-panel/server/internal/model/entity/system"
+	"github.com/perfect-panel/server/internal/module/platform/entity/system"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 )

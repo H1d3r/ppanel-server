@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	docEntity "github.com/perfect-panel/server/internal/model/entity/document"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/support"
+	docEntity "github.com/perfect-panel/server/internal/module/support/entity/document"
 	"github.com/perfect-panel/server/pkg/constant"
 )
 

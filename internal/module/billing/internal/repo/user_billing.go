@@ -6,7 +6,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/cache"
 
-	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
+	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

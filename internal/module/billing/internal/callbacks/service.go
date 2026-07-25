@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/perfect-panel/server/internal/model/entity/order"
-	"github.com/perfect-panel/server/internal/model/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"

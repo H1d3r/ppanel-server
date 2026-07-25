@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	usermodel "github.com/perfect-panel/server/internal/model/entity/user"
+	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/constant"
 )
 

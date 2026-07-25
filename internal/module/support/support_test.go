@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	entity "github.com/perfect-panel/server/internal/model/entity/announcement"
 	"github.com/perfect-panel/server/internal/module/support"
+	entity "github.com/perfect-panel/server/internal/module/support/entity/announcement"
 )
 
 type fakeAnnouncementRepo struct {

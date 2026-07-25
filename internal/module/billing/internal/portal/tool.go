@@ -2,8 +2,8 @@ package portal
 
 import (
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/model/entity/coupon"
-	"github.com/perfect-panel/server/internal/model/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
+	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"

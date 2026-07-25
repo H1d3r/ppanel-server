@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
+	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"

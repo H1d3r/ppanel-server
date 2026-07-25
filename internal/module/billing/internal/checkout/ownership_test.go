@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/constant"
 )
 

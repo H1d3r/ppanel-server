@@ -8,9 +8,9 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/hibiken/asynq"
-	"github.com/perfect-panel/server/internal/model/entity/inbox"
-	"github.com/perfect-panel/server/internal/model/entity/order"
-	"github.com/perfect-panel/server/internal/model/entity/outbox"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
+	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/orderstream"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/redis/go-redis/v9"

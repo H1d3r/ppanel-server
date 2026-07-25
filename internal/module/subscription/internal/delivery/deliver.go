@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/adapter"
-	"github.com/perfect-panel/server/internal/model/entity/client"
-	"github.com/perfect-panel/server/internal/model/entity/log"
-	"github.com/perfect-panel/server/internal/model/entity/node"
+	"github.com/perfect-panel/server/internal/module/network/entity/node"
+	"github.com/perfect-panel/server/internal/module/platform/entity/client"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/pkg/logger"

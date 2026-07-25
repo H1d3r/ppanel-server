@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/perfect-panel/server/internal/repository"
 
-	"github.com/perfect-panel/server/internal/model/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"

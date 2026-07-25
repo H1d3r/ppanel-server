@@ -4,7 +4,7 @@ import (
 	"context"
 	"github.com/perfect-panel/server/internal/repository"
 
-	"github.com/perfect-panel/server/internal/model/entity/task"
+	"github.com/perfect-panel/server/internal/module/platform/entity/task"
 	"gorm.io/gorm"
 )
 

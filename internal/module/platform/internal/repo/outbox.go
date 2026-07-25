@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/perfect-panel/server/internal/model/entity/outbox"
+	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
 )

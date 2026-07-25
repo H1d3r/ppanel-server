@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	ticketEntity "github.com/perfect-panel/server/internal/model/entity/ticket"
 	"github.com/perfect-panel/server/internal/module/support"
+	ticketEntity "github.com/perfect-panel/server/internal/module/support/entity/ticket"
 )
 
 type statusUpdate struct {

@@ -7,7 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/model/entity/system"
+	"github.com/perfect-panel/server/internal/module/platform/entity/system"
 	"github.com/perfect-panel/server/pkg/cache"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

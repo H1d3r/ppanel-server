@@ -203,9 +203,11 @@ func TestSvcImportFreeze(t *testing.T) {
 	}
 }
 
-// TestModuleLayout enforces that a module exposes only its facade package and
-// an optional events package: every other .go file must live under the
-// module's internal/ subtree where the compiler seals it off.
+// TestModuleLayout enforces that a module exposes only its facade package,
+// an optional events package and its entity/ packages (the persistence
+// structs it owns — plain data other modules may read): every other .go file
+// must live under the module's internal/ subtree where the compiler seals it
+// off.
 func TestModuleLayout(t *testing.T) {
 	for _, f := range collectGoFiles(t) {
 		rest, ok := strings.CutPrefix(f.dir, "internal/module/")
@@ -216,9 +218,9 @@ func TestModuleLayout(t *testing.T) {
 		if len(segs) < 2 {
 			continue // facade package internal/module/<name>
 		}
-		if segs[1] == "internal" || segs[1] == "events" {
+		if segs[1] == "internal" || segs[1] == "events" || segs[1] == "entity" {
 			continue
 		}
-		t.Errorf("%s: module %q may only expose its facade and events/ packages; implementation belongs under internal/module/%s/internal/", f.path, segs[0], segs[0])
+		t.Errorf("%s: module %q may only expose its facade, events/ and entity/ packages; implementation belongs under internal/module/%s/internal/", f.path, segs[0], segs[0])
 	}
 }

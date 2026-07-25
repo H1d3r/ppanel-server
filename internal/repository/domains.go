@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
+	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"gorm.io/gorm"
 )
 

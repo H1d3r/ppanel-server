@@ -7,7 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"time"
 
-	"github.com/perfect-panel/server/internal/model/entity/log"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/pkg/orm"
 	"gorm.io/gorm"
 )

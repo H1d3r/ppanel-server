@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	couponEntity "github.com/perfect-panel/server/internal/model/entity/coupon"
-	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	couponEntity "github.com/perfect-panel/server/internal/module/billing/entity/coupon"
+	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
+	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"gorm.io/gorm"

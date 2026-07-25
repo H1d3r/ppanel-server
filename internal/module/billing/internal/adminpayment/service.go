@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	paymentModel "github.com/perfect-panel/server/internal/model/entity/payment"
+	paymentModel "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/payment"

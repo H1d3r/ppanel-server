@@ -7,7 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"strconv"
 
-	"github.com/perfect-panel/server/internal/model/entity/coupon"
+	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
 	"gorm.io/gorm"

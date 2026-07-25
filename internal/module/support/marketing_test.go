@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	taskEntity "github.com/perfect-panel/server/internal/model/entity/task"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
-	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	taskEntity "github.com/perfect-panel/server/internal/module/platform/entity/task"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support"
 )
 

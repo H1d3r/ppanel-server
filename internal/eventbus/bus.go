@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/perfect-panel/server/internal/model/entity/outbox"
+	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )

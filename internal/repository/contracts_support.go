@@ -3,10 +3,10 @@ package repository
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/ads"
-	"github.com/perfect-panel/server/internal/model/entity/announcement"
-	"github.com/perfect-panel/server/internal/model/entity/document"
-	"github.com/perfect-panel/server/internal/model/entity/ticket"
+	"github.com/perfect-panel/server/internal/module/support/entity/ads"
+	"github.com/perfect-panel/server/internal/module/support/entity/announcement"
+	"github.com/perfect-panel/server/internal/module/support/entity/document"
+	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
 )
 
 // TicketRepo ticket 数据访问接口

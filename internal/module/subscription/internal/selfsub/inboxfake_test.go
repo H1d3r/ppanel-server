@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	inboxEntity "github.com/perfect-panel/server/internal/model/entity/inbox"
+	inboxEntity "github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"github.com/perfect-panel/server/internal/repository"
 )
 

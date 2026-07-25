@@ -3,7 +3,7 @@ package plan
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/subscribe"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"

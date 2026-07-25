@@ -3,8 +3,8 @@ package order
 import (
 	"time"
 
-	"github.com/perfect-panel/server/internal/model/entity/payment"
-	"github.com/perfect-panel/server/internal/model/entity/subscribe"
+	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 )
 
 type Order struct {

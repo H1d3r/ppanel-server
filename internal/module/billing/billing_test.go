@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
-	paymentEntity "github.com/perfect-panel/server/internal/model/entity/payment"
 	"github.com/perfect-panel/server/internal/module/billing"
+	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
+	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
 )

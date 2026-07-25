@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/auth"
+	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 )
 
 // AuthRepo auth 数据访问接口

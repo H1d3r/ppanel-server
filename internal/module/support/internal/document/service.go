@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	entity "github.com/perfect-panel/server/internal/model/entity/document"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	entity "github.com/perfect-panel/server/internal/module/support/entity/document"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"

@@ -3,7 +3,7 @@ package orderflow
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 )
 
 // Idempotency carries V2-only creation metadata through the existing domain

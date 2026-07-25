@@ -3,7 +3,7 @@ package adapter
 import (
 	"testing"
 
-	"github.com/perfect-panel/server/internal/model/entity/node"
+	"github.com/perfect-panel/server/internal/module/network/entity/node"
 )
 
 func TestAdapterProxy(t *testing.T) {
