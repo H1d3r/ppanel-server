@@ -95,34 +95,6 @@ func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.Invalidat
 	return s
 }
 
-// LegacyBuilders wraps the repository implementations still living in this
-// package. Each entry disappears as its module takes ownership of the
-// implementation and exports its own builder; the composition root fills
-// the moved entries from the module facades.
-func LegacyBuilders(rds *redis.Client) Builders {
-	return Builders{
-		Identity: func(c ModuleConn, subs SubscriptionCacheBridge) IdentityRepos {
-			u := newUserRepo(c.Conn(), subs)
-			return IdentityRepos{
-				Users:     u,
-				UserAuths: u,
-				Devices:   u,
-				UserCache: u,
-				Auths:     newAuthRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-			}
-		},
-	}
-}
-
-// orNil adapts the optional variadic invalidation-queue signatures of the
-// legacy constructors.
-func orNil(q *cache.InvalidationQueue) []*cache.InvalidationQueue {
-	if q == nil {
-		return nil
-	}
-	return []*cache.InvalidationQueue{q}
-}
-
 func newCachedConn(db *gorm.DB, rds *redis.Client, invalidations ...*cache.InvalidationQueue) cache.CachedConn {
 	if len(invalidations) > 0 && invalidations[0] != nil {
 		return cache.NewConn(db, rds, cache.WithInvalidationQueue(invalidations[0]))

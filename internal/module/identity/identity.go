@@ -12,6 +12,7 @@ import (
 	authn "github.com/perfect-panel/server/internal/module/identity/internal/authn"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/oauth"
 	"github.com/perfect-panel/server/internal/module/identity/internal/profile"
+	"github.com/perfect-panel/server/internal/module/identity/internal/repo"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verifycode"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -154,6 +155,22 @@ type (
 	VerificationTaskQueue = verifycode.VerificationTaskQueue
 	VerifyCodeSnapshot    = verifycode.Snapshot
 )
+
+// NewRepoBuilder exports the module-owned repository implementations for
+// store assembly (ADR-001 step-6 preparation).
+func NewRepoBuilder() repository.IdentityBuilder {
+	return func(c repository.ModuleConn, subs repository.SubscriptionCacheBridge) repository.IdentityRepos {
+		conn := c.Conn()
+		u := repo.NewUserRepo(conn, subs)
+		return repository.IdentityRepos{
+			Users:     u,
+			UserAuths: u,
+			Devices:   u,
+			UserCache: u,
+			Auths:     repo.NewAuthRepo(conn),
+		}
+	}
+}
 
 func New(deps Deps) Service {
 	authSvc := authn.NewService(authn.Deps{

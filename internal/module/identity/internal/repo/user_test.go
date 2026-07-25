@@ -1,8 +1,9 @@
-package repository
+package repo
 
 import (
 	"bytes"
 	"context"
+	"github.com/perfect-panel/server/internal/repository"
 	"log"
 	"strings"
 	"testing"
@@ -38,7 +39,7 @@ func TestUserRepoFindOneForUpdateUsesRowLockAndDefaultScope(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	if _, err := newUserRepo(newCachedConn(db, redisClient), nil).FindOneForUpdate(context.Background(), 42); err != nil {
+	if _, err := NewUserRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), nil).FindOneForUpdate(context.Background(), 42); err != nil {
 		t.Fatalf("FindOneForUpdate: %v", err)
 	}
 	sql := logs.String()
@@ -66,7 +67,7 @@ func TestFindDeviceOnlineRecordUsesCreatedAt(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	_, err = newUserRepo(newCachedConn(db, redisClient), nil).FindDeviceOnlineRecord(context.Background(), 42, "2026-07-21 00:00:00", "2026-07-22 00:00:00")
+	_, err = NewUserRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), nil).FindDeviceOnlineRecord(context.Background(), 42, "2026-07-21 00:00:00", "2026-07-22 00:00:00")
 	if err != nil {
 		t.Fatalf("FindDeviceOnlineRecord: %v", err)
 	}
@@ -280,17 +281,17 @@ func TestNormalizePage(t *testing.T) {
 		wantPage int
 		wantSize int
 	}{
-		{name: "zero values use safe defaults", page: 0, size: 0, wantPage: 1, wantSize: DefaultPageSize},
-		{name: "negative values use safe defaults", page: -2, size: -10, wantPage: 1, wantSize: DefaultPageSize},
-		{name: "large size is capped", page: 2, size: maxPageSize + 1, wantPage: 2, wantSize: maxPageSize},
+		{name: "zero values use safe defaults", page: 0, size: 0, wantPage: 1, wantSize: repository.DefaultPageSize},
+		{name: "negative values use safe defaults", page: -2, size: -10, wantPage: 1, wantSize: repository.DefaultPageSize},
+		{name: "large size is capped", page: 2, size: repository.MaxPageSize + 1, wantPage: 2, wantSize: repository.MaxPageSize},
 		{name: "valid values pass through", page: 3, size: 50, wantPage: 3, wantSize: 50},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotPage, gotSize := NormalizePage(tt.page, tt.size)
+			gotPage, gotSize := repository.NormalizePage(tt.page, tt.size)
 			if gotPage != tt.wantPage || gotSize != tt.wantSize {
-				t.Fatalf("NormalizePage(%d, %d) = (%d, %d), want (%d, %d)",
+				t.Fatalf("repository.NormalizePage(%d, %d) = (%d, %d), want (%d, %d)",
 					tt.page, tt.size, gotPage, gotSize, tt.wantPage, tt.wantSize)
 			}
 		})
@@ -298,8 +299,8 @@ func TestNormalizePage(t *testing.T) {
 }
 
 func TestNormalizePageFloor(t *testing.T) {
-	gotPage, gotSize := NormalizePageFloor(0, maxPageSize+1)
-	if gotPage != 1 || gotSize != maxPageSize+1 {
-		t.Fatalf("NormalizePageFloor() = (%d, %d), want (1, %d)", gotPage, gotSize, maxPageSize+1)
+	gotPage, gotSize := repository.NormalizePageFloor(0, repository.MaxPageSize+1)
+	if gotPage != 1 || gotSize != repository.MaxPageSize+1 {
+		t.Fatalf("repository.NormalizePageFloor() = (%d, %d), want (1, %d)", gotPage, gotSize, repository.MaxPageSize+1)
 	}
 }

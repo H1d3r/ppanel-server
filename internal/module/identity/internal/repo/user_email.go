@@ -1,4 +1,4 @@
-package repository
+package repo
 
 import (
 	"context"
@@ -104,7 +104,7 @@ func resolveUniqueAuthMethod(methods []user.AuthMethods) (*user.AuthMethods, err
 	}
 }
 
-func (m *userRepo) ValidateEmailIdentityUniqueness(ctx context.Context) error {
+func (m *UserRepo) ValidateEmailIdentityUniqueness(ctx context.Context) error {
 	var collisions []struct {
 		AuthIdentifier string
 	}

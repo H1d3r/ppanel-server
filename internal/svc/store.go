@@ -2,6 +2,7 @@ package svc
 
 import (
 	"github.com/perfect-panel/server/internal/module/billing"
+	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/network"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
@@ -16,11 +17,12 @@ import (
 // implementations that have not migrated yet). One connection pool, module-
 // owned persistence (ADR-001 step-6 preparation).
 func NewStore(db *gorm.DB, rds *redis.Client) *repository.GormStore {
-	builders := repository.LegacyBuilders(rds)
-	builders.Support = support.NewRepoBuilder()
-	builders.Platform = platform.NewRepoBuilder()
-	builders.Billing = billing.NewRepoBuilder()
-	builders.Subscription = subscription.NewRepoBuilder()
-	builders.Network = network.NewRepoBuilder(rds)
-	return repository.NewGormStoreWithBuilders(db, rds, builders)
+	return repository.NewGormStoreWithBuilders(db, rds, repository.Builders{
+		Platform:     platform.NewRepoBuilder(),
+		Billing:      billing.NewRepoBuilder(),
+		Subscription: subscription.NewRepoBuilder(),
+		Identity:     identity.NewRepoBuilder(),
+		Network:      network.NewRepoBuilder(rds),
+		Support:      support.NewRepoBuilder(),
+	})
 }

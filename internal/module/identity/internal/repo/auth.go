@@ -1,13 +1,13 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/auth"
 	"github.com/perfect-panel/server/pkg/cache"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -16,27 +16,18 @@ var (
 	cacheAuthMethodPrefix = "cache:auth:method:"
 )
 
-// AuthRepo auth 数据访问接口
-type AuthRepo interface {
-	Insert(ctx context.Context, data *auth.Auth) error
-	FindOne(ctx context.Context, id int64) (*auth.Auth, error)
-	Update(ctx context.Context, data *auth.Auth) error
-	Delete(ctx context.Context, id int64) error
-	GetAuthListByPage(ctx context.Context) ([]*auth.Auth, error)
-	FindOneByMethod(ctx context.Context, platform string) (*auth.Auth, error)
-	FindAll(ctx context.Context) ([]*auth.Auth, error)
-}
-
-var _ AuthRepo = (*authRepo)(nil)
+var _ repository.AuthRepo = (*authRepo)(nil)
 
 type authRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newAuthRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) AuthRepo {
+// NewAuthRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewAuthRepo(conn cache.CachedConn) repository.AuthRepo {
 	return &authRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "auth_config",
 	}
 }

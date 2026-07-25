@@ -2,7 +2,7 @@ package repository
 
 const (
 	DefaultPageSize = 20
-	maxPageSize     = 100
+	MaxPageSize     = 100
 )
 
 // NormalizePage clamps pagination inputs; module repo implementations share it.
@@ -13,8 +13,8 @@ func NormalizePage(page, size int) (int, int) {
 	if size < 1 {
 		size = DefaultPageSize
 	}
-	if size > maxPageSize {
-		size = maxPageSize
+	if size > MaxPageSize {
+		size = MaxPageSize
 	}
 	return page, size
 }
