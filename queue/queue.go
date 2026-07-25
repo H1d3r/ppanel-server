@@ -3,6 +3,7 @@ package queue
 import (
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/svc"
+	"github.com/perfect-panel/server/pkg/asynqx"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/queue/handler"
 )
@@ -22,6 +23,9 @@ func NewService(svc *svc.ServiceContext) *Service {
 func (m *Service) Start() {
 	logger.Infof("start consumer service")
 	mux := asynq.NewServeMux()
+	// Resume the producer's trace from the payload envelope and span every
+	// task execution before any handler runs.
+	mux.Use(asynqx.Middleware())
 	// register tasks
 	handler.RegisterHandlers(mux, m.svc)
 	if err := m.server.Run(mux); err != nil {

@@ -82,7 +82,7 @@ func (l *ResetTrafficLogic) ProcessTask(ctx context.Context, _ *asynq.Task) erro
 
 				// Schedule retry with delay
 				task := asynq.NewTask(types.SchedulerResetTraffic, nil)
-				_, retryErr := l.svc.Queue.Enqueue(task, asynq.ProcessIn(retryDelay))
+				_, retryErr := l.svc.Queue.EnqueueContext(ctx, task, asynq.ProcessIn(retryDelay))
 				if retryErr != nil {
 					logger.Errorw("[ResetTraffic] Failed to enqueue retry task",
 						logger.Field("error", retryErr.Error()),

@@ -126,9 +126,9 @@ func (l *SendEmailCodeLogic) SendEmailCode(req *dto.SendCodeRequest) (resp *dto.
 		return nil, errors.Wrap(xerr.NewErrCode(xerr.ERROR), "Failed to marshal task payload")
 	}
 	// Create a queue task
-	task := asynq.NewTask(queue.ForthwithSendEmail, payloadBuy, asynq.MaxRetry(3))
+	task := asynq.NewTask(queue.ForthwithSendEmail, payloadBuy)
 	// Enqueue the task
-	taskInfo, err := l.deps.Queue.Enqueue(task)
+	taskInfo, err := l.deps.Queue.EnqueueContext(l.ctx, task, asynq.MaxRetry(3))
 	if err != nil {
 		_ = verification.DeleteVerificationCode(l.ctx, l.deps.Redis, cacheKey)
 		l.Errorw("[SendEmailCode]: Enqueue Error", logger.Field("error", err.Error()), logger.Field("type", taskPayload.Type))

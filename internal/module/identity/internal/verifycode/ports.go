@@ -24,7 +24,7 @@ type VerificationIdentityStore interface {
 
 // VerificationTaskQueue publishes verification-code delivery tasks.
 type VerificationTaskQueue interface {
-	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+	EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
 // EmailCodeConfig is the configuration snapshot consumed by email code

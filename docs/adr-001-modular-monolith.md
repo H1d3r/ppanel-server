@@ -220,6 +220,18 @@ builder 指向独立连接即可。不允许 import `internal/svc` 与 `internal
   `subscription.fulfillment`、`identity.balance_recharge`、`identity.commission`、
   `subscription.trial_grant`、`subscription.quota_grant`、`billing.quota_gift`。
 
+**异步 trace 贯通（2026-07-25）**：asynq 无消息头，`pkg/asynqx` 用 payload 信封携带
+W3C trace 上下文——`asynqx.Client`（`ServiceContext.Queue` 的类型）在 `EnqueueContext`
+时把调用方 span 上下文包进 `{__trace_carrier__, __trace_body__}` 信封；worker 侧
+`mux.Use(asynqx.Middleware())` 解包、以生产者为父开 consumer span（含 task id/重试次数
+属性、错误记账），handler 拿到原始 payload。无信封的 payload（老在途任务、无 trace
+生产者、调度 tick）直通并得到根 span——**每次任务执行都有 trace id 进日志**。
+领域事件更进一步：outbox 行存产生请求的 trace 上下文（`trace_carrier` 列，迁移 02146），
+发布泵入队 `events:deliver` 时以**源头请求**（而非泵）为父包装，注册→试用授予全链一条
+trace。约束：task 选项必须传给 `EnqueueContext` 而非内嵌 `NewTask`（包装会重建 task，
+内嵌选项丢失；存量 6 处已提升）。滚动部署窗口：新生产者+旧 worker 读不懂信封——
+单二进制同批升级即可，多副本滚动时先升 worker。
+
 **svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩后定格在 49（含事件总线的
 queue 壳 `queue/logic/events`），剩余条目全部为组装根/传输层性质——`cmd`、`initialize`、
 `internal`（server）、`internal/handler/**`（薄壳调门面）、`internal/middleware`、

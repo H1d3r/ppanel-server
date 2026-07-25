@@ -77,9 +77,9 @@ func (l *ReconcilePaidOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Tas
 			if err != nil {
 				return err
 			}
-			task := asynq.NewTask(types.ForthwithActivateOrder, payload, asynq.MaxRetry(5))
+			task := asynq.NewTask(types.ForthwithActivateOrder, payload)
 			taskID := types.ActivationTaskID(orderInfo.OrderNo)
-			_, err = l.svc.Queue.EnqueueContext(ctx, task, asynq.TaskID(taskID))
+			_, err = l.svc.Queue.EnqueueContext(ctx, task, asynq.MaxRetry(5), asynq.TaskID(taskID))
 			if err == nil {
 				totalEnqueued++
 				afterID = orderInfo.Id
@@ -163,8 +163,8 @@ func (l *ReconcilePaidOrdersLogic) handleConflict(ctx context.Context, orderNo, 
 			if enqErr != nil {
 				return conflictKept, 0, fmt.Errorf("marshal for re-enqueue: %w", enqErr)
 			}
-			task := asynq.NewTask(types.ForthwithActivateOrder, payload, asynq.MaxRetry(5))
-			if _, enqErr = l.svc.Queue.EnqueueContext(ctx, task, asynq.TaskID(taskID)); enqErr != nil {
+			task := asynq.NewTask(types.ForthwithActivateOrder, payload)
+			if _, enqErr = l.svc.Queue.EnqueueContext(ctx, task, asynq.MaxRetry(5), asynq.TaskID(taskID)); enqErr != nil {
 				return conflictKept, 0, fmt.Errorf("re-enqueue after not found: %w", enqErr)
 			}
 			return conflictNotFound, 0, nil

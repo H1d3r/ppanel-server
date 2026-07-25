@@ -789,8 +789,8 @@ activation:
 		return err
 	}
 
-	task := asynq.NewTask(queueType.ForthwithActivateOrder, bytes, asynq.MaxRetry(5))
-	_, err = l.deps.ActivationQueue.EnqueueContext(l.ctx, task, asynq.TaskID(queueType.ActivationTaskID(o.OrderNo)))
+	task := asynq.NewTask(queueType.ForthwithActivateOrder, bytes)
+	_, err = l.deps.ActivationQueue.EnqueueContext(l.ctx, task, asynq.MaxRetry(5), asynq.TaskID(queueType.ActivationTaskID(o.OrderNo)))
 	if errors.Is(err, asynq.ErrTaskIDConflict) {
 		err = nil
 	}

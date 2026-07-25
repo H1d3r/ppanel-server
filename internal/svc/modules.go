@@ -23,17 +23,20 @@ import (
 	"github.com/perfect-panel/server/internal/report"
 	"github.com/perfect-panel/server/internal/repository"
 	emailworker "github.com/perfect-panel/server/internal/worker/email"
+	"github.com/perfect-panel/server/pkg/asynqx"
 	"github.com/perfect-panel/server/pkg/device"
 	"github.com/perfect-panel/server/pkg/exchangeRate"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	queuetypes "github.com/perfect-panel/server/queue/types"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // newBillingModule wires the billing module against the legacy store and the
 // asynq client (ADR-001 step 4).
-func newBillingModule(c config.Config, store repository.Store, queue *asynq.Client, rds *redis.Client, rate *exchangeRate.Cache, srv *ServiceContext) billing.Service {
+func newBillingModule(c config.Config, store repository.Store, queue *asynqx.Client, rds *redis.Client, rate *exchangeRate.Cache, srv *ServiceContext) billing.Service {
 	return billing.New(billing.Deps{
 		Orders:        store.Order(),
 		Payments:      store.Payment(),
@@ -80,7 +83,7 @@ func newBillingModule(c config.Config, store repository.Store, queue *asynq.Clie
 // port. A task-id conflict means a delivery already exists for the order,
 // which is success, not an error.
 type activationQueue struct {
-	client *asynq.Client
+	client *asynqx.Client
 }
 
 func (q activationQueue) EnqueueActivation(ctx context.Context, orderNo string) error {
@@ -103,8 +106,8 @@ func (q activationQueue) EnqueueDeferredClose(ctx context.Context, orderNo strin
 	if err != nil {
 		return err
 	}
-	task := asynq.NewTask(queuetypes.DeferCloseOrder, payload, asynq.MaxRetry(3))
-	_, err = q.client.EnqueueContext(ctx, task, asynq.ProcessIn(billing.CloseOrderTimeMinutes*time.Minute))
+	task := asynq.NewTask(queuetypes.DeferCloseOrder, payload)
+	_, err = q.client.EnqueueContext(ctx, task, asynq.MaxRetry(3), asynq.ProcessIn(billing.CloseOrderTimeMinutes*time.Minute))
 	return err
 }
 
@@ -230,14 +233,14 @@ type lifecycleEmailNotifier struct {
 	srv *ServiceContext
 }
 
-func (n lifecycleEmailNotifier) enqueue(payload queuetypes.SendEmailPayload, userEmail string) {
+func (n lifecycleEmailNotifier) enqueue(ctx context.Context, payload queuetypes.SendEmailPayload, userEmail string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		logger.Errorw("[CheckSubscription] Marshal payload failed", logger.Field("error", err.Error()))
 		return
 	}
-	task := asynq.NewTask(queuetypes.ForthwithSendEmail, body, asynq.MaxRetry(3))
-	info, err := n.srv.Queue.Enqueue(task)
+	task := asynq.NewTask(queuetypes.ForthwithSendEmail, body)
+	info, err := n.srv.Queue.EnqueueContext(ctx, task, asynq.MaxRetry(3))
 	if err != nil {
 		logger.Errorw("[CheckSubscription] Enqueue task failed", logger.Field("error", err.Error()), logger.Field("payload", string(body)))
 		return
@@ -246,8 +249,8 @@ func (n lifecycleEmailNotifier) enqueue(payload queuetypes.SendEmailPayload, use
 		logger.Field("taskID", info.ID), logger.Field("Email", userEmail))
 }
 
-func (n lifecycleEmailNotifier) NotifySubscriptionExpired(_ context.Context, email string, expiredAt time.Time) {
-	n.enqueue(queuetypes.SendEmailPayload{
+func (n lifecycleEmailNotifier) NotifySubscriptionExpired(ctx context.Context, email string, expiredAt time.Time) {
+	n.enqueue(ctx, queuetypes.SendEmailPayload{
 		Type:    queuetypes.EmailTypeExpiration,
 		Email:   email,
 		Subject: "Subscription Expired",
@@ -259,8 +262,8 @@ func (n lifecycleEmailNotifier) NotifySubscriptionExpired(_ context.Context, ema
 	}, email)
 }
 
-func (n lifecycleEmailNotifier) NotifyTrafficExceeded(_ context.Context, email string) {
-	n.enqueue(queuetypes.SendEmailPayload{
+func (n lifecycleEmailNotifier) NotifyTrafficExceeded(ctx context.Context, email string) {
+	n.enqueue(ctx, queuetypes.SendEmailPayload{
 		Type:    queuetypes.EmailTypeTrafficExceed,
 		Email:   email,
 		Subject: "Subscription Traffic Exceed",
@@ -390,7 +393,7 @@ func newNetworkModule(store repository.Store, srv *ServiceContext) network.Servi
 // not an error; the retention window keeps the id claimed briefly after the
 // delivery completes to widen that dedup.
 type asynqEventPublisher struct {
-	client *asynq.Client
+	client *asynqx.Client
 }
 
 func (p asynqEventPublisher) Publish(ctx context.Context, event eventbus.Event) error {
@@ -401,13 +404,32 @@ func (p asynqEventPublisher) Publish(ctx context.Context, event eventbus.Event) 
 		return err
 	}
 	task := asynq.NewTask(queuetypes.EventDeliver, payload)
-	_, err = p.client.EnqueueContext(ctx, task,
+	// The delivery joins the ORIGINATING request's trace (stored on the
+	// outbox row), not the publish pump's, so the wrap happens here with
+	// the resumed origin context and the enqueue below goes through the
+	// raw client to avoid re-stamping the pump's own span.
+	task = asynqx.Wrap(originContext(ctx, event.TraceCarrier), task)
+	_, err = p.client.Client.EnqueueContext(ctx, task,
 		asynq.TaskID(queuetypes.EventTaskID(event.ID)),
 		asynq.Retention(time.Hour))
 	if errors.Is(err, asynq.ErrTaskIDConflict) {
 		return nil
 	}
 	return err
+}
+
+// originContext resumes the trace context serialized on the outbox row;
+// rows without one (pre-trace events, traceless producers) fall back to the
+// pump's context.
+func originContext(ctx context.Context, carrier string) context.Context {
+	if carrier == "" {
+		return ctx
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(carrier), &m); err != nil || len(m) == 0 {
+		return ctx
+	}
+	return otel.GetTextMapPropagator().Extract(context.Background(), propagation.MapCarrier(m))
 }
 
 // newEventBus wires the domain-event bus onto the asynq broker: producers
@@ -450,7 +472,7 @@ func newNotificationModule(store repository.Store, srv *ServiceContext) notifica
 // newSupportModule wires the support module against the legacy store. The
 // adapters below satisfy the module's ports until the owning modules exist
 // (ADR-001).
-func newSupportModule(store repository.Store, queue *asynq.Client) support.Service {
+func newSupportModule(store repository.Store, queue *asynqx.Client) support.Service {
 	return support.New(support.Deps{
 		Announcements: store.Announcement(),
 		Ads:           store.Ads(),
@@ -468,7 +490,7 @@ func newSupportModule(store repository.Store, queue *asynq.Client) support.Servi
 // marketingQueue adapts the asynq client to the support module's
 // MarketingQueue port, keeping queue task types out of the module.
 type marketingQueue struct {
-	client *asynq.Client
+	client *asynqx.Client
 }
 
 func (q marketingQueue) EnqueueBatchEmail(ctx context.Context, taskID int64, processAt time.Time) (string, error) {

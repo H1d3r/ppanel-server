@@ -23,6 +23,10 @@ type Event struct {
 	Topic   string
 	Key     string
 	Payload string
+	// TraceCarrier is the producing request's serialized trace context
+	// (from the outbox row); the broker adapter resumes it so the delivery
+	// joins the originating trace.
+	TraceCarrier string
 }
 
 // Handler processes one event. Returning an error fails the delivery task so
@@ -80,7 +84,7 @@ func (b *Bus) Publish(ctx context.Context, limit int) error {
 	}
 	for _, row := range events {
 		if len(b.subscribers[row.Topic]) > 0 {
-			event := Event{ID: row.ID, Topic: row.Topic, Key: row.EventKey, Payload: row.Payload}
+			event := Event{ID: row.ID, Topic: row.Topic, Key: row.EventKey, Payload: row.Payload, TraceCarrier: row.TraceCarrier}
 			if err := b.publisher.Publish(ctx, event); err != nil {
 				return fmt.Errorf("publish event %d on %s: %w", row.ID, row.Topic, err)
 			}

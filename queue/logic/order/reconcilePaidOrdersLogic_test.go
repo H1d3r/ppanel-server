@@ -12,6 +12,7 @@ import (
 	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
+	"github.com/perfect-panel/server/pkg/asynqx"
 	"github.com/perfect-panel/server/queue/types"
 )
 
@@ -44,7 +45,7 @@ func newReconcileTestContext(t *testing.T, orders []*orderEntity.Order) (*svc.Se
 	t.Helper()
 	redisServer := miniredis.RunT(t)
 	redisOpt := asynq.RedisClientOpt{Addr: redisServer.Addr()}
-	queue := asynq.NewClient(redisOpt)
+	queue := asynqx.NewClient(asynq.NewClient(redisOpt))
 	t.Cleanup(func() { _ = queue.Close() })
 	inspector := asynq.NewInspector(redisOpt)
 	t.Cleanup(func() { _ = inspector.Close() })

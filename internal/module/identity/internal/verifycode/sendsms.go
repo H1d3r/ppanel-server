@@ -116,7 +116,7 @@ func (l *SendSmsCodeLogic) SendSmsCode(req *dto.SendSmsCodeRequest) (resp *dto.S
 	// Create a queue task
 	task := asynq.NewTask(queue.ForthwithSendSms, payloadValue)
 	// Enqueue the task
-	taskInfo, err := l.deps.Queue.Enqueue(task)
+	taskInfo, err := l.deps.Queue.EnqueueContext(l.ctx, task)
 	if err != nil {
 		_ = verification.DeleteVerificationCode(l.ctx, l.deps.Redis, cacheKey)
 		l.Errorw("[SendSmsCode]: Enqueue Error", logger.Field("error", err.Error()), logger.Field("type", taskPayload.Type))

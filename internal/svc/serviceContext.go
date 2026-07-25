@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/asynqx"
 	"github.com/perfect-panel/server/pkg/limit"
 	"github.com/perfect-panel/server/pkg/nodeMultiplier"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -28,7 +29,7 @@ import (
 type ServiceContext struct {
 	Redis        *redis.Client
 	Config       config.Config
-	Queue        *asynq.Client
+	Queue        *asynqx.Client
 	Inspector    *asynq.Inspector
 	ExchangeRate *exchangeRate.Cache
 	GeoIP        *IPLocation

@@ -2,10 +2,14 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/repository"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 )
 
@@ -22,10 +26,30 @@ func NewOutboxRepo(db *gorm.DB) repository.OutboxRepo {
 
 func (m *outboxRepo) Append(ctx context.Context, topic, eventKey, payload string) error {
 	return m.db.WithContext(ctx).Create(&outbox.Event{
-		Topic:    topic,
-		EventKey: eventKey,
-		Payload:  payload,
+		Topic:        topic,
+		EventKey:     eventKey,
+		Payload:      payload,
+		TraceCarrier: traceCarrier(ctx),
 	}).Error
+}
+
+// traceCarrier serializes the caller's trace context so the event's later
+// queue delivery can resume the producing request's trace; no active span
+// means an empty carrier.
+func traceCarrier(ctx context.Context) string {
+	if !oteltrace.SpanContextFromContext(ctx).IsValid() {
+		return ""
+	}
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	if len(carrier) == 0 {
+		return ""
+	}
+	serialized, err := json.Marshal(carrier)
+	if err != nil {
+		return ""
+	}
+	return string(serialized)
 }
 
 func (m *outboxRepo) ListUnpublished(ctx context.Context, limit int) ([]*outbox.Event, error) {
