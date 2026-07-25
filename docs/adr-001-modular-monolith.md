@@ -232,6 +232,14 @@ trace。约束：task 选项必须传给 `EnqueueContext` 而非内嵌 `NewTask`
 内嵌选项丢失；存量 6 处已提升）。滚动部署窗口：新生产者+旧 worker 读不懂信封——
 单二进制同批升级即可，多副本滚动时先升 worker。
 
+**错误码按域分段（2026-07-25）**：存量 66 码**冻结原值**（客户端按数值分支，重编号即
+breaking change），新码必须落在属主模块的万段内：Shared=10xxxx、identity=11xxxx、
+billing=12xxxx、subscription=13xxxx、network=14xxxx、support=15xxxx、platform=16xxxx、
+notification=17xxxx（`pkg/xerr/errCode.go` 的 Band* 常量）。
+`TestErrorCodeSegmentation`（AST 解析）强制：值唯一、冻结集不增不减、新码必须入段且
+必须有 message；4 个历史无 message 的码（20010/61005/90002/90009）单列冻结，只许收窄。
+第 6 步 gRPC 化时业务码经 status detail 过线，分段保证多服务独立演进不撞号。
+
 **svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩后定格在 49（含事件总线的
 queue 壳 `queue/logic/events`），剩余条目全部为组装根/传输层性质——`cmd`、`initialize`、
 `internal`（server）、`internal/handler/**`（薄壳调门面）、`internal/middleware`、
