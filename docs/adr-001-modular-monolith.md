@@ -99,10 +99,14 @@ internal/module/<name>/
      `InBillingTx` 等作用域事务，闭包只拿到本域仓储，跨域写**编译失败**。
      `WalletRepo` 把"钱包归 billing"落到代码（billing 事务经 `Wallet()` 而非 `User()`
      动钱包列）。已迁移的调用点：库存预留/回补、订阅检查、退订两段、流量聚合两段、
-     激活的建号/充值/佣金/结算段、关单主事务、portal 补偿。仍留在通用 `InTx` 的例外（均有注释标记）：
-     订阅履约段（过渡期 user 行锁）；注册送试用 ×4（email/telephone/oauth/device 建号 +
-     试用订阅同事务）；管理员用户编辑与建号（identity 资料 + billing 钱包的双域管理流）；
-     定时赠金任务（订阅状态读 + 钱包变动 + 任务簿记）。新购主事务已收窄为 InBillingTx。
+     激活的建号/充值/佣金/结算段、关单主事务、portal 补偿。新购主事务已收窄为 InBillingTx。
+     **通用 `InTx` 的例外已清零（2026-07-25）**：订阅履约段改用 `subscription_user_serial`
+     串行锁（InSubscriptionTx）；注册送试用 ×4 事件化（identity 事务只写本域表 +
+     `identity.user_registered` outbox，试用授予由 subscription 消费，见下）；管理员建号/编辑
+     两段化（identity 事务先行承载校验，billing 事务随后动钱包，段间失败留下可重调的账号）；
+     定时赠金任务分段（每订阅一个 subscription 事务 + 一个 billing 事务，
+     `(task, subscription)` inbox 幂等，最后 platform 事务写任务簿记）。业务代码中仅剩
+     billing checkout 的自有端口仍以 `InTx` 命名，其事务为单域（billing）。
    - ✅ **退订两段化**（`unsubscribeLogic`）：subscription 事务翻转状态并在取消标记中持久化
      "orderID|应退金额"，billing 事务按标记退款（赠金优先）并写退款标记；两段之间崩溃时，
      用户重试会命中"已扣减但未退款"分支直接续跑退款段。
@@ -185,6 +189,25 @@ internal/module/<name>/
 显式注入。实体包按表归属拆分（`entity/usersub`、`entity/wallet`）。模块 import
 `internal/repository` 自此为"依赖共享契约"，不再是过渡债务；拆库时每模块把自己的
 builder 指向独立连接即可。不允许 import `internal/svc` 与 `internal/logic`（测试强制）。
+
+**事件总线显性化 + 实体入模（2026-07-25）**：
+- `internal/eventbus.Bus`：通用 outbox（`domain_event_outbox` 表，迁移 02145）+ 进程内
+  分发器。生产者在本域事务内 `Outbox().Append(topic, key, payload)`；调度任务
+  `scheduler:events:dispatch`（@every 5s）驱动 `Dispatch`，全部订阅者成功才标记已发布，
+  at-least-once + 订阅者 inbox 幂等，同 id 顺序保序（首个失败即停本轮）。换消息队列
+  只换 driver：topic → broker topic、订阅者 → consumer group。已发布事件随每日清理
+  按 30 天保留期删除。
+- 首个总线事件：`identity.user_registered`（key=userId）。四个注册流仅追加事件；
+  subscription 的 trial 子域消费（消费者 `subscription.trial_grant`），禁用策略也消费
+  事件（标记记录决策，策略后改不追溯补发）。
+- 实体包入模：`internal/model/entity/<pkg>` → `internal/module/<owner>/entity/<pkg>`，
+  归属即表属主映射（billing=order/payment/coupon/wallet，subscription=subscribe/usersub，
+  identity=user/auth，network=node/traffic，support=ticket/announcement/ads/document，
+  platform=system/log/task/client/inbox/outbox）。实体包是纯数据契约，允许跨模块 import；
+  `TestModuleLayout` 相应放行 `entity/`。`internal/model` 仅剩 `dto`。
+- 持久化消费者身份（禁止改名，改名即重放已提交阶段）：`identity.guest_account`、
+  `subscription.fulfillment`、`identity.balance_recharge`、`identity.commission`、
+  `subscription.trial_grant`、`subscription.quota_grant`、`billing.quota_gift`。
 
 **svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩至 48，剩余条目全部为
 组装根/传输层性质——`cmd`、`initialize`、`internal`（server）、`internal/handler/**`
