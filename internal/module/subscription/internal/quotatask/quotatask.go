@@ -1,6 +1,11 @@
 // Package quotatask processes the admin-scheduled quota grants: extending
-// subscription time and crediting gift money for a scope of subscriptions,
-// atomically with the task bookkeeping. Only the module facade may reach it.
+// subscription time and crediting gift money for a scope of subscriptions.
+// The old single cross-domain transaction is staged into one subscription
+// transaction and one billing transaction per subscription — each idempotent
+// via a per-(task, subscription) inbox marker — followed by a platform
+// transaction for the task bookkeeping, so a retry after a mid-scope failure
+// resumes where it stopped without double-granting. Only the module facade
+// may reach it.
 package quotatask
 
 import (
@@ -29,11 +34,18 @@ const (
 
 )
 
+// Inbox consumer names for the two idempotent stages. These are persisted
+// identities: renaming one makes committed grants replay.
+const (
+	inboxQuotaGrant = "subscription.quota_grant"
+	inboxQuotaGift  = "billing.quota_gift"
+)
+
 // Deps declares the subdomain's dependencies; the module facade forwards
 // them from the composition root.
 type Deps struct {
-	// Store carries the deliberate cross-domain transaction (subscription
-	// state + billing gift + task bookkeeping) and the post-commit cache
+	// Store carries the staged domain transactions (subscription grant,
+	// billing gift, platform task bookkeeping) and the post-commit cache
 	// invalidation.
 	Store repository.Store
 }
@@ -168,134 +180,114 @@ func (l *QuotaTaskLogic) getSubscribes(ctx context.Context, subscriberIDs []int6
 	return subscribes, nil
 }
 
+// inboxKey identifies one subscription's grant within one task run for the
+// idempotency markers.
+func inboxKey(taskID, subscribeID int64) string {
+	return fmt.Sprintf("%d:%d", taskID, subscribeID)
+}
+
+// processSubscribes stages the grant per subscription: a subscription
+// transaction (time extension, traffic reset) then a billing transaction
+// (gift credit), each skipping via its inbox marker on retry. A hard failure
+// stops the run with the task still pending, so the queue retry resumes at
+// the first unprocessed subscription. Soft per-subscription failures are
+// accumulated into the task's error report, matching the old behavior.
 func (l *QuotaTaskLogic) processSubscribes(ctx context.Context, subscribes []*usersub.Subscribe, content task.QuotaContent, taskInfo *task.Task) error {
-	// Deliberate cross-domain transaction: the scheduled gift grant reads
-	// subscription state and moves billing money atomically with its task
-	// bookkeeping; it splits into an event-driven flow when the domains
-	// become services.
-	return l.deps.Store.InTx(ctx, func(store repository.Store) error {
-		var errors []ErrorInfo
-		now := timeutil.Now()
+	var errs []ErrorInfo
+	now := timeutil.Now()
 
-		for _, sub := range subscribes {
-			if err := l.processSubscription(ctx, store, sub, content, now, &errors); err != nil {
-				return err
-			}
+	for _, sub := range subscribes {
+		// 验证订阅数据
+		if sub == nil {
+			errs = append(errs, ErrorInfo{
+				UserSubscribeId: 0,
+				Error:           "subscription is nil",
+			})
+			continue
 		}
-
-		// 根据错误情况决定任务状态
-		status := int8(2) // Completed
-		if len(errors) > 0 {
-			logger.WithContext(ctx).Error("[QuotaTaskLogic.processSubscribes] some subscriptions failed",
-				logger.Field("total", len(subscribes)),
-				logger.Field("failed", len(errors)),
-			)
-			// 如果所有订阅都失败，标记为失败状态
-			if len(errors) == len(subscribes) {
-				status = 3 // Failed
-			}
-			errs, err := json.Marshal(errors)
-			if err != nil {
-				logger.WithContext(ctx).Error("[QuotaTaskLogic.processSubscribes] marshal errors failed",
-					logger.Field("error", err.Error()),
-				)
-				return err
-			}
-			taskInfo.Errors = string(errs)
-		}
-
-		taskInfo.Current = uint64(len(subscribes))
-		taskInfo.Status = status
-		if err := store.Task().Update(ctx, taskInfo); err != nil {
-			logger.WithContext(ctx).Error("[QuotaTaskLogic.processSubscribes] update task status error",
-				logger.Field("error", err.Error()),
-				logger.Field("taskID", taskInfo.Id),
-			)
+		if err := l.grantSubscription(ctx, taskInfo.Id, sub, content, now, &errs); err != nil {
 			return err
 		}
+		if content.GiftValue != 0 {
+			if err := l.grantGift(ctx, taskInfo.Id, sub, content, now, &errs); err != nil {
+				return err
+			}
+		}
+	}
 
-		return nil
+	return l.finishTask(ctx, taskInfo, len(subscribes), errs)
+}
+
+// grantSubscription applies the time extension and traffic reset in a
+// subscription-domain transaction, exactly once per (task, subscription).
+func (l *QuotaTaskLogic) grantSubscription(ctx context.Context, taskID int64, sub *usersub.Subscribe, content task.QuotaContent, now time.Time, errs *[]ErrorInfo) error {
+	return l.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+		mark, err := store.Inbox().Find(ctx, inboxQuotaGrant, inboxKey(taskID, sub.Id))
+		if err != nil {
+			return err
+		}
+		if mark != nil {
+			return nil
+		}
+
+		updated := false
+
+		// 处理时间延长 - 修复逻辑：只要Days不为0就处理，不管ExpireTime是否为0
+		if content.Days != 0 {
+			if sub.ExpireTime.Unix() == 0 || sub.ExpireTime.Before(now) {
+				// 如果没有过期时间或已过期，从现在开始计算
+				sub.ExpireTime = now.AddDate(0, 0, int(content.Days))
+			} else {
+				// 在原有过期时间基础上延长
+				sub.ExpireTime = sub.ExpireTime.AddDate(0, 0, int(content.Days))
+			}
+			// 如果订阅延长到未来时间，设置为激活状态
+			if sub.ExpireTime.After(now) && sub.Status != 1 {
+				sub.Status = 1 // Active
+			}
+			updated = true
+		}
+
+		// 处理流量重置
+		if content.ResetTraffic {
+			sub.Download = 0
+			sub.Upload = 0
+			updated = true
+			if err := l.createResetTrafficLog(ctx, store.Log(), sub.Id, sub.UserId, now); err != nil {
+				// 记录错误但不阻断整个任务,日志失败不影响主流程
+				*errs = append(*errs, ErrorInfo{
+					UserSubscribeId: sub.Id,
+					Error:           "create reset traffic log error: " + err.Error(),
+				})
+			}
+		}
+
+		// 只有在有更新时才保存订阅信息
+		if updated {
+			if err := store.UserSubscription().UpdateSubscribe(ctx, sub); err != nil {
+				*errs = append(*errs, ErrorInfo{
+					UserSubscribeId: sub.Id,
+					Error:           "update subscription error: " + err.Error(),
+				})
+			}
+		}
+
+		// The marker commits with the mutation (or records a reported soft
+		// failure), so a retried run never re-applies this stage.
+		return store.Inbox().Insert(ctx, inboxQuotaGrant, inboxKey(taskID, sub.Id), "")
 	})
 }
 
-func (l *QuotaTaskLogic) processSubscription(ctx context.Context, store repository.Store, sub *usersub.Subscribe, content task.QuotaContent, now time.Time, errors *[]ErrorInfo) error {
-	// 验证订阅数据
-	if sub == nil {
-		*errors = append(*errors, ErrorInfo{
-			UserSubscribeId: 0,
-			Error:           "subscription is nil",
-		})
-		return nil
-	}
-
-	updated := false
-
-	// 处理时间延长 - 修复逻辑：只要Days不为0就处理，不管ExpireTime是否为0
-	if content.Days != 0 {
-		if sub.ExpireTime.Unix() == 0 || sub.ExpireTime.Before(now) {
-			// 如果没有过期时间或已过期，从现在开始计算
-			sub.ExpireTime = now.AddDate(0, 0, int(content.Days))
-		} else {
-			// 在原有过期时间基础上延长
-			sub.ExpireTime = sub.ExpireTime.AddDate(0, 0, int(content.Days))
-		}
-		// 如果订阅延长到未来时间，设置为激活状态
-		if sub.ExpireTime.After(now) && sub.Status != 1 {
-			sub.Status = 1 // Active
-		}
-		updated = true
-	}
-
-	// 处理流量重置
-	if content.ResetTraffic {
-		sub.Download = 0
-		sub.Upload = 0
-		updated = true
-		if err := l.createResetTrafficLog(ctx, store, sub.Id, sub.UserId, now); err != nil {
-			// 记录错误但不阻断整个任务,日志失败不影响主流程
-			*errors = append(*errors, ErrorInfo{
-				UserSubscribeId: sub.Id,
-				Error:           "create reset traffic log error: " + err.Error(),
-			})
-		}
-	}
-
-	// 处理赠送金
-	if content.GiftValue != 0 {
-		if err := l.processGift(ctx, store, sub, content, now, errors); err != nil {
-			return err
-		}
-	}
-
-	// 只有在有更新时才保存订阅信息
-	if updated {
-		if err := store.UserSubscription().UpdateSubscribe(ctx, sub); err != nil {
-			*errors = append(*errors, ErrorInfo{
-				UserSubscribeId: sub.Id,
-				Error:           "update subscription error: " + err.Error(),
-			})
-			return nil
-		}
-	}
-
-	return nil
-}
-
-func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store, sub *usersub.Subscribe, content task.QuotaContent, now time.Time, errors *[]ErrorInfo) error {
+// grantGift credits the gift money in a billing-domain transaction, exactly
+// once per (task, subscription). The plan lookup for the percentage gift is
+// a cross-domain read done before the transaction — reference data, not
+// billing state.
+func (l *QuotaTaskLogic) grantGift(ctx context.Context, taskID int64, sub *usersub.Subscribe, content task.QuotaContent, now time.Time, errs *[]ErrorInfo) error {
 	// 验证赠送类型
 	if content.GiftType != 1 && content.GiftType != 2 {
-		*errors = append(*errors, ErrorInfo{
+		*errs = append(*errs, ErrorInfo{
 			UserSubscribeId: sub.Id,
 			Error:           fmt.Sprintf("invalid gift type: %d", content.GiftType),
-		})
-		return nil
-	}
-
-	userInfo, err := store.Wallet().FindOneForUpdate(ctx, sub.UserId)
-	if err != nil {
-		*errors = append(*errors, ErrorInfo{
-			UserSubscribeId: sub.Id,
-			Error:           "find user error: " + err.Error(),
 		})
 		return nil
 	}
@@ -306,9 +298,9 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 		giftAmount = int64(content.GiftValue)
 	case 2:
 		// 获取订阅对应的套餐信息
-		subscribeInfo, err := store.Subscribe().FindOne(ctx, sub.SubscribeId)
+		subscribeInfo, err := l.deps.Store.Subscribe().FindOne(ctx, sub.SubscribeId)
 		if err != nil {
-			*errors = append(*errors, ErrorInfo{
+			*errs = append(*errs, ErrorInfo{
 				UserSubscribeId: sub.Id,
 				Error:           "find subscribe error: " + err.Error(),
 			})
@@ -319,18 +311,74 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 		}
 	}
 
-	if giftAmount > 0 {
-		userInfo.GiftAmount += giftAmount
-		if err := store.Wallet().UpdateBalanceFields(ctx, userInfo); err != nil {
-			return fmt.Errorf("update user gift amount: %w", err)
+	return l.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
+		mark, err := store.Inbox().Find(ctx, inboxQuotaGift, inboxKey(taskID, sub.Id))
+		if err != nil {
+			return err
+		}
+		if mark != nil {
+			return nil
 		}
 
-		if err := l.createGiftLog(ctx, store, sub.Id, userInfo.UserId, giftAmount, userInfo.GiftAmount, now); err != nil {
-			return fmt.Errorf("create gift log: %w", err)
+		if giftAmount > 0 {
+			wallet, err := store.Wallet().FindOneForUpdate(ctx, sub.UserId)
+			if err != nil {
+				*errs = append(*errs, ErrorInfo{
+					UserSubscribeId: sub.Id,
+					Error:           "find user error: " + err.Error(),
+				})
+				return nil
+			}
+			wallet.GiftAmount += giftAmount
+			if err := store.Wallet().UpdateBalanceFields(ctx, wallet); err != nil {
+				return fmt.Errorf("update user gift amount: %w", err)
+			}
+			if err := l.createGiftLog(ctx, store.Log(), sub.Id, wallet.UserId, giftAmount, wallet.GiftAmount, now); err != nil {
+				return fmt.Errorf("create gift log: %w", err)
+			}
 		}
+
+		return store.Inbox().Insert(ctx, inboxQuotaGift, inboxKey(taskID, sub.Id), "")
+	})
+}
+
+// finishTask records the outcome on the task row in a platform-domain
+// transaction. The task stays pending (status 0) if an earlier stage
+// hard-failed, so the retry path is the status check in process().
+func (l *QuotaTaskLogic) finishTask(ctx context.Context, taskInfo *task.Task, total int, errs []ErrorInfo) error {
+	// 根据错误情况决定任务状态
+	status := int8(2) // Completed
+	if len(errs) > 0 {
+		logger.WithContext(ctx).Error("[QuotaTaskLogic.processSubscribes] some subscriptions failed",
+			logger.Field("total", total),
+			logger.Field("failed", len(errs)),
+		)
+		// 如果所有订阅都失败，标记为失败状态
+		if len(errs) == total {
+			status = 3 // Failed
+		}
+		marshaled, err := json.Marshal(errs)
+		if err != nil {
+			logger.WithContext(ctx).Error("[QuotaTaskLogic.processSubscribes] marshal errors failed",
+				logger.Field("error", err.Error()),
+			)
+			return err
+		}
+		taskInfo.Errors = string(marshaled)
 	}
 
-	return nil
+	taskInfo.Current = uint64(total)
+	taskInfo.Status = status
+	return l.deps.Store.InPlatformTx(ctx, func(store repository.PlatformStore) error {
+		if err := store.Task().Update(ctx, taskInfo); err != nil {
+			logger.WithContext(ctx).Error("[QuotaTaskLogic.processSubscribes] update task status error",
+				logger.Field("error", err.Error()),
+				logger.Field("taskID", taskInfo.Id),
+			)
+			return err
+		}
+		return nil
+	})
 }
 
 func (l *QuotaTaskLogic) getStartTime(sub *usersub.Subscribe, now time.Time) time.Time {
@@ -340,7 +388,7 @@ func (l *QuotaTaskLogic) getStartTime(sub *usersub.Subscribe, now time.Time) tim
 	return sub.StartTime
 }
 
-func (l *QuotaTaskLogic) createGiftLog(ctx context.Context, store repository.Store, subscribeId, userId, amount, balance int64, now time.Time) error {
+func (l *QuotaTaskLogic) createGiftLog(ctx context.Context, logs repository.LogRepo, subscribeId, userId, amount, balance int64, now time.Time) error {
 	giftLog := &log.Gift{
 		Type:        log.GiftTypeIncrease,
 		OrderNo:     "",
@@ -355,7 +403,7 @@ func (l *QuotaTaskLogic) createGiftLog(ctx context.Context, store repository.Sto
 	if err != nil {
 		return fmt.Errorf("marshal gift log error: %v", err)
 	}
-	return store.Log().Insert(ctx, &log.SystemLog{
+	return logs.Insert(ctx, &log.SystemLog{
 		Type:     log.TypeGift.Uint8(),
 		Content:  string(logString),
 		ObjectID: userId,
@@ -363,7 +411,7 @@ func (l *QuotaTaskLogic) createGiftLog(ctx context.Context, store repository.Sto
 	})
 }
 
-func (l *QuotaTaskLogic) createResetTrafficLog(ctx context.Context, store repository.Store, subscribeId, userId int64, now time.Time) error {
+func (l *QuotaTaskLogic) createResetTrafficLog(ctx context.Context, logs repository.LogRepo, subscribeId, userId int64, now time.Time) error {
 	trafficLog := &log.ResetSubscribe{
 		Type:      log.ResetSubscribeTypeQuota,
 		UserId:    userId,
@@ -375,7 +423,7 @@ func (l *QuotaTaskLogic) createResetTrafficLog(ctx context.Context, store reposi
 	if err != nil {
 		return fmt.Errorf("marshal traffic log error: %v", err)
 	}
-	return store.Log().Insert(ctx, &log.SystemLog{
+	return logs.Insert(ctx, &log.SystemLog{
 		Type:     log.TypeResetSubscribe.Uint8(),
 		Content:  string(logString),
 		ObjectID: subscribeId,

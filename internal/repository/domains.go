@@ -82,9 +82,10 @@ type NetworkStore interface {
 }
 
 // PlatformStore is the platform domain's transactional surface: system
-// settings and audit/message logs.
+// settings, scheduled-task bookkeeping and audit/message logs.
 type PlatformStore interface {
 	System() SystemRepo
+	Task() TaskRepo
 	Log() LogRepo
 	Inbox() InboxRepo
 	Outbox() OutboxRepo
