@@ -176,11 +176,13 @@ internal/module/<name>/
    | platform（共享内核） | `system`、`system_logs`、`task`、`domain_event_inbox`、`client` |
 
    审计日志（`system_logs`）与收件箱（`domain_event_inbox`）保持豁免：任何域事务可写。
-6. **拆分就绪**：门面换 gRPC 实现（`api/` 已有 protobuf 基建）、事件换消息队列、搬表。
-   前置工作（拆分启动时执行）：①模块 repo 直连——解散共享的 `internal/repository`，
-   每模块自带 repo 包（表归属已定稿，机械搬移）；②queue 编排下沉——`queue/logic/order`
-   的激活 saga、`queue/logic/subscription` 的到期检查等改为调用模块门面（saga 归属
-   billing，作为订单流程属主）。
+6. **拆分就绪**：门面换 gRPC 实现（`api/` 已有 protobuf 基建）、~~事件换消息队列~~
+   （已完成：asynq 即 broker，见下"队列化改造"——换独立 broker 只动 Publisher 适配器
+   与 worker 壳）、搬表/分库（每模块 builder 指向独立连接）、Redis 归属与配置分发。
+   前置工作已全部完成：①模块 repo 直连（仓储切割，见下）②queue 编排下沉（激活 saga、
+   到期检查、配额任务均已门面化）。
+   拆分时每个服务进程建立自己的小组装根：只构造本模块 deps，dto 契约蒸馏为该服务的
+   protobuf 定义。
 
 **仓储切割已完成（2026-07-25，伪多进程形态）**：`internal/repository` 收缩为纯契约与
 组装包——repo 接口、领域视图、作用域事务、以及由六个模块导出的 builder 拼装出的
@@ -208,15 +210,23 @@ builder 指向独立连接即可。不允许 import `internal/svc` 与 `internal
   identity=user/auth，network=node/traffic，support=ticket/announcement/ads/document，
   platform=system/log/task/client/inbox/outbox）。实体包是纯数据契约，允许跨模块 import；
   `TestModuleLayout` 相应放行 `entity/`。`internal/model` 仅剩 `dto`。
+- **dto 不入模（2026-07-25 决策）**：dto 是 API 传输契约而非持久化契约，天然承载跨域
+  组装视图（用户详情=资料+订阅+钱包），没有单一模块属主。实测：22 个文件中 11 个被
+  多模块共用（`user.go` 被 4 个模块用），16 个互相引用且存在环（`user↔common`、
+  `node↔statistics`），按模块拆包必产生 import cycle，机械搬移不可行。dto 是纯数据、
+  无行为、无 DB 依赖，留在中立位置 `internal/model/dto` 不构成债务。它的"入模"时刻
+  在第 6 步：门面换 gRPC 时按服务蒸馏为 protobuf 契约，dto 被生成类型替代。
 - 持久化消费者身份（禁止改名，改名即重放已提交阶段）：`identity.guest_account`、
   `subscription.fulfillment`、`identity.balance_recharge`、`identity.commission`、
   `subscription.trial_grant`、`subscription.quota_grant`、`billing.quota_gift`。
 
-**svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩至 48，剩余条目全部为
-组装根/传输层性质——`cmd`、`initialize`、`internal`（server）、`internal/handler/**`
-（薄壳调门面）、`internal/middleware`、`internal/route`、`internal/transport/httpserver`、
-`queue/**`、`scheduler`。业务逻辑对 `ServiceContext` 的依赖已归零；这些剩余依赖是
-进程装配的本职，不再视为债务（queue 编排的门面化并入第 6 步前置）。
+**svc 导入基线现状**（第 3 步收官判定）：基线从 71 收缩后定格在 49（含事件总线的
+queue 壳 `queue/logic/events`），剩余条目全部为组装根/传输层性质——`cmd`、`initialize`、
+`internal`（server）、`internal/handler/**`（薄壳调门面）、`internal/middleware`、
+`internal/route`、`internal/transport/httpserver`、`queue/**`、`scheduler`。业务逻辑对
+`ServiceContext` 的依赖已归零；`ServiceContext` 本身长期保留为组装根（基础设施连接 +
+七个模块门面 + EventBus + 运行时晚绑定），"拆 ServiceContext"拆的是业务依赖，
+不是消灭该类型。这些剩余依赖是进程装配的本职，不再视为债务。
 
 ## 门面接口草案（示意）
 
