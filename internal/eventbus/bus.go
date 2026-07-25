@@ -1,18 +1,18 @@
-// Package eventbus is the in-process domain-event dispatcher (ADR-001
-// step-6 preparation). Producers append events to the outbox inside their
-// domain transaction; the dispatcher drains unpublished events and delivers
-// each to every subscriber of its topic. Delivery is at-least-once: an
-// event is marked published only after every subscriber succeeded, and
-// subscribers are expected to be idempotent (the inbox pattern). Replacing
-// this dispatcher with a message broker changes only the driver: topics map
-// to broker topics and subscribers to consumer groups.
+// Package eventbus is the domain-event bus riding the asynq message queue
+// (ADR-001 step-6 preparation). Producers append events to the outbox inside
+// their domain transaction; the publish pump hands unpublished events to the
+// broker and marks them published on successful enqueue; the queue worker
+// delivers each event to every subscriber of its topic, with the broker
+// owning retries, backoff and the dead-letter archive. Delivery is
+// at-least-once and subscribers are expected to be idempotent (the inbox
+// pattern). Replacing asynq with another broker changes only the Publisher
+// adapter and the worker shell.
 package eventbus
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )
@@ -25,10 +25,17 @@ type Event struct {
 	Payload string
 }
 
-// Handler processes one event. Returning an error keeps the event
-// unpublished so the next dispatch tick retries it; handlers must therefore
-// be idempotent.
+// Handler processes one event. Returning an error fails the delivery task so
+// the broker retries it; handlers must therefore be idempotent.
 type Handler func(ctx context.Context, event Event) error
+
+// Publisher enqueues an event on the message broker. Publishing the same
+// event twice must be safe: the pump replays an enqueue when marking the
+// event published fails, so the adapter deduplicates by event ID where the
+// broker allows and subscribers stay idempotent regardless.
+type Publisher interface {
+	Publish(ctx context.Context, event Event) error
+}
 
 type subscription struct {
 	consumer string
@@ -38,12 +45,14 @@ type subscription struct {
 // Bus routes outbox events to subscribers by topic.
 type Bus struct {
 	outbox      repository.OutboxRepo
+	publisher   Publisher
 	subscribers map[string][]subscription
 }
 
-func New(outboxRepo repository.OutboxRepo) *Bus {
+func New(outboxRepo repository.OutboxRepo, publisher Publisher) *Bus {
 	return &Bus{
 		outbox:      outboxRepo,
+		publisher:   publisher,
 		subscribers: make(map[string][]subscription),
 	}
 }
@@ -51,28 +60,30 @@ func New(outboxRepo repository.OutboxRepo) *Bus {
 // Subscribe registers a consumer for a topic. The consumer name is the
 // subscriber's identity for logging and mirrors the inbox consumer it uses
 // for idempotency. Registration happens at composition time, before
-// dispatching starts; Subscribe is not safe for concurrent use with
-// Dispatch.
+// publishing and delivery start; Subscribe is not safe for concurrent use
+// with them.
 func (b *Bus) Subscribe(topic, consumer string, handler Handler) {
 	b.subscribers[topic] = append(b.subscribers[topic], subscription{consumer: consumer, handler: handler})
 }
 
-// Dispatch drains up to limit unpublished events, delivering each to every
-// subscriber of its topic. An event is marked published only when all its
-// subscribers succeed; a failing subscriber leaves the event unpublished
-// for the next tick (subscribers that already succeeded re-run and skip via
-// their inbox markers). Events without subscribers are marked published
-// immediately so an orphaned topic cannot wedge the queue.
-func (b *Bus) Dispatch(ctx context.Context, limit int) error {
+// Publish drains up to limit unpublished outbox events onto the broker,
+// marking each published once its enqueue succeeded. A failing enqueue stops
+// the tick so events enter the broker in outbox order; ordering between
+// deliveries is then the broker's (concurrent workers), which subscribers
+// already tolerate via their per-key serialization and inbox markers.
+// Events whose topic has no subscribers are marked published without an
+// enqueue so an orphaned topic cannot wedge the pump.
+func (b *Bus) Publish(ctx context.Context, limit int) error {
 	events, err := b.outbox.ListUnpublished(ctx, limit)
 	if err != nil {
 		return err
 	}
 	for _, row := range events {
-		if err := b.deliver(ctx, row); err != nil {
-			// Keep ordering per event id: stop this tick on the first
-			// failure so retries preserve arrival order.
-			return err
+		if len(b.subscribers[row.Topic]) > 0 {
+			event := Event{ID: row.ID, Topic: row.Topic, Key: row.EventKey, Payload: row.Payload}
+			if err := b.publisher.Publish(ctx, event); err != nil {
+				return fmt.Errorf("publish event %d on %s: %w", row.ID, row.Topic, err)
+			}
 		}
 		if err := b.outbox.MarkPublished(ctx, row.ID); err != nil {
 			return err
@@ -81,14 +92,25 @@ func (b *Bus) Dispatch(ctx context.Context, limit int) error {
 	return nil
 }
 
-func (b *Bus) deliver(ctx context.Context, row *outbox.Event) error {
-	event := Event{ID: row.ID, Topic: row.Topic, Key: row.EventKey, Payload: row.Payload}
-	for _, sub := range b.subscribers[row.Topic] {
+// Deliver runs every subscriber of the event's topic; the queue worker calls
+// it once per delivery task. The first failing subscriber fails the task so
+// the broker retries the whole event — subscribers that already succeeded
+// re-run and skip via their inbox markers.
+func (b *Bus) Deliver(ctx context.Context, event Event) error {
+	subs := b.subscribers[event.Topic]
+	if len(subs) == 0 {
+		// A topic can lose its last subscriber between enqueue and delivery
+		// (e.g. across a deploy); ack rather than retry forever.
+		logger.WithContext(ctx).Errorw("[EventBus] no subscribers for delivered event; dropping",
+			logger.Field("topic", event.Topic), logger.Field("key", event.Key))
+		return nil
+	}
+	for _, sub := range subs {
 		if err := sub.handler(ctx, event); err != nil {
-			logger.WithContext(ctx).Errorw("[EventBus] subscriber failed; event stays queued",
-				logger.Field("topic", row.Topic), logger.Field("key", row.EventKey),
+			logger.WithContext(ctx).Errorw("[EventBus] subscriber failed; broker will retry",
+				logger.Field("topic", event.Topic), logger.Field("key", event.Key),
 				logger.Field("consumer", sub.consumer), logger.Field("error", err.Error()))
-			return fmt.Errorf("subscriber %s on %s: %w", sub.consumer, row.Topic, err)
+			return fmt.Errorf("subscriber %s on %s: %w", sub.consumer, event.Topic, err)
 		}
 	}
 	return nil

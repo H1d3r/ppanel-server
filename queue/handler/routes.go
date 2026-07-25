@@ -31,7 +31,10 @@ func RegisterHandlers(mux *asynq.ServeMux, serverCtx *svc.ServiceContext) {
 	// Deliver durable order events to Redis Pub/Sub. The database remains the
 	// source of truth for SSE replay when publication is delayed or duplicated.
 	mux.Handle(types.SchedulerPublishOrderEvents, orderLogic.NewPublishOrderEventsLogic(serverCtx))
+	// Domain events: the pump publishes outbox rows onto the queue; the
+	// delivery worker runs the topic's subscribers per event.
 	mux.Handle(types.SchedulerDispatchDomainEvents, events.NewDispatchDomainEventsLogic(serverCtx))
+	mux.Handle(types.EventDeliver, events.NewDeliverDomainEventLogic(serverCtx))
 	mux.Handle(types.SchedulerCleanupOrderEvents, orderLogic.NewCleanupOrderEventsLogic(serverCtx))
 
 	// Forthwith traffic statistics

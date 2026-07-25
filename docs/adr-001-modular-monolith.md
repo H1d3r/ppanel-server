@@ -191,12 +191,15 @@ internal/module/<name>/
 builder 指向独立连接即可。不允许 import `internal/svc` 与 `internal/logic`（测试强制）。
 
 **事件总线显性化 + 实体入模（2026-07-25）**：
-- `internal/eventbus.Bus`：通用 outbox（`domain_event_outbox` 表，迁移 02145）+ 进程内
-  分发器。生产者在本域事务内 `Outbox().Append(topic, key, payload)`；调度任务
-  `scheduler:events:dispatch`（@every 5s）驱动 `Dispatch`，全部订阅者成功才标记已发布，
-  at-least-once + 订阅者 inbox 幂等，同 id 顺序保序（首个失败即停本轮）。换消息队列
-  只换 driver：topic → broker topic、订阅者 → consumer group。已发布事件随每日清理
-  按 30 天保留期删除。
+- `internal/eventbus.Bus`：通用 outbox（`domain_event_outbox` 表，迁移 02145）+
+  **asynq 作消息队列（2026-07-25 队列化改造）**。生产者在本域事务内
+  `Outbox().Append(topic, key, payload)`；发布泵 `scheduler:events:dispatch`（@every 5s）
+  驱动 `Bus.Publish`——把未发布事件 enqueue 为 `events:deliver` 任务（TaskID=事件 id 去重，
+  冲突即成功，Retention 1h 拓宽去重窗），enqueue 成功即标记已发布，无订阅者的 topic
+  直接标记不入队；投递 worker（queue mux）调 `Bus.Deliver` 执行该 topic 全部订阅者，
+  首个失败即失败任务，重试/退避/死信归档全归 asynq。at-least-once + 订阅者 inbox 幂等；
+  投递并发无序（订阅者以 per-key 串行锁与 inbox 自保）。已发布事件随每日清理按
+  30 天保留期删除。换独立 broker（NATS/Kafka）只换 Publisher 适配器与 worker 壳。
 - 首个总线事件：`identity.user_registered`（key=userId）。四个注册流仅追加事件；
   subscription 的 trial 子域消费（消费者 `subscription.trial_grant`），禁用策略也消费
   事件（标记记录决策，策略后改不追溯补发）。

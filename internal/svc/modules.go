@@ -384,12 +384,39 @@ func newNetworkModule(store repository.Store, srv *ServiceContext) network.Servi
 	})
 }
 
-// newEventBus wires the in-process domain-event bus: producers append to
-// the outbox inside their transactions; the queue's dispatch task drains it
-// through these subscriptions. Handlers call module facades and rely on the
-// modules' inbox idempotency.
+// asynqEventPublisher puts domain events on the asynq queue. The task id is
+// derived from the outbox event id, so a replayed enqueue (mark-published
+// failed after a successful enqueue) hits the id conflict and is success,
+// not an error; the retention window keeps the id claimed briefly after the
+// delivery completes to widen that dedup.
+type asynqEventPublisher struct {
+	client *asynq.Client
+}
+
+func (p asynqEventPublisher) Publish(ctx context.Context, event eventbus.Event) error {
+	payload, err := json.Marshal(queuetypes.EventDeliverPayload{
+		ID: event.ID, Topic: event.Topic, Key: event.Key, Payload: event.Payload,
+	})
+	if err != nil {
+		return err
+	}
+	task := asynq.NewTask(queuetypes.EventDeliver, payload)
+	_, err = p.client.EnqueueContext(ctx, task,
+		asynq.TaskID(queuetypes.EventTaskID(event.ID)),
+		asynq.Retention(time.Hour))
+	if errors.Is(err, asynq.ErrTaskIDConflict) {
+		return nil
+	}
+	return err
+}
+
+// newEventBus wires the domain-event bus onto the asynq broker: producers
+// append to the outbox inside their transactions; the queue's publish pump
+// enqueues each event as an events:deliver task; the queue worker delivers
+// it through these subscriptions. Handlers call module facades and rely on
+// the modules' inbox idempotency.
 func newEventBus(store repository.Store, srv *ServiceContext) *eventbus.Bus {
-	bus := eventbus.New(store.Outbox())
+	bus := eventbus.New(store.Outbox(), asynqEventPublisher{client: srv.Queue})
 	bus.Subscribe("identity.user_registered", "subscription.trial_grant", func(ctx context.Context, event eventbus.Event) error {
 		userID, err := strconv.ParseInt(event.Key, 10, 64)
 		if err != nil {
