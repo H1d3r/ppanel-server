@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/model/entity/inbox"
 	"github.com/perfect-panel/server/internal/model/entity/order"
+	"github.com/perfect-panel/server/internal/model/entity/outbox"
 	"github.com/perfect-panel/server/internal/orderstream"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/redis/go-redis/v9"
@@ -22,7 +23,7 @@ func TestPublishOrderEventsDeliversDurableOutboxThenMarksPublished(t *testing.T)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&order.Event{}, &inbox.Record{}); err != nil {
+	if err := db.AutoMigrate(&order.Event{}, &inbox.Record{}, &outbox.Event{}); err != nil {
 		t.Fatalf("migrate event: %v", err)
 	}
 	event := &order.Event{OrderID: 1, OrderNo: "outbox-order", EventType: "order.created", Payload: `{}`}
@@ -64,7 +65,7 @@ func TestCleanupOrderEventsKeepsUnpublishedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&order.Event{}, &inbox.Record{}); err != nil {
+	if err := db.AutoMigrate(&order.Event{}, &inbox.Record{}, &outbox.Event{}); err != nil {
 		t.Fatalf("migrate event: %v", err)
 	}
 	old := time.Now().Add(-orderEventRetention - time.Hour)
