@@ -7,7 +7,6 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"strings"
 
-	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/cache"
@@ -26,14 +25,18 @@ var _ repository.SubscribeRepo = (*subscribeRepo)(nil)
 type subscribeRepo struct {
 	cache.CachedConn
 	table string
+	// nodes resolves node-derived cache keys from the network bundle; plan
+	// cache invalidation must not query the node table from this domain.
+	nodes repository.NodeCacheKeyBridge
 }
 
 // NewSubscribeRepo builds the module-owned implementation over the shared
 // cached connection.
-func NewSubscribeRepo(conn cache.CachedConn) repository.SubscribeRepo {
+func NewSubscribeRepo(conn cache.CachedConn, nodes repository.NodeCacheKeyBridge) repository.SubscribeRepo {
 	return &subscribeRepo{
 		CachedConn: conn,
 		table:      "subscribe",
+		nodes:      nodes,
 	}
 }
 
@@ -54,31 +57,19 @@ func (m *subscribeRepo) getCacheKeys(data *subscribe.Subscribe) []string {
 		return []string{}
 	}
 	var keys []string
+	var nodeIDs []int64
+	var tags []string
 	if data.Nodes != "" {
-		var nodes []*node.Node
-		ids := strings.Split(data.Nodes, ",")
-
-		err := m.QueryNoCacheCtx(context.Background(), &nodes, func(conn *gorm.DB, v interface{}) error {
-			return conn.Model(&node.Node{}).Where("id IN (?)", tool.StringSliceToInt64Slice(ids)).Find(&nodes).Error
-		})
-		if err == nil {
-			for _, n := range nodes {
-				keys = append(keys, fmt.Sprintf("%s%d", node.ServerUserListCacheKey, n.ServerId))
-				keys = append(keys, fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, n.ServerId, n.Protocol))
-			}
-		}
+		nodeIDs = tool.StringSliceToInt64Slice(strings.Split(data.Nodes, ","))
 	}
 	if data.NodeTags != "" {
-		var nodes []*node.Node
-		tags := tool.RemoveDuplicateElements(strings.Split(data.NodeTags, ",")...)
-		err := m.QueryNoCacheCtx(context.Background(), &nodes, func(conn *gorm.DB, v interface{}) error {
-			return conn.Model(&node.Node{}).Scopes(subscribeInSet("tags", tags)).Find(&nodes).Error
-		})
-		if err == nil {
-			for _, n := range nodes {
-				keys = append(keys, fmt.Sprintf("%s%d", node.ServerUserListCacheKey, n.ServerId))
-				keys = append(keys, fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, n.ServerId, n.Protocol))
-			}
+		tags = tool.RemoveDuplicateElements(strings.Split(data.NodeTags, ",")...)
+	}
+	if (len(nodeIDs) > 0 || len(tags) > 0) && m.nodes != nil {
+		// Best effort, matching the old behavior: a failed node lookup
+		// degrades to fewer invalidation keys, not a failed plan write.
+		if nodeKeys, err := m.nodes.NodeUserListCacheKeys(context.Background(), nodeIDs, tags); err == nil {
+			keys = append(keys, nodeKeys...)
 		}
 	}
 

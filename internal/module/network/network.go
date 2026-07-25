@@ -89,9 +89,11 @@ type Deps struct {
 func NewRepoBuilder(rds *redis.Client) repository.NetworkBuilder {
 	retrier := repo.NewServerCacheInvalidationRetrier(rds)
 	return func(c repository.ModuleConn) repository.NetworkRepos {
+		nodes := repo.NewNodeRepo(c.DB, c.Redis, retrier)
 		return repository.NetworkRepos{
-			Nodes:   repo.NewNodeRepo(c.DB, c.Redis, retrier),
-			Traffic: repo.NewTrafficRepo(c.DB),
+			Nodes:    nodes,
+			Traffic:  repo.NewTrafficRepo(c.DB),
+			NodeKeys: nodes.(repository.NodeCacheKeyBridge),
 		}
 	}
 }

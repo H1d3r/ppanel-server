@@ -44,7 +44,33 @@ var (
 	_ repository.UserSubscriptionRepo    = (*UserSubscriptionRepo)(nil)
 	_ repository.SubscriptionTrafficRepo = (*UserSubscriptionRepo)(nil)
 	_ repository.SubscriptionCacheBridge = (*UserSubscriptionRepo)(nil)
+	_ repository.SubscriptionScopeBridge = (*UserSubscriptionRepo)(nil)
 )
+
+// SubscriptionUserIDs resolves the distinct user ids whose subscription
+// rows match the filter (repository.SubscriptionScopeBridge): the identity
+// bundle's admin user filter and email-recipient scopes consume the id
+// list instead of querying this table from identity SQL.
+func (m *UserSubscriptionRepo) SubscriptionUserIDs(ctx context.Context, filter repository.SubscriptionUserFilter) ([]int64, error) {
+	ids := make([]int64, 0)
+	err := m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
+		q := conn.Model(&usersub.Subscribe{}).Distinct("user_id")
+		if filter.UserSubscribeID != nil {
+			q = q.Where("id = ?", *filter.UserSubscribeID)
+		}
+		if filter.SubscribeID != nil {
+			q = q.Where("subscribe_id = ?", *filter.SubscribeID)
+		}
+		if filter.Token != "" {
+			q = q.Where("(token = ? OR uuid = ?)", filter.Token, filter.Token)
+		}
+		if filter.Statuses != nil {
+			q = q.Where("status IN ?", filter.Statuses)
+		}
+		return q.Pluck("user_id", v).Error
+	})
+	return ids, err
+}
 
 // NewUserSubscriptionRepo builds the module-owned implementation over the
 // shared cached connection.

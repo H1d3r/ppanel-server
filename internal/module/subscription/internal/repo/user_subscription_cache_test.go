@@ -168,7 +168,7 @@ func TestSubscribeRepoInvalidatesEveryCachedUserListThatCanContainPlan(t *testin
 			redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 			t.Cleanup(func() { _ = redisClient.Close() })
 
-			if _, err := NewSubscribeRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn()).(*subscribeRepo).getUserSubscribeCacheKeys(context.Background(), 10); err != nil {
+			if _, err := NewSubscribeRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), nil).(*subscribeRepo).getUserSubscribeCacheKeys(context.Background(), 10); err != nil {
 				t.Fatalf("getUserSubscribeCacheKeys: %v", err)
 			}
 

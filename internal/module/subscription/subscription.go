@@ -152,14 +152,15 @@ type Deps struct {
 // NewRepoBuilder exports the module-owned repository implementations for
 // store assembly (ADR-001 step-6 preparation).
 func NewRepoBuilder() repository.SubscriptionBuilder {
-	return func(c repository.ModuleConn) repository.SubscriptionRepos {
+	return func(c repository.ModuleConn, nodes repository.NodeCacheKeyBridge) repository.SubscriptionRepos {
 		conn := c.Conn()
 		subs := repo.NewUserSubscriptionRepo(conn)
 		return repository.SubscriptionRepos{
-			Plans:       repo.NewSubscribeRepo(conn),
+			Plans:       repo.NewSubscribeRepo(conn, nodes),
 			UserSubs:    subs,
 			Traffic:     subs,
 			CacheBridge: subs,
+			ScopeBridge: subs,
 		}
 	}
 }

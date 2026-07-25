@@ -232,6 +232,22 @@ trace。约束：task 选项必须传给 `EnqueueContext` 而非内嵌 `NewTask`
 内嵌选项丢失；存量 6 处已提升）。滚动部署窗口：新生产者+旧 worker 读不懂信封——
 单二进制同批升级即可，多副本滚动时先升 worker。
 
+**越权 SQL 清零（2026-07-25）**：模块 repo 中残存的 4 处跨域表访问全部桥接化，
+物理拆库自此无 SQL 级障碍：①identity 的邮件收件人 scope 过滤与②admin 用户列表的
+订阅条件（原 EXISTS 子查询）→ `SubscriptionScopeBridge.SubscriptionUserIDs`（订阅侧
+解析出 user_id 列表，identity 侧 `IN`/空列表 `1=0`）；③identity 的用户统计订单计数
+→ `OrderStatsBridge`（billing 属主执行，Go 内 merge）；④subscription 的套餐缓存
+失效键（原直查 node 表）→ `NodeCacheKeyBridge`（network 属主解析）。桥在
+`repository/builders.go` 声明、属主 bundle 提供、`newGormStore` 装配（network→
+subscription→billing→identity 的构建顺序）；identity 的三座桥收拢为 `IdentityBridges`。
+方言日期分桶助手抽为 `pkg/orm.DateBucketExpr`。顺带修了 token/uuid OR 条件与其他
+过滤器 AND 组合时的优先级缺陷（补括号）。
+
+**拆库时的共享表落位（设计预记，第 6 步执行）**：`domain_event_inbox`/
+`domain_event_outbox` 必须与本域事务同库提交——拆库时**每服务自带一份**（同构表），
+不共享；`system_logs` 每服务自带日志表（或改日志事件流）；迁移流按表归属切分历史，
+新迁移建议带域标记。
+
 **错误码按域分段（2026-07-25）**：存量 66 码**冻结原值**（客户端按数值分支，重编号即
 breaking change），新码必须落在属主模块的万段内：Shared=10xxxx、identity=11xxxx、
 billing=12xxxx、subscription=13xxxx、network=14xxxx、support=15xxxx、platform=16xxxx、

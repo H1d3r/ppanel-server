@@ -219,13 +219,15 @@ func NewRepoBuilder() repository.BillingBuilder {
 	return func(c repository.ModuleConn) repository.BillingRepos {
 		conn := c.Conn()
 		wallets := repo.NewWalletRepo(conn)
+		orders := repo.NewOrderRepo(conn)
 		return repository.BillingRepos{
-			Orders:      repo.NewOrderRepo(conn),
+			Orders:      orders,
 			OrderEvents: repo.NewOrderEventRepo(c.DB),
 			Payments:    repo.NewPaymentRepo(conn),
 			Coupons:     repo.NewCouponRepo(conn),
 			Withdrawals: wallets,
 			Wallets:     wallets,
+			OrderStats:  orders.(repository.OrderStatsBridge),
 		}
 	}
 }

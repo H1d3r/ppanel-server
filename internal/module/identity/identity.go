@@ -159,9 +159,9 @@ type (
 // NewRepoBuilder exports the module-owned repository implementations for
 // store assembly (ADR-001 step-6 preparation).
 func NewRepoBuilder() repository.IdentityBuilder {
-	return func(c repository.ModuleConn, subs repository.SubscriptionCacheBridge) repository.IdentityRepos {
+	return func(c repository.ModuleConn, bridges repository.IdentityBridges) repository.IdentityRepos {
 		conn := c.Conn()
-		u := repo.NewUserRepo(conn, subs)
+		u := repo.NewUserRepo(conn, bridges)
 		return repository.IdentityRepos{
 			Users:     u,
 			UserAuths: u,

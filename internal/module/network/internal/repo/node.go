@@ -64,6 +64,34 @@ func nodeInSet(field string, values []string) func(db *gorm.DB) *gorm.DB {
 	return orm.CommaSeparatedContains(field, values)
 }
 
+// NodeUserListCacheKeys resolves the server user-list cache keys for the
+// given node ids and node tags; the subscription bundle invalidates them
+// when a plan's node set changes (repository.NodeCacheKeyBridge).
+func (m *nodeRepo) NodeUserListCacheKeys(ctx context.Context, nodeIDs []int64, tags []string) ([]string, error) {
+	keys := make([]string, 0)
+	appendKeys := func(nodes []*node.Node) {
+		for _, n := range nodes {
+			keys = append(keys, fmt.Sprintf("%s%d", node.ServerUserListCacheKey, n.ServerId))
+			keys = append(keys, fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, n.ServerId, n.Protocol))
+		}
+	}
+	if len(nodeIDs) > 0 {
+		var nodes []*node.Node
+		if err := m.DB.WithContext(ctx).Model(&node.Node{}).Where("id IN (?)", nodeIDs).Find(&nodes).Error; err != nil {
+			return nil, err
+		}
+		appendKeys(nodes)
+	}
+	if len(tags) > 0 {
+		var nodes []*node.Node
+		if err := m.DB.WithContext(ctx).Model(&node.Node{}).Scopes(nodeInSet("tags", tags)).Find(&nodes).Error; err != nil {
+			return nil, err
+		}
+		appendKeys(nodes)
+	}
+	return keys, nil
+}
+
 func (m *nodeRepo) InsertServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error {
 	db := m.DB
 	if len(tx) > 0 {

@@ -29,19 +29,20 @@ var _ repository.UserCacheRepo = (*UserRepo)(nil)
 type UserRepo struct {
 	cache.CachedConn
 	table string
-	// subs is the subscription bundle's cache bridge: the user-deletion
-	// cascade and the UserCache facade's subscription delegations go
-	// through it.
-	subs repository.SubscriptionCacheBridge
+	// bridges are the identity bundle's cross-domain windows: the
+	// subscription cache cascade, the subscription-membership filters and
+	// billing's order statistics all go through them instead of touching
+	// foreign tables from identity SQL.
+	bridges repository.IdentityBridges
 }
 
 // NewUserRepo builds the module-owned implementation over the shared cached
-// connection; the subscription cache bridge feeds the cross-domain cascade.
-func NewUserRepo(conn cache.CachedConn, subs repository.SubscriptionCacheBridge) *UserRepo {
+// connection; the bridges feed the cross-domain cascades and filters.
+func NewUserRepo(conn cache.CachedConn, bridges repository.IdentityBridges) *UserRepo {
 	return &UserRepo{
 		CachedConn: conn,
 		table:      "user",
-		subs:       subs,
+		bridges:    bridges,
 	}
 }
 
@@ -118,7 +119,7 @@ func (m *UserRepo) BatchClearRelatedCache(ctx context.Context, u *user.User) err
 		allKeys = append(allKeys, device.GetCacheKeys()...)
 	}
 
-	subscribes, err := m.subs.QueryUserSubscribe(ctx, u.Id)
+	subscribes, err := m.bridges.SubscriptionCache.QueryUserSubscribe(ctx, u.Id)
 	if err != nil {
 		logger.Errorf("failed to query user subscribes for cache clearing: %v", err)
 	} else {
@@ -140,9 +141,9 @@ func (m *UserRepo) BatchClearRelatedCache(ctx context.Context, u *user.User) err
 // subscription repo: the cache facade (UserCacheRepo) stays one object for
 // its consumers while each domain owns its keys.
 func (m *UserRepo) ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error {
-	return m.subs.ClearSubscribeCache(ctx, data...)
+	return m.bridges.SubscriptionCache.ClearSubscribeCache(ctx, data...)
 }
 
 func (m *UserRepo) UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error {
-	return m.subs.UpdateUserSubscribeCache(ctx, data)
+	return m.bridges.SubscriptionCache.UpdateUserSubscribeCache(ctx, data)
 }

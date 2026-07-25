@@ -8,9 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -158,8 +156,12 @@ func (m *UserRepo) QueryPageList(ctx context.Context, page, size int, filter *us
 	var list []*user.User
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
-		conn = applyUserPageFilters(conn.Model(&user.User{}), filter)
+	subIDs, subFiltered, err := m.subscriptionFilterUserIDs(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	err = m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+		conn = applyUserPageFilters(conn.Model(&user.User{}), filter, subIDs, subFiltered)
 		if err := conn.Count(&total).Error; err != nil {
 			return err
 		}
@@ -168,7 +170,7 @@ func (m *UserRepo) QueryPageList(ctx context.Context, page, size int, filter *us
 	return list, total, err
 }
 
-func applyUserPageFilters(conn *gorm.DB, filter *user.UserFilterParams) *gorm.DB {
+func applyUserPageFilters(conn *gorm.DB, filter *user.UserFilterParams, subIDs []int64, subFiltered bool) *gorm.DB {
 	userIdColumn := userColumn(conn, "id")
 	if filter == nil {
 		return conn
@@ -182,8 +184,12 @@ func applyUserPageFilters(conn *gorm.DB, filter *user.UserFilterParams) *gorm.DB
 			conn = conn.Where(userSearchCondition(conn), search, search)
 		}
 	}
-	if filter.UserSubscribeId != nil || filter.SubscribeId != nil || strings.TrimSpace(filter.UserSubscribeToken) != "" {
-		conn = userSubscribeExistsCondition(conn, userIdColumn, filter)
+	if subFiltered {
+		if len(subIDs) == 0 {
+			conn = conn.Where("1 = 0")
+		} else {
+			conn = conn.Where(userIdColumn+" IN ?", subIDs)
+		}
 	}
 	if filter.Order != "" {
 		switch strings.ToUpper(filter.Order) {
@@ -197,35 +203,31 @@ func applyUserPageFilters(conn *gorm.DB, filter *user.UserFilterParams) *gorm.DB
 	return conn
 }
 
-func userSubscribeExistsCondition(conn *gorm.DB, userIdColumn string, filter *user.UserFilterParams) *gorm.DB {
-	conditions := []string{
-		fmt.Sprintf("%s = %s", userSubscribeColumn(conn, "user_id"), userIdColumn),
+// subscriptionFilterUserIDs resolves the admin filter's subscription
+// conditions to a user-id list through the subscription bridge (ADR-001:
+// identity SQL must not touch the user_subscribe table). The bool reports
+// whether the filter constrains by subscription at all.
+func (m *UserRepo) subscriptionFilterUserIDs(ctx context.Context, filter *user.UserFilterParams) ([]int64, bool, error) {
+	if filter == nil {
+		return nil, false, nil
 	}
-	args := make([]interface{}, 0, 5)
-	if filter.UserSubscribeId != nil {
-		conditions = append(conditions, fmt.Sprintf("%s = ?", userSubscribeColumn(conn, "id")))
-		args = append(args, *filter.UserSubscribeId)
+	token := strings.TrimSpace(filter.UserSubscribeToken)
+	if filter.UserSubscribeId == nil && filter.SubscribeId == nil && token == "" {
+		return nil, false, nil
 	}
-	if filter.SubscribeId != nil {
-		conditions = append(conditions, fmt.Sprintf("%s = ?", userSubscribeColumn(conn, "subscribe_id")))
-		args = append(args, *filter.SubscribeId)
+	bridgeFilter := repository.SubscriptionUserFilter{
+		UserSubscribeID: filter.UserSubscribeId,
+		SubscribeID:     filter.SubscribeId,
+		Token:           token,
 	}
-	subscribeToken := strings.TrimSpace(filter.UserSubscribeToken)
-	if subscribeToken != "" {
-		conditions = append(conditions, fmt.Sprintf("(%s = ? OR %s = ?)", userSubscribeColumn(conn, "token"), userSubscribeColumn(conn, "uuid")))
-		args = append(args, subscribeToken, subscribeToken)
-	} else {
-		conditions = append(conditions, fmt.Sprintf("%s IN ?", userSubscribeColumn(conn, "status")))
-		args = append(args, []int64{0, 1})
+	if token == "" {
+		bridgeFilter.Statuses = []int64{0, 1}
 	}
-	return conn.Where(
-		fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM %s WHERE %s)",
-			userSubscribeTableName(conn),
-			strings.Join(conditions, " AND "),
-		),
-		args...,
-	)
+	ids, err := m.bridges.SubscriptionScope.SubscriptionUserIDs(ctx, bridgeFilter)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, true, nil
 }
 
 func userSearchCondition(conn *gorm.DB) string {
@@ -255,18 +257,6 @@ func authMethodsTableName(db *gorm.DB) string {
 
 func authMethodsColumn(db *gorm.DB, column string) string {
 	return userQuoteColumn(db, (&user.AuthMethods{}).TableName(), column)
-}
-
-// userSubscribeColumn quotes a user_subscribe column: the email-recipient
-// scope filter still queries the subscription table from the identity repo
-// (two-phase read, ADR-001 step 5); it moves behind a subscription port when
-// the identity implementation joins its module.
-func userSubscribeColumn(db *gorm.DB, column string) string {
-	return userQuoteColumn(db, (&usersub.Subscribe{}).TableName(), column)
-}
-
-func userSubscribeTableName(db *gorm.DB) string {
-	return userQuoteTable(db, (&usersub.Subscribe{}).TableName())
 }
 
 func userQuoteTable(db *gorm.DB, table string) string {
@@ -343,13 +333,7 @@ func (m *UserRepo) subscriptionScopedUserIDs(ctx context.Context, scope int8) (i
 	default:
 		return nil, false, nil
 	}
-	err = m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
-		q := conn.Model(&usersub.Subscribe{}).Distinct("user_id")
-		if statuses != nil {
-			q = q.Where("status IN ?", statuses)
-		}
-		return q.Pluck("user_id", v).Error
-	})
+	ids, err = m.bridges.SubscriptionScope.SubscriptionUserIDs(ctx, repository.SubscriptionUserFilter{Statuses: statuses})
 	if err != nil {
 		return nil, false, err
 	}
@@ -475,19 +459,6 @@ func (m *UserRepo) FindOneByReferCode(ctx context.Context, referCode string) (*u
 	return &data, err
 }
 
-func userDateBucketExpr(db *gorm.DB, column, bucket string) string {
-	if db.Dialector.Name() == "postgres" {
-		if bucket == "month" {
-			return fmt.Sprintf("TO_CHAR(%s, 'YYYY-MM')", column)
-		}
-		return fmt.Sprintf("TO_CHAR(%s, 'YYYY-MM-DD')", column)
-	}
-	if bucket == "month" {
-		return fmt.Sprintf("DATE_FORMAT(%s, '%%Y-%%m')", column)
-	}
-	return fmt.Sprintf("DATE_FORMAT(%s, '%%Y-%%m-%%d')", column)
-}
-
 // QueryDailyUserStatisticsList Query daily user statistics list for the current month (from 1st to current date)
 func (m *UserRepo) QueryDailyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error) {
 	firstDay := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
@@ -524,37 +495,11 @@ func (m *UserRepo) QueryMonthlyUserStatisticsList(ctx context.Context, date time
 	return mergeUserStatistics(registrations, newUsers, renewalUsers), nil
 }
 
-// orderUserCountsByBucket counts distinct ordering users per date bucket.
-// It runs as a standalone billing-domain query: the user statistics merge
-// happens in Go so no SQL joins identity and billing tables (ADR-001
-// step 5); when the user repository physically splits this query moves
-// behind an order-domain port unchanged.
+// orderUserCountsByBucket delegates to the billing bridge: the query lives
+// with the order table's owner and the user statistics merge happens in Go,
+// so no SQL joins identity and billing tables (ADR-001 step 5).
 func (m *UserRepo) orderUserCountsByBucket(ctx context.Context, isNew bool, since time.Time, until *time.Time, bucket string) (map[string]int64, error) {
-	type row struct {
-		Date  string
-		Users int64
-	}
-	var rows []row
-	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
-		orderDateExpr := userDateBucketExpr(conn, "created_at", bucket)
-		q := conn.Model(&order.Order{}).
-			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS users", orderDateExpr)).
-			Where("is_new = ? AND status IN ?", isNew, []int64{2, 5})
-		if until != nil {
-			q = q.Where("created_at BETWEEN ? AND ?", since, *until)
-		} else {
-			q = q.Where("created_at >= ?", since)
-		}
-		return q.Group(orderDateExpr).Scan(v).Error
-	})
-	if err != nil {
-		return nil, err
-	}
-	counts := make(map[string]int64, len(rows))
-	for _, r := range rows {
-		counts[r.Date] = r.Users
-	}
-	return counts, nil
+	return m.bridges.OrderStats.OrderUserCountsByBucket(ctx, isNew, since, until, bucket)
 }
 
 // registrationCountsByBucket aggregates new registrations per date bucket
@@ -563,7 +508,7 @@ func (m *UserRepo) registrationCountsByBucket(ctx context.Context, since time.Ti
 	var results []user.UserStatisticsWithDate
 	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
 		userCreatedAt := userColumn(conn, "created_at")
-		userDateExpr := userDateBucketExpr(conn, userCreatedAt, bucket)
+		userDateExpr := orm.DateBucketExpr(conn, userCreatedAt, bucket)
 		q := conn.Model(&user.User{}).
 			Select(fmt.Sprintf("%s AS date, COUNT(*) AS register", userDateExpr))
 		if until != nil {

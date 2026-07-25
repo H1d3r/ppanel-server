@@ -37,6 +37,37 @@ func NewOrderRepo(conn cache.CachedConn) repository.OrderRepo {
 	}
 }
 
+// OrderUserCountsByBucket counts distinct ordering users per date bucket
+// (repository.OrderStatsBridge); the identity bundle merges the counts with
+// registration statistics in Go so no SQL joins the two domains.
+func (m *orderRepo) OrderUserCountsByBucket(ctx context.Context, isNew bool, since time.Time, until *time.Time, bucket string) (map[string]int64, error) {
+	type row struct {
+		Date  string
+		Users int64
+	}
+	var rows []row
+	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
+		dateExpr := orm.DateBucketExpr(conn, "created_at", bucket)
+		q := conn.Model(&order.Order{}).
+			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS users", dateExpr)).
+			Where("is_new = ? AND status IN ?", isNew, []int64{2, 5})
+		if until != nil {
+			q = q.Where("created_at BETWEEN ? AND ?", since, *until)
+		} else {
+			q = q.Where("created_at >= ?", since)
+		}
+		return q.Group(dateExpr).Scan(v).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		counts[r.Date] = r.Users
+	}
+	return counts, nil
+}
+
 func (m *orderRepo) getCacheKeys(data *order.Order) []string {
 	if data == nil {
 		return []string{}

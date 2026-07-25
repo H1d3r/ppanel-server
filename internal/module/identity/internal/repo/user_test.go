@@ -10,6 +10,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -39,7 +40,7 @@ func TestUserRepoFindOneForUpdateUsesRowLockAndDefaultScope(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	if _, err := NewUserRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), nil).FindOneForUpdate(context.Background(), 42); err != nil {
+	if _, err := NewUserRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), repository.IdentityBridges{}).FindOneForUpdate(context.Background(), 42); err != nil {
 		t.Fatalf("FindOneForUpdate: %v", err)
 	}
 	sql := logs.String()
@@ -67,7 +68,7 @@ func TestFindDeviceOnlineRecordUsesCreatedAt(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	_, err = NewUserRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), nil).FindDeviceOnlineRecord(context.Background(), 42, "2026-07-21 00:00:00", "2026-07-22 00:00:00")
+	_, err = NewUserRepo(repository.ModuleConn{DB: db, Redis: redisClient}.Conn(), repository.IdentityBridges{}).FindDeviceOnlineRecord(context.Background(), 42, "2026-07-21 00:00:00", "2026-07-22 00:00:00")
 	if err != nil {
 		t.Fatalf("FindDeviceOnlineRecord: %v", err)
 	}
@@ -98,11 +99,7 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 				"EXISTS (SELECT 1 FROM `user_auth_methods`",
 				"`user_auth_methods`.`user_id` = `user`.`id`",
 				"`user_auth_methods`.`auth_identifier` LIKE ? ESCAPE '='",
-				"EXISTS (SELECT 1 FROM `user_subscribe`",
-				"`user_subscribe`.`user_id` = `user`.`id`",
-				"`user_subscribe`.`id` = ?",
-				"`user_subscribe`.`subscribe_id` = ?",
-				"`user_subscribe`.`status` IN (?,?)",
+				"`user`.`id` IN (?,?)",
 				"ORDER BY `user`.`id` DESC",
 			},
 			wantNoSQL:  []string{"LEFT JOIN", "GROUP BY"},
@@ -121,11 +118,7 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 				`EXISTS (SELECT 1 FROM "user_auth_methods"`,
 				`"user_auth_methods"."user_id" = "user"."id"`,
 				`"user_auth_methods"."auth_identifier" LIKE $3 ESCAPE '='`,
-				`EXISTS (SELECT 1 FROM "user_subscribe"`,
-				`"user_subscribe"."user_id" = "user"."id"`,
-				`"user_subscribe"."id" = $4`,
-				`"user_subscribe"."subscribe_id" = $5`,
-				`"user_subscribe"."status" IN ($6,$7)`,
+				`"user"."id" IN ($4,$5)`,
 				`ORDER BY "user"."id" DESC`,
 			},
 			wantNoSQL:  []string{"LEFT JOIN", "GROUP BY"},
@@ -152,7 +145,7 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 				SubscribeId:     ptr[int64](20),
 				Order:           "DESC",
 			}
-			stmt := applyUserPageFilters(db.Model(&user.User{}), filter).Find(&result).Statement
+			stmt := applyUserPageFilters(db.Model(&user.User{}), filter, []int64{7, 8}, true).Find(&result).Statement
 			sql := stmt.SQL.String()
 
 			for _, want := range tt.wantSQL {
@@ -165,12 +158,8 @@ func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
 					t.Fatalf("SQL should not contain %q:\n%s", unwanted, sql)
 				}
 			}
-			subscribeFrom := "FROM `user_subscribe`"
-			if tt.name == "postgres" {
-				subscribeFrom = `FROM "user_subscribe"`
-			}
-			if got := strings.Count(sql, subscribeFrom); got != 1 {
-				t.Fatalf("subscribe filters should use one user_subscribe EXISTS, got %d:\n%s", got, sql)
+			if strings.Contains(sql, "user_subscribe") {
+				t.Fatalf("identity SQL must not touch user_subscribe (subscription bridge resolves the ids):\n%s", sql)
 			}
 			if got := stmt.Vars[1]; got != tt.wantSearch {
 				t.Fatalf("refer_code search pattern = %#v, want %#v", got, tt.wantSearch)
@@ -195,7 +184,7 @@ func TestApplyUserPageFiltersSkipsBlankSearch(t *testing.T) {
 	}
 
 	var result []user.User
-	stmt := applyUserPageFilters(db.Model(&user.User{}), &user.UserFilterParams{Search: "   "}).Find(&result).Statement
+	stmt := applyUserPageFilters(db.Model(&user.User{}), &user.UserFilterParams{Search: "   "}, nil, false).Find(&result).Statement
 	sql := stmt.SQL.String()
 	if strings.Contains(sql, "LIKE") || strings.Contains(sql, "user_auth_methods") {
 		t.Fatalf("blank search should not add search filters:\n%s", sql)
@@ -205,71 +194,78 @@ func TestApplyUserPageFiltersSkipsBlankSearch(t *testing.T) {
 	}
 }
 
-func TestApplyUserPageFiltersMatchesSubscribeTokenOrUUID(t *testing.T) {
-	tests := []struct {
-		name      string
-		dialector gorm.Dialector
-		wantSQL   []string
-	}{
-		{
-			name: "mysql",
-			dialector: mysql.New(mysql.Config{
-				DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
-				SkipInitializeWithVersion: true,
-			}),
-			wantSQL: []string{
-				"EXISTS (SELECT 1 FROM `user_subscribe`",
-				"`user_subscribe`.`user_id` = `user`.`id`",
-				"(`user_subscribe`.`token` = ? OR `user_subscribe`.`uuid` = ?)",
-			},
-		},
-		{
-			name: "postgres",
-			dialector: postgres.New(postgres.Config{
-				DSN:                  "host=localhost user=gorm password=gorm dbname=gorm port=9920 sslmode=disable",
-				PreferSimpleProtocol: true,
-			}),
-			wantSQL: []string{
-				`EXISTS (SELECT 1 FROM "user_subscribe"`,
-				`"user_subscribe"."user_id" = "user"."id"`,
-				`("user_subscribe"."token" = $1 OR "user_subscribe"."uuid" = $2)`,
-			},
-		},
+type fakeScopeBridge struct {
+	got   repository.SubscriptionUserFilter
+	calls int
+	ids   []int64
+}
+
+func (f *fakeScopeBridge) SubscriptionUserIDs(_ context.Context, filter repository.SubscriptionUserFilter) ([]int64, error) {
+	f.calls++
+	f.got = filter
+	return f.ids, nil
+}
+
+// TestSubscriptionFilterUserIDsBridgeSemantics pins the filter translation
+// the old user_subscribe EXISTS encoded: a token matches token-or-uuid with
+// no status constraint, tokenless subscription filters imply the
+// pending/active statuses, and a filter without subscription fields never
+// calls the bridge.
+func TestSubscriptionFilterUserIDsBridgeSemantics(t *testing.T) {
+	bridge := &fakeScopeBridge{ids: []int64{5, 6}}
+	m := NewUserRepo(cache.CachedConn{}, repository.IdentityBridges{SubscriptionScope: bridge})
+
+	ids, filtered, err := m.subscriptionFilterUserIDs(context.Background(), &user.UserFilterParams{UserSubscribeToken: " sub-token "})
+	if err != nil || !filtered || len(ids) != 2 {
+		t.Fatalf("token filter: ids=%v filtered=%v err=%v", ids, filtered, err)
+	}
+	if bridge.got.Token != "sub-token" || bridge.got.Statuses != nil {
+		t.Fatalf("token lookup must match token/uuid without status constraint, got %+v", bridge.got)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, err := gorm.Open(tt.dialector, &gorm.Config{
-				DryRun:               true,
-				DisableAutomaticPing: true,
-			})
-			if err != nil {
-				t.Fatalf("open gorm db: %v", err)
-			}
+	_, filtered, err = m.subscriptionFilterUserIDs(context.Background(), &user.UserFilterParams{
+		UserSubscribeId: ptr[int64](10),
+		SubscribeId:     ptr[int64](20),
+	})
+	if err != nil || !filtered {
+		t.Fatalf("id filter: filtered=%v err=%v", filtered, err)
+	}
+	if bridge.got.UserSubscribeID == nil || *bridge.got.UserSubscribeID != 10 ||
+		bridge.got.SubscribeID == nil || *bridge.got.SubscribeID != 20 {
+		t.Fatalf("id filter lost conditions: %+v", bridge.got)
+	}
+	if len(bridge.got.Statuses) != 2 || bridge.got.Statuses[0] != 0 || bridge.got.Statuses[1] != 1 {
+		t.Fatalf("tokenless filter must imply pending/active statuses, got %v", bridge.got.Statuses)
+	}
 
-			var result []user.User
-			stmt := applyUserPageFilters(db.Model(&user.User{}), &user.UserFilterParams{
-				UserSubscribeToken: "sub-token-or-uuid",
-			}).Find(&result).Statement
-			sql := stmt.SQL.String()
+	calls := bridge.calls
+	_, filtered, err = m.subscriptionFilterUserIDs(context.Background(), &user.UserFilterParams{Search: "x"})
+	if err != nil || filtered || bridge.calls != calls {
+		t.Fatalf("non-subscription filter must not call the bridge: filtered=%v calls=%d err=%v", filtered, bridge.calls, err)
+	}
+}
 
-			for _, want := range tt.wantSQL {
-				if !strings.Contains(sql, want) {
-					t.Fatalf("SQL missing %q:\n%s", want, sql)
-				}
-			}
-			if strings.Contains(sql, "status") {
-				t.Fatalf("token/uuid lookup should not add status filter:\n%s", sql)
-			}
-			if len(stmt.Vars) != 2 {
-				t.Fatalf("vars len = %d, want 2: %#v", len(stmt.Vars), stmt.Vars)
-			}
-			for index, got := range stmt.Vars {
-				if got != "sub-token-or-uuid" {
-					t.Fatalf("var[%d] = %#v, want subscribe token", index, got)
-				}
-			}
-		})
+// TestApplyUserPageFiltersEmptySubscriptionMatchExcludesAll pins the empty
+// bridge result: a subscription filter matching no users must return no
+// rows, not fall open.
+func TestApplyUserPageFiltersEmptySubscriptionMatchExcludesAll(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{
+		DryRun:               true,
+		DisableAutomaticPing: true,
+	})
+	if err != nil {
+		t.Fatalf("open gorm db: %v", err)
+	}
+
+	var result []user.User
+	stmt := applyUserPageFilters(db.Model(&user.User{}), &user.UserFilterParams{
+		UserSubscribeToken: "no-match",
+	}, nil, true).Find(&result).Statement
+	if sql := stmt.SQL.String(); !strings.Contains(sql, "1 = 0") {
+		t.Fatalf("empty subscription match must exclude all rows:\n%s", sql)
 	}
 }
 

@@ -89,10 +89,14 @@ func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.Invalidat
 		builders:      builders,
 	}
 	s.platform = builders.Platform(conn)
-	s.subscription = builders.Subscription(conn)
-	s.billing = builders.Billing(conn)
-	s.identity = builders.Identity(conn, s.subscription.CacheBridge)
 	s.network = builders.Network(conn)
+	s.subscription = builders.Subscription(conn, s.network.NodeKeys)
+	s.billing = builders.Billing(conn)
+	s.identity = builders.Identity(conn, IdentityBridges{
+		SubscriptionCache: s.subscription.CacheBridge,
+		SubscriptionScope: s.subscription.ScopeBridge,
+		OrderStats:        s.billing.OrderStats,
+	})
 	s.support = builders.Support(conn)
 	return s
 }
