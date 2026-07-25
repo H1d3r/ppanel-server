@@ -122,9 +122,6 @@ type UserCacheRepo interface {
 	UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error
 }
 
-// The former shared *userRepo is physically split along domain seams
-// (ADR-001 step 5): userRepo keeps the identity domain (and the cache
-// facade), userSubscriptionRepo owns user_subscribe and traffic accounting,
-// userBillingRepo owns the wallet-column view and withdrawals. They share
-// one database today; each struct only touches its own domain's tables so
-// the eventual per-service databases fall out of the wiring.
+// The identity-family contracts. Their implementations live in the owning
+// modules (identity, subscription, billing) and reach the store through the
+// per-module builders in builders.go.

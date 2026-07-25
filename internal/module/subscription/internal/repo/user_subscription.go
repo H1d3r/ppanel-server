@@ -18,8 +18,11 @@ import (
 // Cache key prefixes shared with the usersub entity's key derivation.
 const (
 	cacheUserSubscribeTokenPrefix = "cache:user:subscribe:token:"
-	cacheUserSubscribeUserPrefix  = "cache:user:subscribe:user:v3:"
-	cacheUserSubscribeIdPrefix    = "cache:user:subscribe:id:"
+	// v3 stores the complete, status-unfiltered subscription history.
+	// Status-specific callers filter this shared value in memory so cache
+	// entries cannot collide.
+	cacheUserSubscribeUserPrefix = "cache:user:subscribe:user:v3:"
+	cacheUserSubscribeIdPrefix   = "cache:user:subscribe:id:"
 )
 
 func userSubscribeColumn(db *gorm.DB, column string) string {

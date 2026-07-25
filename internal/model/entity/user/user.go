@@ -79,8 +79,6 @@ func (DeviceOnlineRecord) TableName() string {
 	return "user_device_online_record"
 }
 
-// SubscribeDetails is the joined view of a user subscription with its subscribe plan.
-
 // LoginLogFilterParams filters user login logs.
 type LoginLogFilterParams struct {
 	IP        string
