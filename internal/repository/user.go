@@ -10,7 +10,6 @@ import (
 	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -155,10 +154,10 @@ var _ WalletRepo = (*userBillingRepo)(nil)
 type userRepo struct {
 	cache.CachedConn
 	table string
-	// subs supports the cross-domain cache cascade in
-	// BatchClearRelatedCache and the wallet's row locking until the money
-	// columns leave the user table.
-	subs *userSubscriptionRepo
+	// subs is the subscription bundle's cache bridge: the user-deletion
+	// cascade and the UserCache facade's subscription delegations go
+	// through it.
+	subs SubscriptionCacheBridge
 }
 
 type userSubscriptionRepo struct {
@@ -169,9 +168,7 @@ type userBillingRepo struct {
 	cache.CachedConn
 }
 
-func newUserRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) *userRepo {
-	conn := newCachedConn(db, c, invalidations...)
-	subs := &userSubscriptionRepo{CachedConn: conn}
+func newUserRepo(conn cache.CachedConn, subs SubscriptionCacheBridge) *userRepo {
 	return &userRepo{
 		CachedConn: conn,
 		table:      "user",
@@ -179,10 +176,12 @@ func newUserRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.Invalidat
 	}
 }
 
-func newUserSubscriptionRepo(u *userRepo) *userSubscriptionRepo { return u.subs }
+func newUserSubscriptionRepo(conn cache.CachedConn) *userSubscriptionRepo {
+	return &userSubscriptionRepo{CachedConn: conn}
+}
 
-func newUserBillingRepo(u *userRepo) *userBillingRepo {
-	return &userBillingRepo{CachedConn: u.CachedConn}
+func newUserBillingRepo(conn cache.CachedConn) *userBillingRepo {
+	return &userBillingRepo{CachedConn: conn}
 }
 
 // --- internal helpers ---

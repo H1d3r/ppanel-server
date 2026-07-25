@@ -54,65 +54,124 @@ type Store interface {
 
 var _ Store = (*GormStore)(nil)
 
-// GormStore is the Store implementation backed by GORM + Redis.
+// GormStore is the Store implementation assembled from per-module repo
+// bundles over one shared connection pool.
 type GormStore struct {
 	db            *gorm.DB
 	redis         *redis.Client
 	invalidations *cache.InvalidationQueue
 	retrier       *cache.InvalidationRetrier
-	nodeRetrier   *serverCacheInvalidationRetrier
+	builders      Builders
 
-	ads          AdsRepo
-	announcement AnnouncementRepo
-	auth         AuthRepo
-	client       ClientRepo
-	coupon       CouponRepo
-	document     DocumentRepo
-	inbox        InboxRepo
-	log          LogRepo
-	node         NodeRepo
-	order        OrderRepo
-	orderEvent   OrderEventRepo
-	payment      PaymentRepo
-	subscribe    SubscribeRepo
-	system       SystemRepo
-	task         TaskRepo
-	ticket       TicketRepo
-	trafficLog   TrafficRepo
-	user         *userRepo
+	platform     PlatformRepos
+	billing      BillingRepos
+	subscription SubscriptionRepos
+	identity     IdentityRepos
+	network      NetworkRepos
+	support      SupportRepos
 }
 
-// NewGormStore creates a new GormStore with all domain repositories initialized.
+// NewGormStore creates a GormStore from this package's default builders (the
+// implementations migrate into their modules incrementally; use
+// NewGormStoreWithBuilders once a module exports its own).
 func NewGormStore(db *gorm.DB, rds *redis.Client) *GormStore {
-	return newGormStore(db, rds, nil, cache.NewInvalidationRetrier(rds), newServerCacheInvalidationRetrier(rds))
+	return NewGormStoreWithBuilders(db, rds, DefaultBuilders(rds))
 }
 
-func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.InvalidationQueue, retrier *cache.InvalidationRetrier, nodeRetrier *serverCacheInvalidationRetrier) *GormStore {
-	return &GormStore{
+// NewGormStoreWithBuilders assembles the store from the given per-module
+// repo builders.
+func NewGormStoreWithBuilders(db *gorm.DB, rds *redis.Client, builders Builders) *GormStore {
+	return newGormStore(db, rds, nil, cache.NewInvalidationRetrier(rds), builders)
+}
+
+func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.InvalidationQueue, retrier *cache.InvalidationRetrier, builders Builders) *GormStore {
+	conn := ModuleConn{DB: db, Redis: rds, Invalidations: invalidations}
+	s := &GormStore{
 		db:            db,
 		redis:         rds,
 		invalidations: invalidations,
 		retrier:       retrier,
-		nodeRetrier:   nodeRetrier,
-		ads:           newAdsRepo(db, rds, invalidations),
-		announcement:  newAnnouncementRepo(db, rds, invalidations),
-		auth:          newAuthRepo(db, rds, invalidations),
-		client:        newClientRepo(db),
-		coupon:        newCouponRepo(db, rds, invalidations),
-		document:      newDocumentRepo(db, rds, invalidations),
-		inbox:         newInboxRepo(db),
-		log:           newLogRepo(db),
-		node:          newNodeRepo(db, rds, nodeRetrier),
-		order:         newOrderRepo(db, rds, invalidations),
-		orderEvent:    newOrderEventRepo(db),
-		payment:       newPaymentRepo(db, rds, invalidations),
-		subscribe:     newSubscribeRepo(db, rds, invalidations),
-		system:        newSystemRepo(db, rds, invalidations),
-		task:          newTaskRepo(db),
-		ticket:        newTicketRepo(db, rds, invalidations),
-		trafficLog:    newTrafficRepo(db),
-		user:          newUserRepo(db, rds, invalidations),
+		builders:      builders,
 	}
+	s.platform = builders.Platform(conn)
+	s.subscription = builders.Subscription(conn)
+	s.billing = builders.Billing(conn)
+	s.identity = builders.Identity(conn, s.subscription.CacheBridge)
+	s.network = builders.Network(conn)
+	s.support = builders.Support(conn)
+	return s
+}
+
+// DefaultBuilders wraps the repository implementations still living in this
+// package. Each entry disappears as its module takes ownership of the
+// implementation and exports its own builder.
+func DefaultBuilders(rds *redis.Client) Builders {
+	// The node cache retrier is a background singleton that must survive
+	// per-transaction rebuilds.
+	nodeRetrier := newServerCacheInvalidationRetrier(rds)
+	return Builders{
+		Platform: func(c ModuleConn) PlatformRepos {
+			return PlatformRepos{
+				System: newSystemRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				Logs:   newLogRepo(c.DB),
+				Tasks:  newTaskRepo(c.DB),
+				Client: newClientRepo(c.DB),
+				Inbox:  newInboxRepo(c.DB),
+			}
+		},
+		Billing: func(c ModuleConn) BillingRepos {
+			return BillingRepos{
+				Orders:      newOrderRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				OrderEvents: newOrderEventRepo(c.DB),
+				Payments:    newPaymentRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				Coupons:     newCouponRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				Withdrawals: newUserBillingRepo(c.Conn()),
+				Wallets:     newUserBillingRepo(c.Conn()),
+			}
+		},
+		Subscription: func(c ModuleConn) SubscriptionRepos {
+			subs := newUserSubscriptionRepo(c.Conn())
+			return SubscriptionRepos{
+				Plans:       newSubscribeRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				UserSubs:    subs,
+				Traffic:     subs,
+				CacheBridge: subs,
+			}
+		},
+		Identity: func(c ModuleConn, subs SubscriptionCacheBridge) IdentityRepos {
+			u := newUserRepo(c.Conn(), subs)
+			return IdentityRepos{
+				Users:     u,
+				UserAuths: u,
+				Devices:   u,
+				UserCache: u,
+				Auths:     newAuthRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+			}
+		},
+		Network: func(c ModuleConn) NetworkRepos {
+			return NetworkRepos{
+				Nodes:   newNodeRepo(c.DB, c.Redis, nodeRetrier),
+				Traffic: newTrafficRepo(c.DB),
+			}
+		},
+		Support: func(c ModuleConn) SupportRepos {
+			return SupportRepos{
+				Tickets:       newTicketRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				Announcements: newAnnouncementRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				Ads:           newAdsRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+				Documents:     newDocumentRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
+			}
+		},
+	}
+}
+
+// orNil adapts the optional variadic invalidation-queue signatures of the
+// legacy constructors.
+func orNil(q *cache.InvalidationQueue) []*cache.InvalidationQueue {
+	if q == nil {
+		return nil
+	}
+	return []*cache.InvalidationQueue{q}
 }
 
 func newCachedConn(db *gorm.DB, rds *redis.Client, invalidations ...*cache.InvalidationQueue) cache.CachedConn {
@@ -122,34 +181,30 @@ func newCachedConn(db *gorm.DB, rds *redis.Client, invalidations ...*cache.Inval
 	return cache.NewConn(db, rds)
 }
 
-func (s *GormStore) Ads() AdsRepo                   { return s.ads }
-func (s *GormStore) Announcement() AnnouncementRepo { return s.announcement }
-func (s *GormStore) Auth() AuthRepo                 { return s.auth }
-func (s *GormStore) Client() ClientRepo             { return s.client }
-func (s *GormStore) Coupon() CouponRepo             { return s.coupon }
-func (s *GormStore) Document() DocumentRepo         { return s.document }
-func (s *GormStore) Inbox() InboxRepo               { return s.inbox }
-func (s *GormStore) Log() LogRepo                   { return s.log }
-func (s *GormStore) Node() NodeRepo                 { return s.node }
-func (s *GormStore) Order() OrderRepo               { return s.order }
-func (s *GormStore) OrderEvent() OrderEventRepo     { return s.orderEvent }
-func (s *GormStore) Payment() PaymentRepo           { return s.payment }
-func (s *GormStore) Subscribe() SubscribeRepo       { return s.subscribe }
-func (s *GormStore) System() SystemRepo             { return s.system }
-func (s *GormStore) Task() TaskRepo                 { return s.task }
-func (s *GormStore) Ticket() TicketRepo             { return s.ticket }
-func (s *GormStore) TrafficLog() TrafficRepo        { return s.trafficLog }
-func (s *GormStore) User() UserRepo                 { return s.user }
-func (s *GormStore) UserAuth() UserAuthRepo         { return s.user }
-func (s *GormStore) UserSubscription() UserSubscriptionRepo {
-	return newUserSubscriptionRepo(s.user)
-}
-func (s *GormStore) UserDevice() UserDeviceRepo         { return s.user }
-func (s *GormStore) UserWithdrawal() UserWithdrawalRepo { return newUserBillingRepo(s.user) }
-func (s *GormStore) SubscriptionTraffic() SubscriptionTrafficRepo {
-	return newUserSubscriptionRepo(s.user)
-}
-func (s *GormStore) UserCache() UserCacheRepo { return s.user }
+func (s *GormStore) Ads() AdsRepo                                 { return s.support.Ads }
+func (s *GormStore) Announcement() AnnouncementRepo               { return s.support.Announcements }
+func (s *GormStore) Auth() AuthRepo                               { return s.identity.Auths }
+func (s *GormStore) Client() ClientRepo                           { return s.platform.Client }
+func (s *GormStore) Coupon() CouponRepo                           { return s.billing.Coupons }
+func (s *GormStore) Document() DocumentRepo                       { return s.support.Documents }
+func (s *GormStore) Inbox() InboxRepo                             { return s.platform.Inbox }
+func (s *GormStore) Log() LogRepo                                 { return s.platform.Logs }
+func (s *GormStore) Node() NodeRepo                               { return s.network.Nodes }
+func (s *GormStore) Order() OrderRepo                             { return s.billing.Orders }
+func (s *GormStore) OrderEvent() OrderEventRepo                   { return s.billing.OrderEvents }
+func (s *GormStore) Payment() PaymentRepo                         { return s.billing.Payments }
+func (s *GormStore) Subscribe() SubscribeRepo                     { return s.subscription.Plans }
+func (s *GormStore) System() SystemRepo                           { return s.platform.System }
+func (s *GormStore) Task() TaskRepo                               { return s.platform.Tasks }
+func (s *GormStore) Ticket() TicketRepo                           { return s.support.Tickets }
+func (s *GormStore) TrafficLog() TrafficRepo                      { return s.network.Traffic }
+func (s *GormStore) User() UserRepo                               { return s.identity.Users }
+func (s *GormStore) UserAuth() UserAuthRepo                       { return s.identity.UserAuths }
+func (s *GormStore) UserSubscription() UserSubscriptionRepo       { return s.subscription.UserSubs }
+func (s *GormStore) UserDevice() UserDeviceRepo                   { return s.identity.Devices }
+func (s *GormStore) UserWithdrawal() UserWithdrawalRepo           { return s.billing.Withdrawals }
+func (s *GormStore) SubscriptionTraffic() SubscriptionTrafficRepo { return s.subscription.Traffic }
+func (s *GormStore) UserCache() UserCacheRepo                     { return s.identity.UserCache }
 
 // InTx runs fn within a database transaction. A new GormStore backed by the
 // transaction is passed to fn, so all repository operations inside fn share
@@ -161,7 +216,7 @@ func (s *GormStore) InTx(ctx context.Context, fn func(store Store) error) error 
 		invalidations = cache.NewInvalidationQueue()
 	}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return fn(newGormStore(tx, s.redis, invalidations, s.retrier, s.nodeRetrier))
+		return fn(newGormStore(tx, s.redis, invalidations, s.retrier, s.builders))
 	})
 	if err != nil || !owner {
 		return err

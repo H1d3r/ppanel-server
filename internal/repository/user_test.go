@@ -42,7 +42,7 @@ func TestUserRepoFindOneForUpdateUsesRowLockAndDefaultScope(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	if _, err := newUserRepo(db, redisClient).FindOneForUpdate(context.Background(), 42); err != nil {
+	if _, err := newUserRepo(newCachedConn(db, redisClient), nil).FindOneForUpdate(context.Background(), 42); err != nil {
 		t.Fatalf("FindOneForUpdate: %v", err)
 	}
 	sql := logs.String()
@@ -71,7 +71,7 @@ func TestWalletRepoUpdateBalanceFieldsWritesWalletTable(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	err = newUserBillingRepo(newUserRepo(db, redisClient)).UpdateBalanceFields(context.Background(), &walletEntity.Wallet{UserId: 42, Balance: 100, GiftAmount: 20})
+	err = newUserBillingRepo(newCachedConn(db, redisClient)).UpdateBalanceFields(context.Background(), &walletEntity.Wallet{UserId: 42, Balance: 100, GiftAmount: 20})
 	if err != nil {
 		t.Fatalf("UpdateBalanceFields: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestFindDeviceOnlineRecordUsesCreatedAt(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	_, err = newUserRepo(db, redisClient).FindDeviceOnlineRecord(context.Background(), 42, "2026-07-21 00:00:00", "2026-07-22 00:00:00")
+	_, err = newUserRepo(newCachedConn(db, redisClient), nil).FindDeviceOnlineRecord(context.Background(), 42, "2026-07-21 00:00:00", "2026-07-22 00:00:00")
 	if err != nil {
 		t.Fatalf("FindDeviceOnlineRecord: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestQueryUserSubscribeFiltersSharedCachedList(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	repo := newUserSubscriptionRepo(newUserRepo(nil, redisClient))
+	repo := newUserSubscriptionRepo(newCachedConn(nil, redisClient))
 	cacheKey := fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, 42)
 	cached := []*usersub.SubscribeDetails{
 		{Id: 3, UserId: 42, Status: 1},
@@ -372,7 +372,7 @@ func TestQueryUserSubscribeCachesUnfilteredListWithStableOrder(t *testing.T) {
 			redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 			t.Cleanup(func() { _ = redisClient.Close() })
 
-			if _, err := newUserSubscriptionRepo(newUserRepo(db, redisClient)).QueryUserSubscribe(context.Background(), 42, 0, 1, 2, 3); err != nil {
+			if _, err := newUserSubscriptionRepo(newCachedConn(db, redisClient)).QueryUserSubscribe(context.Background(), 42, 0, 1, 2, 3); err != nil {
 				t.Fatalf("QueryUserSubscribe: %v", err)
 			}
 
@@ -494,7 +494,7 @@ func TestSubscriptionPolicyQueriesExcludeDeductedSubscriptions(t *testing.T) {
 			redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 			t.Cleanup(func() { _ = redisClient.Close() })
 
-			repo := newUserSubscriptionRepo(newUserRepo(db, redisClient))
+			repo := newUserSubscriptionRepo(newCachedConn(db, redisClient))
 			if _, err := repo.CountQuotaConsumingSubscriptions(context.Background(), 42, 10); err != nil {
 				t.Fatalf("CountQuotaConsumingSubscriptions: %v", err)
 			}
