@@ -1,10 +1,11 @@
-package repository
+package repo
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,54 +18,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// NodeRepo node/server 数据访问接口
-type NodeRepo interface {
-	// server
-	InsertServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error
-	FindOneServer(ctx context.Context, id int64) (*node.Server, error)
-	UpdateServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error
-	BatchUpdateServerLastReportedAt(ctx context.Context, reports map[int64]time.Time, tx ...*gorm.DB) error
-	DeleteServer(ctx context.Context, id int64, tx ...*gorm.DB) error
-	FindServerConfigOverride(ctx context.Context, serverId int64) (*node.ServerConfigOverride, error)
-	SaveServerConfigOverride(ctx context.Context, data *node.ServerConfigOverride, tx ...*gorm.DB) error
-	DeleteServerConfigOverride(ctx context.Context, serverId int64, tx ...*gorm.DB) error
-	QueryServerList(ctx context.Context, ids []int64) (servers []*node.Server, err error)
-	// node
-	InsertNode(ctx context.Context, data *node.Node, tx ...*gorm.DB) error
-	FindOneNode(ctx context.Context, id int64) (*node.Node, error)
-	UpdateNode(ctx context.Context, data *node.Node, tx ...*gorm.DB) error
-	DeleteNode(ctx context.Context, id int64, tx ...*gorm.DB) error
-	// cache
-	StatusCache(ctx context.Context, serverId int64) (node.Status, error)
-	UpdateStatusCache(ctx context.Context, serverId int64, status *node.Status) error
-	OnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) (node.OnlineUserSubscribe, error)
-	UpdateOnlineUserSubscribe(ctx context.Context, serverId int64, protocol string, subscribe node.OnlineUserSubscribe) error
-	OnlineUserSubscribeGlobal(ctx context.Context) (int64, error)
-	UpdateOnlineUserSubscribeGlobal(ctx context.Context, subscribe node.OnlineUserSubscribe) error
-	// query
-	FilterServerList(ctx context.Context, params *node.FilterParams) (int64, []*node.Server, error)
-	FilterNodeList(ctx context.Context, params *node.FilterNodeParams) (int64, []*node.Node, error)
-	QueryNodeSorts(ctx context.Context) ([]node.SortItem, error)
-	QueryServerSorts(ctx context.Context) ([]node.SortItem, error)
-	UpdateNodeSort(ctx context.Context, id int64, sort int64) error
-	UpdateServerSort(ctx context.Context, id int64, sort int64) error
-	QueryNodeTags(ctx context.Context) ([]string, error)
-	CountEnabledNodes(ctx context.Context) (int64, error)
-	CountServersByReportStatus(ctx context.Context, cutoff time.Time) (int64, int64, error)
-	QueryServerAddresses(ctx context.Context) ([]string, error)
-	QueryEnabledNodeProtocols(ctx context.Context) ([]string, error)
-	ClearNodeCache(ctx context.Context, params *node.FilterNodeParams) error
-	ClearServerCache(ctx context.Context, serverId int64) error
-	ServerCacheGeneration(ctx context.Context, serverId int64) (int64, error)
-	SetServerCache(ctx context.Context, serverId int64, key string, value interface{}, generation int64) error
-}
-
-var _ NodeRepo = (*nodeRepo)(nil)
+var _ repository.NodeRepo = (*nodeRepo)(nil)
 
 type nodeRepo struct {
 	*gorm.DB
 	Cache        *redis.Client
-	cacheRetrier *serverCacheInvalidationRetrier
+	cacheRetrier *ServerCacheInvalidationRetrier
 }
 
 var (
@@ -87,8 +46,9 @@ return #keys
 `)
 )
 
-func newNodeRepo(db *gorm.DB, cache *redis.Client, retriers ...*serverCacheInvalidationRetrier) NodeRepo {
-	var retrier *serverCacheInvalidationRetrier
+// NewNodeRepo builds the module-owned implementation.
+func NewNodeRepo(db *gorm.DB, cache *redis.Client, retriers ...*ServerCacheInvalidationRetrier) repository.NodeRepo {
+	var retrier *ServerCacheInvalidationRetrier
 	if len(retriers) > 0 {
 		retrier = retriers[0]
 	}
@@ -374,7 +334,7 @@ func (m *nodeRepo) FilterServerList(ctx context.Context, params *node.FilterPara
 			Size: 10,
 		}
 	}
-	params.Page, params.Size = NormalizePageFloor(params.Page, params.Size)
+	params.Page, params.Size = repository.NormalizePageFloor(params.Page, params.Size)
 	if params.Search != "" {
 		query = query.Scopes(orm.PrefixLike([]string{"name", "address"}, params.Search))
 	}
@@ -417,7 +377,7 @@ func (m *nodeRepo) FilterNodeList(ctx context.Context, params *node.FilterNodePa
 			Size: 10,
 		}
 	}
-	params.Page, params.Size = NormalizePageFloor(params.Page, params.Size)
+	params.Page, params.Size = repository.NormalizePageFloor(params.Page, params.Size)
 	if params.Search != "" {
 		pattern := orm.LikePrefixPattern(params.Search)
 		condition := "(name LIKE ?" + orm.LikeEscapeClause() + " OR address LIKE ?" + orm.LikeEscapeClause() + " OR tags LIKE ?" + orm.LikeEscapeClause()

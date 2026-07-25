@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/network/internal/adminserver"
 	"github.com/perfect-panel/server/internal/module/network/internal/edge"
+	"github.com/perfect-panel/server/internal/module/network/internal/repo"
 	"github.com/perfect-panel/server/internal/module/network/internal/serverapi"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -79,6 +80,20 @@ type Deps struct {
 	// Multiplier returns the node traffic multiplier in effect at the given
 	// time; nil means no multiplier is configured.
 	Multiplier func(at time.Time) float32
+}
+
+// NewRepoBuilder exports the module-owned repository implementations for
+// store assembly. The node cache retrier is a background singleton that
+// survives per-transaction rebuilds, so it lives in this closure
+// (ADR-001 step-6 preparation).
+func NewRepoBuilder(rds *redis.Client) repository.NetworkBuilder {
+	retrier := repo.NewServerCacheInvalidationRetrier(rds)
+	return func(c repository.ModuleConn) repository.NetworkRepos {
+		return repository.NetworkRepos{
+			Nodes:   repo.NewNodeRepo(c.DB, c.Redis, retrier),
+			Traffic: repo.NewTrafficRepo(c.DB),
+		}
+	}
 }
 
 func New(deps Deps) Service {

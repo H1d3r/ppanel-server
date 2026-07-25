@@ -1,4 +1,4 @@
-package repository
+package repo
 
 import (
 	"context"
@@ -15,7 +15,7 @@ func TestClearServerCacheUsesRegisteredKeys(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
-	repo := newNodeRepo(nil, client)
+	repo := NewNodeRepo(nil, client)
 	serverID := int64(42)
 	userKey := fmt.Sprintf("%s%d:trojan", node.ServerUserListCacheKey, serverID)
 	configKey := fmt.Sprintf("%s%d:trojan", node.ServerConfigCacheKey, serverID)
@@ -40,7 +40,7 @@ func TestSetServerCacheRejectsStaleGeneration(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
-	repo := newNodeRepo(nil, client)
+	repo := NewNodeRepo(nil, client)
 	serverID := int64(42)
 	key := fmt.Sprintf("%s%d:trojan", node.ServerConfigCacheKey, serverID)
 

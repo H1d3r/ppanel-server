@@ -1,9 +1,10 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/traffic"
@@ -12,36 +13,15 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// TrafficRepo traffic 数据访问接口
-type TrafficRepo interface {
-	Insert(ctx context.Context, data *traffic.TrafficLog) error
-	InsertBatch(ctx context.Context, data []*traffic.TrafficLog, batchSize int, tx ...*gorm.DB) error
-	FindOne(ctx context.Context, id int64) (*traffic.TrafficLog, error)
-	Update(ctx context.Context, data *traffic.TrafficLog) error
-	Delete(ctx context.Context, id int64) error
-	QueryServerTrafficByDay(ctx context.Context, serverId int64, date time.Time) (*traffic.TotalTraffic, error)
-	QueryTrafficByDay(ctx context.Context, date time.Time) (*traffic.TotalTraffic, error)
-	QueryTrafficByMonthly(ctx context.Context, date time.Time) (*traffic.TotalTraffic, error)
-	QueryTrafficSummary(ctx context.Context, start, end time.Time) (*traffic.TotalTraffic, error)
-	TopServersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]traffic.ServerTrafficRanking, error)
-	TopServersTrafficByMonthly(ctx context.Context, date time.Time, limit int) ([]traffic.ServerTrafficRanking, error)
-	TopUsersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]traffic.UserTrafficRanking, error)
-	TopUsersTrafficByMonthly(ctx context.Context, date time.Time, limit int) ([]traffic.UserTrafficRanking, error)
-	QueryServerTrafficRanking(ctx context.Context, start, end time.Time) ([]traffic.ServerTrafficRanking, error)
-	QueryUserTrafficRanking(ctx context.Context, start, end time.Time) ([]traffic.UserTrafficRanking, error)
-	QueryTrafficLogPageList(ctx context.Context, userId, subscribeId int64, page, size int) ([]*traffic.TrafficLog, int64, error)
-	QueryTrafficLogDetails(ctx context.Context, filter *traffic.TrafficLogDetailsFilter) ([]*traffic.TrafficLog, int64, error)
-	DeleteBefore(ctx context.Context, end time.Time) error
-}
-
-var _ TrafficRepo = (*trafficRepo)(nil)
+var _ repository.TrafficRepo = (*trafficRepo)(nil)
 
 type trafficRepo struct {
 	Conn  *gorm.DB
 	table string
 }
 
-func newTrafficRepo(db *gorm.DB) TrafficRepo {
+// NewTrafficRepo builds the module-owned implementation.
+func NewTrafficRepo(db *gorm.DB) repository.TrafficRepo {
 	return &trafficRepo{
 		Conn:  db,
 		table: "traffic",
@@ -205,7 +185,7 @@ func (m *trafficRepo) QueryUserTrafficRanking(ctx context.Context, start, end ti
 func (m *trafficRepo) QueryTrafficLogPageList(ctx context.Context, userId, subscribeId int64, page, size int) ([]*traffic.TrafficLog, int64, error) {
 	var list []*traffic.TrafficLog
 	var total int64
-	page, size = NormalizePage(page, size)
+	page, size = repository.NormalizePage(page, size)
 	err := m.Conn.WithContext(ctx).Model(&traffic.TrafficLog{}).Where("user_id = ? and subscribe_id= ?", userId, subscribeId).Count(&total).Limit(size).Offset((page - 1) * size).Find(&list).Error
 	return list, total, err
 }
@@ -214,7 +194,7 @@ func (m *trafficRepo) QueryTrafficLogDetails(ctx context.Context, filter *traffi
 	if filter == nil {
 		filter = &traffic.TrafficLogDetailsFilter{Page: 1, Size: 10}
 	}
-	filter.Page, filter.Size = NormalizePage(filter.Page, filter.Size)
+	filter.Page, filter.Size = repository.NormalizePage(filter.Page, filter.Size)
 
 	query := m.Conn.WithContext(ctx).Model(&traffic.TrafficLog{})
 	if filter.ServerId != 0 {

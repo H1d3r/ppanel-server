@@ -100,9 +100,6 @@ func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.Invalidat
 // implementation and exports its own builder; the composition root fills
 // the moved entries from the module facades.
 func LegacyBuilders(rds *redis.Client) Builders {
-	// The node cache retrier is a background singleton that must survive
-	// per-transaction rebuilds.
-	nodeRetrier := newServerCacheInvalidationRetrier(rds)
 	return Builders{
 		Identity: func(c ModuleConn, subs SubscriptionCacheBridge) IdentityRepos {
 			u := newUserRepo(c.Conn(), subs)
@@ -112,12 +109,6 @@ func LegacyBuilders(rds *redis.Client) Builders {
 				Devices:   u,
 				UserCache: u,
 				Auths:     newAuthRepo(c.DB, c.Redis, orNil(c.Invalidations)...),
-			}
-		},
-		Network: func(c ModuleConn) NetworkRepos {
-			return NetworkRepos{
-				Nodes:   newNodeRepo(c.DB, c.Redis, nodeRetrier),
-				Traffic: newTrafficRepo(c.DB),
 			}
 		},
 	}

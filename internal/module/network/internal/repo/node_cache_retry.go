@@ -1,4 +1,4 @@
-package repository
+package repo
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// serverCacheInvalidationRetrier coalesces failed server-response cache
+// ServerCacheInvalidationRetrier coalesces failed server-response cache
 // invalidations. It is shared by every Store derived from one root Store, so
 // a Redis outage cannot create one retry goroutine per successful DB write.
-type serverCacheInvalidationRetrier struct {
+type ServerCacheInvalidationRetrier struct {
 	invalidate func(context.Context, int64) error
 	delay      time.Duration
 
@@ -21,24 +21,26 @@ type serverCacheInvalidationRetrier struct {
 	running   bool
 }
 
-func newServerCacheInvalidationRetrier(client *redis.Client) *serverCacheInvalidationRetrier {
+// NewServerCacheInvalidationRetrier builds the background retry singleton
+// for node cache invalidation.
+func NewServerCacheInvalidationRetrier(client *redis.Client) *ServerCacheInvalidationRetrier {
 	return newServerCacheInvalidationRetrierWithFunc(func(ctx context.Context, serverID int64) error {
 		return clearServerCache(ctx, client, serverID)
 	}, time.Second)
 }
 
-func newServerCacheInvalidationRetrierWithFunc(invalidate func(context.Context, int64) error, delay time.Duration) *serverCacheInvalidationRetrier {
+func newServerCacheInvalidationRetrierWithFunc(invalidate func(context.Context, int64) error, delay time.Duration) *ServerCacheInvalidationRetrier {
 	if delay <= 0 {
 		delay = time.Second
 	}
-	return &serverCacheInvalidationRetrier{
+	return &ServerCacheInvalidationRetrier{
 		invalidate: invalidate,
 		delay:      delay,
 		serverIDs:  make(map[int64]uint64),
 	}
 }
 
-func (r *serverCacheInvalidationRetrier) Enqueue(serverIDs ...int64) {
+func (r *ServerCacheInvalidationRetrier) Enqueue(serverIDs ...int64) {
 	if r == nil {
 		return
 	}
@@ -58,7 +60,7 @@ func (r *serverCacheInvalidationRetrier) Enqueue(serverIDs ...int64) {
 	go r.run()
 }
 
-func (r *serverCacheInvalidationRetrier) run() {
+func (r *ServerCacheInvalidationRetrier) run() {
 	delay := r.delay
 	for {
 		pending := r.snapshot()
@@ -94,7 +96,7 @@ func (r *serverCacheInvalidationRetrier) run() {
 	}
 }
 
-func (r *serverCacheInvalidationRetrier) snapshot() map[int64]uint64 {
+func (r *ServerCacheInvalidationRetrier) snapshot() map[int64]uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	serverIDs := make(map[int64]uint64, len(r.serverIDs))
@@ -104,7 +106,7 @@ func (r *serverCacheInvalidationRetrier) snapshot() map[int64]uint64 {
 	return serverIDs
 }
 
-func (r *serverCacheInvalidationRetrier) removeSucceeded(serverIDs map[int64]uint64, failed map[int64]struct{}) {
+func (r *ServerCacheInvalidationRetrier) removeSucceeded(serverIDs map[int64]uint64, failed map[int64]struct{}) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for serverID, sequence := range serverIDs {

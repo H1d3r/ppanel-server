@@ -1,4 +1,4 @@
-package repository
+package repo
 
 import (
 	"context"
@@ -56,7 +56,7 @@ func TestClearServerCacheQueuesFailureWithoutFailingWrite(t *testing.T) {
 		queued <- serverID
 		return nil
 	}, time.Millisecond)
-	repo := newNodeRepo(nil, client, retrier)
+	repo := NewNodeRepo(nil, client, retrier)
 
 	if err := repo.ClearServerCache(context.Background(), 42); err != nil {
 		t.Fatalf("cache recovery must not fail the completed database write: %v", err)
