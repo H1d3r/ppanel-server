@@ -9,13 +9,10 @@ import (
 
 // Cache key prefixes used across the user domain cache.
 const (
-	cacheUserIdPrefix             = "cache:user:id:"
-	cacheUserEmailPrefix          = "cache:user:email:v2:"
-	cacheUserSubscribeTokenPrefix = "cache:user:subscribe:token:"
-	cacheUserSubscribeUserPrefix  = "cache:user:subscribe:user:v3:"
-	cacheUserSubscribeIdPrefix    = "cache:user:subscribe:id:"
-	cacheUserDeviceNumberPrefix   = "cache:user:device:number:"
-	cacheUserDeviceIdPrefix       = "cache:user:device:id:"
+	cacheUserIdPrefix           = "cache:user:id:"
+	cacheUserEmailPrefix        = "cache:user:email:v2:"
+	cacheUserDeviceNumberPrefix = "cache:user:device:number:"
+	cacheUserDeviceIdPrefix     = "cache:user:device:id:"
 )
 
 // CacheKeyGenerator produces the set of cache keys that hold the model.
@@ -42,24 +39,6 @@ func (u *User) GetCacheKeys() []string {
 			keys = append(keys, fmt.Sprintf("%s%s", cacheUserEmailPrefix, authmethod.CanonicalEmail(auth.AuthIdentifier)))
 			break
 		}
-	}
-	return keys
-}
-
-func (s *Subscribe) GetCacheKeys() []string {
-	if s == nil {
-		return []string{}
-	}
-	keys := make([]string, 0)
-
-	if s.Token != "" {
-		keys = append(keys, fmt.Sprintf("%s%s", cacheUserSubscribeTokenPrefix, s.Token))
-	}
-	if s.UserId != 0 {
-		keys = append(keys, fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, s.UserId))
-	}
-	if s.Id != 0 {
-		keys = append(keys, fmt.Sprintf("%s%d", cacheUserSubscribeIdPrefix, s.Id))
 	}
 	return keys
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -33,10 +33,10 @@ func (l *ToggleUserSubscribeStatusLogic) ToggleUserSubscribeStatus(req *dto.Togg
 	}
 
 	switch userSub.Status {
-	case user.SubscribeStatusActive:
-		userSub.Status = user.SubscribeStatusStopped
-	case user.SubscribeStatusStopped:
-		userSub.Status = user.SubscribeStatusActive
+	case usersub.SubscribeStatusActive:
+		userSub.Status = usersub.SubscribeStatusStopped
+	case usersub.SubscribeStatusStopped:
+		userSub.Status = usersub.SubscribeStatusActive
 	default:
 		l.Errorw("invalid user subscribe status", logger.Field("userSubscribeId", req.UserSubscribeId), logger.Field("status", userSub.Status))
 		return errors.Wrapf(xerr.NewErrCodeMsg(xerr.ERROR, "invalid subscribe status"), "invalid user subscribe status: %d", userSub.Status)

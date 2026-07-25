@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"gorm.io/gorm"
 )
 
@@ -22,16 +22,16 @@ import (
 type WalletRepo interface {
 	// FindOneForUpdate locks and returns the wallet row, seeding it from a
 	// zero state when the account has none yet.
-	FindOneForUpdate(ctx context.Context, userId int64) (*user.Wallet, error)
+	FindOneForUpdate(ctx context.Context, userId int64) (*walletEntity.Wallet, error)
 	// FindWallet and FindWalletsByUserIds are the plain (non-locking) reads
 	// of the wallet table for display composition; a missing row reads as
 	// nil (single) or is absent from the map (batch).
-	FindWallet(ctx context.Context, userId int64) (*user.Wallet, error)
-	FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*user.Wallet, error)
+	FindWallet(ctx context.Context, userId int64) (*walletEntity.Wallet, error)
+	FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*walletEntity.Wallet, error)
 	// UpdateBalanceFields persists the balance and gift columns;
 	// UpdateCommission persists the commission column.
-	UpdateBalanceFields(ctx context.Context, data *user.Wallet, tx ...*gorm.DB) error
-	UpdateCommission(ctx context.Context, data *user.Wallet, tx ...*gorm.DB) error
+	UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error
+	UpdateCommission(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error
 }
 
 // BillingStore is the billing domain's transactional surface: orders,

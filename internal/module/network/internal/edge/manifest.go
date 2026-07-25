@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/node"
 	"github.com/perfect-panel/server/internal/model/entity/subscribe"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"gorm.io/gorm"
@@ -90,7 +91,7 @@ func (l *ManifestLogic) Manifest(token string) (*dto.EdgeManifestResponse, error
 	return manifest, nil
 }
 
-func (l *ManifestLogic) proxies(userSubscribe *user.Subscribe, plan *subscribe.Subscribe) ([]dto.EdgeManifestProxy, []string, error) {
+func (l *ManifestLogic) proxies(userSubscribe *usersub.Subscribe, plan *subscribe.Subscribe) ([]dto.EdgeManifestProxy, []string, error) {
 	nodeIDs := tool.StringToInt64Slice(plan.Nodes)
 	tags := cleanTags(strings.Split(plan.NodeTags, ","))
 	if len(nodeIDs) == 0 && len(tags) == 0 {
@@ -130,7 +131,7 @@ func (l *ManifestLogic) proxies(userSubscribe *user.Subscribe, plan *subscribe.S
 	return proxies, notices, nil
 }
 
-func subscriptionDTO(plan *subscribe.Subscribe, userSubscribe *user.Subscribe, state string, cfg config.SubscribeConfig) dto.EdgeManifestSubscription {
+func subscriptionDTO(plan *subscribe.Subscribe, userSubscribe *usersub.Subscribe, state string, cfg config.SubscribeConfig) dto.EdgeManifestSubscription {
 	result := dto.EdgeManifestSubscription{
 		Name:         plan.Name,
 		State:        state,
@@ -148,7 +149,7 @@ func subscriptionDTO(plan *subscribe.Subscribe, userSubscribe *user.Subscribe, s
 	return result
 }
 
-func subscriptionState(item *user.Subscribe, now time.Time) string {
+func subscriptionState(item *usersub.Subscribe, now time.Time) string {
 	if item == nil {
 		return "disabled"
 	}
@@ -299,7 +300,7 @@ func uniqueProxyName(name string, nodeID int64, used map[string]int) string {
 	return name + " #" + strconv.FormatInt(nodeID, 10)
 }
 
-func revision(account *user.User, userSubscribe *user.Subscribe, plan *subscribe.Subscribe, subscription dto.EdgeManifestSubscription, proxies []dto.EdgeManifestProxy, notices []string) string {
+func revision(account *user.User, userSubscribe *usersub.Subscribe, plan *subscribe.Subscribe, subscription dto.EdgeManifestSubscription, proxies []dto.EdgeManifestProxy, notices []string) string {
 	type proxySource struct {
 		Name      string                     `json:"name"`
 		Protocol  string                     `json:"protocol"`

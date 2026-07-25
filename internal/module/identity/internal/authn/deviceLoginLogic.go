@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/jwt"
@@ -170,7 +171,7 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 	}
 
 	var userInfo *user.User
-	var trialSubscribe *user.Subscribe
+	var trialSubscribe *usersub.Subscribe
 	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		// Create new user
 		userInfo = &user.User{
@@ -283,7 +284,7 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 	return userInfo, nil
 }
 
-func (l *DeviceLoginLogic) clearTrialSubscribeCache(trialSub *user.Subscribe) {
+func (l *DeviceLoginLogic) clearTrialSubscribeCache(trialSub *usersub.Subscribe) {
 	if trialSub == nil {
 		return
 	}
@@ -301,7 +302,7 @@ func (l *DeviceLoginLogic) clearTrialSubscribeCache(trialSub *user.Subscribe) {
 	}
 }
 
-func (l *DeviceLoginLogic) activeTrial(store repository.Store, userId int64) (*user.Subscribe, error) {
+func (l *DeviceLoginLogic) activeTrial(store repository.Store, userId int64) (*usersub.Subscribe, error) {
 	sub, err := store.Subscribe().FindOne(l.ctx, l.deps.Config.TrialSubscribeID)
 	if err != nil {
 		l.Errorw("failed to find trial subscription template",
@@ -317,7 +318,7 @@ func (l *DeviceLoginLogic) activeTrial(store repository.Store, userId int64) (*u
 	subscribeToken := uuidx.SubscribeToken(fmt.Sprintf("Trial-%v-%s", userId, uuidx.NewUUID().String()))
 	subscribeUUID := uuidx.NewUUID().String()
 
-	userSub := &user.Subscribe{
+	userSub := &usersub.Subscribe{
 		UserId:      userId,
 		OrderId:     0,
 		SubscribeId: sub.Id,

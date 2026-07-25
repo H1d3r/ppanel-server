@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/uuidx"
@@ -64,7 +65,7 @@ func (l *ResetUserSubscribeTokenLogic) ResetUserSubscribeToken(req *dto.ResetUse
 
 	userSub.Token = uuidx.SubscribeToken(orderDetails.OrderNo + timeutil.Now().Format("20060102150405.000"))
 	userSub.UUID = uuid.New().String()
-	var newSub user.Subscribe
+	var newSub usersub.Subscribe
 	tool.DeepCopy(&newSub, userSub)
 
 	err = l.deps.UserSubs.UpdateSubscribe(l.ctx, &newSub)

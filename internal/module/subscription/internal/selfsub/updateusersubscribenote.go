@@ -7,6 +7,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -47,7 +48,7 @@ func (l *UpdateUserSubscribeNoteLogic) UpdateUserSubscribeNote(req *dto.UpdateUs
 	}
 
 	userSub.Note = req.Note
-	var newSub user.Subscribe
+	var newSub usersub.Subscribe
 	tool.DeepCopy(&newSub, userSub)
 
 	err = l.deps.UserSubs.UpdateSubscribe(l.ctx, &newSub)

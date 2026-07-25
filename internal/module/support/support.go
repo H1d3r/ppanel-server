@@ -10,6 +10,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support/internal/ads"
 	"github.com/perfect-panel/server/internal/module/support/internal/announcement"
 	"github.com/perfect-panel/server/internal/module/support/internal/document"
@@ -92,8 +93,8 @@ type EmailRecipientReader interface {
 // selecting quota-task targets; the legacy user-subscription repository
 // satisfies it structurally.
 type SubscriptionSelector interface {
-	QuerySubscribeIdsByFilter(ctx context.Context, filter *user.SubscribeFilter) ([]int64, error)
-	CountSubscribesByFilter(ctx context.Context, filter *user.SubscribeFilter) (int64, error)
+	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
+	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)
 }
 
 // MarketingQueue schedules asynchronous execution of marketing tasks; the

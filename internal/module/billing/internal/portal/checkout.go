@@ -19,6 +19,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	queueType "github.com/perfect-panel/server/queue/types"
 	"github.com/redis/go-redis/v9"
 
@@ -100,8 +101,8 @@ type CheckoutStore interface {
 // the balance-payment transaction.
 type CheckoutTransaction interface {
 	FindOrderByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error)
-	FindUserForUpdate(ctx context.Context, id int64) (*user.Wallet, error)
-	UpdateUserBalance(ctx context.Context, data *user.Wallet) error
+	FindUserForUpdate(ctx context.Context, id int64) (*walletEntity.Wallet, error)
+	UpdateUserBalance(ctx context.Context, data *walletEntity.Wallet) error
 	InsertSystemLog(ctx context.Context, data *log.SystemLog) error
 	UpdateOrder(ctx context.Context, data *order.Order) error
 	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error)
@@ -161,11 +162,11 @@ func (s checkoutTransaction) FindOrderByOrderNoForUpdate(ctx context.Context, or
 	return s.store.Order().FindOneByOrderNoForUpdate(ctx, orderNo)
 }
 
-func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*user.Wallet, error) {
+func (s checkoutTransaction) FindUserForUpdate(ctx context.Context, id int64) (*walletEntity.Wallet, error) {
 	return s.store.Wallet().FindOneForUpdate(ctx, id)
 }
 
-func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *user.Wallet) error {
+func (s checkoutTransaction) UpdateUserBalance(ctx context.Context, data *walletEntity.Wallet) error {
 	return s.store.Wallet().UpdateBalanceFields(ctx, data)
 }
 
@@ -628,7 +629,7 @@ func (l *PurchaseCheckoutLogic) persistPaymentExpectation(info *order.Order, amo
 // It prioritizes using gift amount first, then regular balance, and creates proper audit logs
 func (l *PurchaseCheckoutLogic) balancePayment(u *user.User, o *order.Order) error {
 	var err error
-	var paidUser *user.Wallet
+	var paidUser *walletEntity.Wallet
 	if o.Amount == 0 {
 		// No payment required for zero-amount orders
 		l.Logger.Info(

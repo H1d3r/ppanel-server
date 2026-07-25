@@ -9,6 +9,7 @@ import (
 	logEntity "github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/orderflow"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
@@ -49,7 +50,7 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 	if userSubscribe.UserId != u.Id {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "subscription does not belong to the current user")
 	}
-	if userSubscribe.Status == user.SubscribeStatusDeducted {
+	if userSubscribe.Status == usersub.SubscribeStatusDeducted {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "deducted subscription cannot be renewed")
 	}
 	// find subscription

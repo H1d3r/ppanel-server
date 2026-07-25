@@ -7,14 +7,14 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/subscribe"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 )
 
 type policyUserSubs struct {
 	UserSubscriptionReader
 	blocking           bool
 	quotaCount         int64
-	subscription       *userEntity.Subscribe
+	subscription       *usersub.Subscribe
 	hasBlockingCalls   int
 	quotaCountCalls    int
 	findSubscribeCalls int
@@ -30,7 +30,7 @@ func (r *policyUserSubs) CountQuotaConsumingSubscriptions(_ context.Context, _ i
 	return r.quotaCount, nil
 }
 
-func (r *policyUserSubs) FindOneSubscribe(_ context.Context, _ int64) (*userEntity.Subscribe, error) {
+func (r *policyUserSubs) FindOneSubscribe(_ context.Context, _ int64) (*usersub.Subscribe, error) {
 	r.findSubscribeCalls++
 	return r.subscription, nil
 }
@@ -106,11 +106,11 @@ func TestPurchaseAndPreCreateUseQuotaConsumingCount(t *testing.T) {
 func TestRenewalPreviewSkipsNewPurchaseQuotaAfterValidation(t *testing.T) {
 	users := &policyUserSubs{
 		quotaCount: 1,
-		subscription: &userEntity.Subscribe{
+		subscription: &usersub.Subscribe{
 			Id:          22,
 			UserId:      42,
 			SubscribeId: 10,
-			Status:      userEntity.SubscribeStatusExpired,
+			Status:      usersub.SubscribeStatusExpired,
 		},
 	}
 	svc := NewService(Deps{
@@ -137,36 +137,36 @@ func TestRenewalPreviewSkipsNewPurchaseQuotaAfterValidation(t *testing.T) {
 func TestRenewalPreviewValidatesTargetBeforeSkippingQuota(t *testing.T) {
 	tests := []struct {
 		name         string
-		subscription *userEntity.Subscribe
+		subscription *usersub.Subscribe
 		wantError    string
 	}{
 		{
 			name: "foreign subscription",
-			subscription: &userEntity.Subscribe{
+			subscription: &usersub.Subscribe{
 				Id:          22,
 				UserId:      7,
 				SubscribeId: 10,
-				Status:      userEntity.SubscribeStatusActive,
+				Status:      usersub.SubscribeStatusActive,
 			},
 			wantError: "does not belong to current user",
 		},
 		{
 			name: "different plan",
-			subscription: &userEntity.Subscribe{
+			subscription: &usersub.Subscribe{
 				Id:          22,
 				UserId:      42,
 				SubscribeId: 11,
-				Status:      userEntity.SubscribeStatusActive,
+				Status:      usersub.SubscribeStatusActive,
 			},
 			wantError: "does not match subscribe plan",
 		},
 		{
 			name: "deducted subscription",
-			subscription: &userEntity.Subscribe{
+			subscription: &usersub.Subscribe{
 				Id:          22,
 				UserId:      42,
 				SubscribeId: 10,
-				Status:      userEntity.SubscribeStatusDeducted,
+				Status:      usersub.SubscribeStatusDeducted,
 			},
 			wantError: "status does not allow renewal",
 		},

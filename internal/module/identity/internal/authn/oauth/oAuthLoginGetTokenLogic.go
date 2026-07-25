@@ -12,6 +12,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/auth"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/jwt"
@@ -462,7 +463,7 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, reques
 	}
 
 	var userInfo *user.User
-	var trialSubscribe *user.Subscribe
+	var trialSubscribe *usersub.Subscribe
 	err := l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		if email != "" {
 			l.Debugw("checking if email already exists",
@@ -962,7 +963,7 @@ func (l *OAuthLoginGetTokenLogic) findOrRegisterUser(authType, openID, email, av
 	return userInfo, nil
 }
 
-func (l *OAuthLoginGetTokenLogic) activeTrial(store repository.Store, uid int64, requestID string) (*user.Subscribe, error) {
+func (l *OAuthLoginGetTokenLogic) activeTrial(store repository.Store, uid int64, requestID string) (*usersub.Subscribe, error) {
 	l.Debugw("fetching trial subscription template",
 		logger.Field("request_id", requestID),
 		logger.Field("user_id", uid),
@@ -996,7 +997,7 @@ func (l *OAuthLoginGetTokenLogic) activeTrial(store repository.Store, uid int64,
 		logger.Field("uuid", subscribeUUID),
 	)
 
-	userSub := &user.Subscribe{
+	userSub := &usersub.Subscribe{
 		Id:          0,
 		UserId:      uid,
 		OrderId:     0,

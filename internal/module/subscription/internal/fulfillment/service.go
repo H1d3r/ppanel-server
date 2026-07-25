@@ -14,6 +14,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/subscribe"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -57,7 +58,7 @@ type outcomeParts struct {
 	order      *order.Order
 	user       *user.User
 	subscribe  *subscribe.Subscribe
-	userSub    *user.Subscribe
+	userSub    *usersub.Subscribe
 	notifyType string
 }
 
@@ -129,7 +130,7 @@ func (s *Service) FulfillPaidOrder(ctx context.Context, orderNo string) (*Outcom
 	}, nil
 }
 
-func expireOf(sub *user.Subscribe) time.Time {
+func expireOf(sub *usersub.Subscribe) time.Time {
 	if sub == nil {
 		return time.Time{}
 	}
@@ -216,7 +217,7 @@ func (s *Service) activateNewPurchaseTx(ctx context.Context, store repository.St
 	return &outcomeParts{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: NotifyPurchase}, nil
 }
 
-func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository.Store, orderInfo *order.Order, sub *subscribe.Subscribe) (*user.Subscribe, error) {
+func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository.Store, orderInfo *order.Order, sub *subscribe.Subscribe) (*usersub.Subscribe, error) {
 	if s.deps.SingleModel() {
 		hasBlockingSubscription, err := store.UserSubscription().HasBlockingSubscription(ctx, orderInfo.UserId)
 		if err != nil {
@@ -236,7 +237,7 @@ func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository
 		}
 	}
 	now := timeutil.Now()
-	userSub := &user.Subscribe{
+	userSub := &usersub.Subscribe{
 		UserId:      orderInfo.UserId,
 		OrderId:     orderInfo.Id,
 		SubscribeId: orderInfo.SubscribeId,
@@ -275,7 +276,7 @@ func (s *Service) activateRenewalTx(ctx context.Context, store repository.Store,
 	return &outcomeParts{order: orderInfo, user: userInfo, subscribe: sub, userSub: userSub, notifyType: NotifyRenewal}, nil
 }
 
-func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repository.Store, userSub *user.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order) error {
+func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repository.Store, userSub *usersub.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order) error {
 	now := timeutil.Now()
 	if userSub.ExpireTime.Before(now) {
 		userSub.ExpireTime = now

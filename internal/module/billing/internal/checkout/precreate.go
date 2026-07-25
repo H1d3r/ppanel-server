@@ -6,6 +6,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -57,7 +58,7 @@ func (s *Service) PreCreateOrder(ctx context.Context, req *dto.PurchaseOrderRequ
 		if userSubscribe.SubscribeId != req.SubscribeId {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe does not match subscribe plan")
 		}
-		if userSubscribe.Status == user.SubscribeStatusDeducted {
+		if userSubscribe.Status == usersub.SubscribeStatusDeducted {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe status does not allow renewal")
 		}
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/node"
 
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -185,7 +185,7 @@ func (l *SubscribeLogic) getSubscribeV2URL() string {
 }
 
 // getUserSubscribe 是本次修改的核心部分
-func (l *SubscribeLogic) getUserSubscribe(token string) (*user.Subscribe, error) {
+func (l *SubscribeLogic) getUserSubscribe(token string) (*usersub.Subscribe, error) {
 	userSub, err := l.deps.UserSubs.FindOneSubscribeByToken(l.ctx, token)
 	if err != nil {
 		l.Infow("[Generate Subscribe]find subscribe error: %v", logger.Field("error", err.Error()), logger.Field("token", token))
@@ -222,7 +222,7 @@ func (l *SubscribeLogic) getUserSubscribe(token string) (*user.Subscribe, error)
 	return userSub, nil
 }
 
-func (l *SubscribeLogic) logSubscribeActivity(subscribeStatus bool, userSub *user.Subscribe, req *dto.SubscribeRequest) {
+func (l *SubscribeLogic) logSubscribeActivity(subscribeStatus bool, userSub *usersub.Subscribe, req *dto.SubscribeRequest) {
 	if !subscribeStatus {
 		return
 	}
@@ -247,7 +247,7 @@ func (l *SubscribeLogic) logSubscribeActivity(subscribeStatus bool, userSub *use
 	}
 }
 
-func (l *SubscribeLogic) getServers(userSub *user.Subscribe) ([]*node.Node, error) {
+func (l *SubscribeLogic) getServers(userSub *usersub.Subscribe) ([]*node.Node, error) {
 	if l.isSubscriptionExpired(userSub) {
 		return l.createNoticeServers("订阅已过期 / Subscribe Expired"), nil
 	}
@@ -291,14 +291,14 @@ func (l *SubscribeLogic) getServers(userSub *user.Subscribe) ([]*node.Node, erro
 	return nodes, nil
 }
 
-func (l *SubscribeLogic) isSubscriptionExpired(userSub *user.Subscribe) bool {
+func (l *SubscribeLogic) isSubscriptionExpired(userSub *usersub.Subscribe) bool {
 	return userSub.ExpireTime.Unix() < timeutil.Now().Unix() && userSub.ExpireTime.Unix() != 0
 }
 
 // isTrafficExhausted reports whether the subscription has used up its traffic
 // quota. Traffic == 0 means unlimited. Mirrors the condition used by
 // FindTrafficExceededSubscribes (upload + download >= traffic AND traffic > 0).
-func (l *SubscribeLogic) isTrafficExhausted(userSub *user.Subscribe) bool {
+func (l *SubscribeLogic) isTrafficExhausted(userSub *usersub.Subscribe) bool {
 	return userSub.Traffic > 0 && userSub.Download+userSub.Upload >= userSub.Traffic
 }
 

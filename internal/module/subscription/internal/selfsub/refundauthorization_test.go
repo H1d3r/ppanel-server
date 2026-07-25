@@ -8,6 +8,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	usermodel "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
@@ -20,14 +21,14 @@ type fakeUserRepo struct {
 	repository.UserRepo
 	repository.UserSubscriptionRepo
 
-	findOneSubscribeFn    func(context.Context, int64) (*usermodel.Subscribe, error)
+	findOneSubscribeFn    func(context.Context, int64) (*usersub.Subscribe, error)
 	findOneSubscribeCalls int
 
-	findOneUserSubscribeFn    func(context.Context, int64) (*usermodel.SubscribeDetails, error)
+	findOneUserSubscribeFn    func(context.Context, int64) (*usersub.SubscribeDetails, error)
 	findOneUserSubscribeCalls int
 }
 
-func (r *fakeUserRepo) FindOneSubscribe(ctx context.Context, id int64) (*usermodel.Subscribe, error) {
+func (r *fakeUserRepo) FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error) {
 	r.findOneSubscribeCalls++
 	if r.findOneSubscribeFn != nil {
 		return r.findOneSubscribeFn(ctx, id)
@@ -35,7 +36,7 @@ func (r *fakeUserRepo) FindOneSubscribe(ctx context.Context, id int64) (*usermod
 	panic("fakeUserRepo: unexpected call to FindOneSubscribe")
 }
 
-func (r *fakeUserRepo) FindOneUserSubscribe(ctx context.Context, id int64) (*usermodel.SubscribeDetails, error) {
+func (r *fakeUserRepo) FindOneUserSubscribe(ctx context.Context, id int64) (*usersub.SubscribeDetails, error) {
 	r.findOneUserSubscribeCalls++
 	if r.findOneUserSubscribeFn != nil {
 		return r.findOneUserSubscribeFn(ctx, id)
@@ -110,11 +111,11 @@ func TestPreUnsubscribe_WrongOwner_ReturnsInvalidAccess(t *testing.T) {
 	const subID int64 = 200
 
 	u := &fakeUserRepo{
-		findOneSubscribeFn: func(_ context.Context, id int64) (*usermodel.Subscribe, error) {
+		findOneSubscribeFn: func(_ context.Context, id int64) (*usersub.Subscribe, error) {
 			if id != subID {
 				t.Fatalf("FindOneSubscribe: got id %d, want %d", id, subID)
 			}
-			return &usermodel.Subscribe{Id: subID, UserId: 200}, nil
+			return &usersub.Subscribe{Id: subID, UserId: 200}, nil
 		},
 	}
 
@@ -142,13 +143,13 @@ func TestPreUnsubscribe_OwnerBypassesAuthGate(t *testing.T) {
 	const subID int64 = 100
 
 	u := &fakeUserRepo{
-		findOneSubscribeFn: func(_ context.Context, id int64) (*usermodel.Subscribe, error) {
+		findOneSubscribeFn: func(_ context.Context, id int64) (*usersub.Subscribe, error) {
 			if id != subID {
 				t.Fatalf("FindOneSubscribe: got id %d, want %d", id, subID)
 			}
-			return &usermodel.Subscribe{Id: subID, UserId: 100}, nil
+			return &usersub.Subscribe{Id: subID, UserId: 100}, nil
 		},
-		findOneUserSubscribeFn: func(_ context.Context, id int64) (*usermodel.SubscribeDetails, error) {
+		findOneUserSubscribeFn: func(_ context.Context, id int64) (*usersub.SubscribeDetails, error) {
 			return nil, errors.New("simulated FindOneUserSubscribe failure")
 		},
 	}
@@ -181,11 +182,11 @@ func TestUnsubscribe_WrongOwner_ReturnsInvalidAccess(t *testing.T) {
 	const subID int64 = 200
 
 	u := &fakeUserRepo{
-		findOneSubscribeFn: func(_ context.Context, id int64) (*usermodel.Subscribe, error) {
+		findOneSubscribeFn: func(_ context.Context, id int64) (*usersub.Subscribe, error) {
 			if id != subID {
 				t.Fatalf("FindOneSubscribe: got id %d, want %d", id, subID)
 			}
-			return &usermodel.Subscribe{Id: subID, UserId: 200, Status: 1}, nil
+			return &usersub.Subscribe{Id: subID, UserId: 200, Status: 1}, nil
 		},
 	}
 
@@ -210,13 +211,13 @@ func TestUnsubscribe_OwnerBypassesAuthGate(t *testing.T) {
 	const subID int64 = 100
 
 	u := &fakeUserRepo{
-		findOneSubscribeFn: func(_ context.Context, id int64) (*usermodel.Subscribe, error) {
+		findOneSubscribeFn: func(_ context.Context, id int64) (*usersub.Subscribe, error) {
 			if id != subID {
 				t.Fatalf("FindOneSubscribe: got id %d, want %d", id, subID)
 			}
-			return &usermodel.Subscribe{Id: subID, UserId: 100, Status: 1}, nil
+			return &usersub.Subscribe{Id: subID, UserId: 100, Status: 1}, nil
 		},
-		findOneUserSubscribeFn: func(_ context.Context, id int64) (*usermodel.SubscribeDetails, error) {
+		findOneUserSubscribeFn: func(_ context.Context, id int64) (*usersub.SubscribeDetails, error) {
 			return nil, errors.New("simulated FindOneUserSubscribe failure")
 		},
 	}

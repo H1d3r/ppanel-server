@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -56,13 +57,13 @@ func NewService(deps Deps) *Service {
 func (s *Service) CheckSubscriptions(ctx context.Context) error {
 	logger.Infof("[CheckSubscription] Start check subscription: %s", timeutil.Now().Format("2006-01-02 15:04:05"))
 	if err := s.markSubscribes(ctx, 2, "[Check Subscription Traffic]", s.sendTrafficNotify,
-		func(store repository.SubscriptionStore) ([]*user.Subscribe, error) {
+		func(store repository.SubscriptionStore) ([]*usersub.Subscribe, error) {
 			return store.UserSubscription().FindTrafficExceededSubscribes(ctx)
 		}); err != nil {
 		logger.Error("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
 	}
 	if err := s.markSubscribes(ctx, 3, "[Check Subscription Expire]", s.sendExpiredNotify,
-		func(store repository.SubscriptionStore) ([]*user.Subscribe, error) {
+		func(store repository.SubscriptionStore) ([]*usersub.Subscribe, error) {
 			return store.UserSubscription().FindExpiredSubscribes(ctx, timeutil.Now())
 		}); err != nil {
 		logger.Info("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
@@ -70,8 +71,8 @@ func (s *Service) CheckSubscriptions(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []int64), find func(repository.SubscriptionStore) ([]*user.Subscribe, error)) error {
-	var list []*user.Subscribe
+func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []int64), find func(repository.SubscriptionStore) ([]*usersub.Subscribe, error)) error {
+	var list []*usersub.Subscribe
 	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		var err error
 		list, err = find(store)
@@ -140,7 +141,7 @@ func (s *Service) sendTrafficNotify(ctx context.Context, subs []int64) {
 	}
 }
 
-func (s *Service) clearServerCache(ctx context.Context, userSubs ...*user.Subscribe) {
+func (s *Service) clearServerCache(ctx context.Context, userSubs ...*usersub.Subscribe) {
 	subs := make(map[int64]bool)
 	for _, sub := range userSubs {
 		subs[sub.SubscribeId] = true

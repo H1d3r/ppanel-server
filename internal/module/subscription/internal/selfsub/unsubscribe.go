@@ -16,6 +16,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -69,7 +70,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
 	}
 
-	cancelable := []uint8{user.SubscribeStatusPending, user.SubscribeStatusActive, user.SubscribeStatusFinished}
+	cancelable := []uint8{usersub.SubscribeStatusPending, usersub.SubscribeStatusActive, usersub.SubscribeStatusFinished}
 	subKey := strconv.FormatInt(req.Id, 10)
 
 	if !tool.Contains(cancelable, userSub.Status) {
@@ -102,7 +103,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 			if !tool.Contains(cancelable, lockedSub.Status) {
 				return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Subscription status invalid for cancellation")
 			}
-			lockedSub.Status = user.SubscribeStatusDeducted
+			lockedSub.Status = usersub.SubscribeStatusDeducted
 			if err = store.UserSubscription().UpdateSubscribe(l.ctx, lockedSub); err != nil {
 				return err
 			}
@@ -138,7 +139,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 // hasUnsettledRefund reports whether a non-cancelable subscription is a
 // Deducted one whose cancellation committed but whose refund never did.
 func (l *UnsubscribeLogic) hasUnsettledRefund(status uint8, subKey string) (bool, error) {
-	if status != user.SubscribeStatusDeducted {
+	if status != usersub.SubscribeStatusDeducted {
 		return false, nil
 	}
 	cancelled, err := l.deps.Inbox.Find(l.ctx, unsubscribeCancelConsumer, subKey)

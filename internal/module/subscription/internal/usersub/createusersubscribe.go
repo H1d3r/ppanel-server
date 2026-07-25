@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/uuidx"
@@ -56,7 +56,7 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		req.Traffic = sub.Traffic
 	}
 
-	userSub := user.Subscribe{
+	userSub := usersub.Subscribe{
 		UserId:      req.UserId,
 		SubscribeId: req.SubscribeId,
 		StartTime:   timeutil.Now(),
@@ -66,7 +66,7 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		Upload:      0,
 		Token:       uuidx.SubscribeToken(fmt.Sprintf("adminCreate:%d", timeutil.Now().UnixMilli())),
 		UUID:        uuid.New().String(),
-		Status:      user.SubscribeStatusActive,
+		Status:      usersub.SubscribeStatusActive,
 	}
 	if err = l.deps.UserSubs.InsertSubscribe(l.ctx, &userSub); err != nil {
 		l.Errorw("InsertSubscribe error", logger.Field("error", err.Error()))

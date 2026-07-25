@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -39,7 +39,7 @@ func (l *UpdateUserSubscribeLogic) UpdateUserSubscribe(req *dto.UpdateUserSubscr
 		userSub.Status = 1
 	}
 
-	err = l.deps.UserSubs.UpdateSubscribe(l.ctx, &user.Subscribe{
+	err = l.deps.UserSubs.UpdateSubscribe(l.ctx, &usersub.Subscribe{
 		Id:          userSub.Id,
 		UserId:      userSub.UserId,
 		OrderId:     userSub.OrderId,

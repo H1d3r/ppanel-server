@@ -6,6 +6,8 @@ import (
 
 	trafficEntity "github.com/perfect-panel/server/internal/model/entity/traffic"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/redis/go-redis/v9"
@@ -69,33 +71,33 @@ type UserAuthRepo interface {
 
 // UserSubscriptionRepo manages user subscription records and their lifecycle.
 type UserSubscriptionRepo interface {
-	InsertSubscribe(ctx context.Context, data *user.Subscribe, tx ...*gorm.DB) error
-	FindOneSubscribe(ctx context.Context, id int64) (*user.Subscribe, error)
-	FindOneSubscribeForUpdate(ctx context.Context, id int64) (*user.Subscribe, error)
-	FindOneSubscribeByOrderId(ctx context.Context, orderId int64) (*user.Subscribe, error)
-	FindOneSubscribeByToken(ctx context.Context, token string) (*user.Subscribe, error)
-	FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*user.Subscribe, error)
-	UpdateSubscribe(ctx context.Context, data *user.Subscribe, tx ...*gorm.DB) error
+	InsertSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error
+	FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error)
+	FindOneSubscribeForUpdate(ctx context.Context, id int64) (*usersub.Subscribe, error)
+	FindOneSubscribeByOrderId(ctx context.Context, orderId int64) (*usersub.Subscribe, error)
+	FindOneSubscribeByToken(ctx context.Context, token string) (*usersub.Subscribe, error)
+	FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*usersub.Subscribe, error)
+	UpdateSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error
 	DeleteSubscribe(ctx context.Context, token string, tx ...*gorm.DB) error
 	DeleteSubscribeById(ctx context.Context, id int64, tx ...*gorm.DB) error
 	UpdateUserSubscribeWithTraffic(ctx context.Context, id, download, upload int64, tx ...*gorm.DB) error
 	BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta, tx ...*gorm.DB) error
-	FindUsersSubscribeBySubscribeId(ctx context.Context, subscribeId int64) ([]*user.Subscribe, error)
-	FindUserSubscribesByStatus(ctx context.Context, status ...int64) ([]*user.Subscribe, error)
-	FindSubscribesByIds(ctx context.Context, ids []int64) ([]*user.Subscribe, error)
+	FindUsersSubscribeBySubscribeId(ctx context.Context, subscribeId int64) ([]*usersub.Subscribe, error)
+	FindUserSubscribesByStatus(ctx context.Context, status ...int64) ([]*usersub.Subscribe, error)
+	FindSubscribesByIds(ctx context.Context, ids []int64) ([]*usersub.Subscribe, error)
 	ActivatePendingSubscribesBySubscribeId(ctx context.Context, subscribeId int64) error
 	CountQuotaConsumingSubscriptions(ctx context.Context, userId, subscribeId int64) (int64, error)
 	HasBlockingSubscription(ctx context.Context, userId int64) (bool, error)
 	CountUserSubscribesBySubscribeIdAndStatus(ctx context.Context, subscribeId int64, status ...int64) (int64, error)
 	QueryActiveSubscriptions(ctx context.Context, subscribeId ...int64) (map[int64]int64, error)
-	QueryUserSubscribe(ctx context.Context, userId int64, status ...int64) ([]*user.SubscribeDetails, error)
-	FindOneSubscribeDetailsById(ctx context.Context, id int64) (*user.SubscribeDetails, error)
-	FindOneUserSubscribe(ctx context.Context, id int64) (*user.SubscribeDetails, error)
-	FindTrafficExceededSubscribes(ctx context.Context) ([]*user.Subscribe, error)
-	FindExpiredSubscribes(ctx context.Context, now time.Time) ([]*user.Subscribe, error)
+	QueryUserSubscribe(ctx context.Context, userId int64, status ...int64) ([]*usersub.SubscribeDetails, error)
+	FindOneSubscribeDetailsById(ctx context.Context, id int64) (*usersub.SubscribeDetails, error)
+	FindOneUserSubscribe(ctx context.Context, id int64) (*usersub.SubscribeDetails, error)
+	FindTrafficExceededSubscribes(ctx context.Context) ([]*usersub.Subscribe, error)
+	FindExpiredSubscribes(ctx context.Context, now time.Time) ([]*usersub.Subscribe, error)
 	MarkSubscribesFinished(ctx context.Context, ids []int64, status uint8, finishedAt time.Time, tx ...*gorm.DB) error
-	QuerySubscribeIdsByFilter(ctx context.Context, filter *user.SubscribeFilter) ([]int64, error)
-	CountSubscribesByFilter(ctx context.Context, filter *user.SubscribeFilter) (int64, error)
+	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
+	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)
 }
 
 // UserDeviceRepo manages registered devices and their online records.
@@ -113,7 +115,7 @@ type UserDeviceRepo interface {
 
 // UserWithdrawalRepo manages affiliate withdrawal records.
 type UserWithdrawalRepo interface {
-	InsertWithdrawal(ctx context.Context, data *user.Withdrawal, tx ...*gorm.DB) error
+	InsertWithdrawal(ctx context.Context, data *walletEntity.Withdrawal, tx ...*gorm.DB) error
 }
 
 // SubscriptionTrafficRepo manages scheduled subscription traffic resets.
@@ -127,12 +129,12 @@ type SubscriptionTrafficRepo interface {
 // UserCacheRepo manages cached user-related projections.
 type UserCacheRepo interface {
 	ClearUserCache(ctx context.Context, data ...*user.User) error
-	ClearSubscribeCache(ctx context.Context, data ...*user.Subscribe) error
+	ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error
 	ClearDeviceCache(ctx context.Context, data ...*user.Device) error
 	ClearAuthMethodCache(ctx context.Context, data ...*user.AuthMethods) error
 	BatchClearRelatedCache(ctx context.Context, data *user.User) error
 	UpdateUserCache(ctx context.Context, data *user.User) error
-	UpdateUserSubscribeCache(ctx context.Context, data *user.Subscribe) error
+	UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error
 }
 
 // The former shared *userRepo is physically split along domain seams
@@ -261,7 +263,7 @@ func (m *userRepo) BatchClearRelatedCache(ctx context.Context, u *user.User) err
 		logger.Errorf("failed to query user subscribes for cache clearing: %v", err)
 	} else {
 		for _, sub := range subscribes {
-			subModel := &user.Subscribe{
+			subModel := &usersub.Subscribe{
 				Id:          sub.Id,
 				UserId:      sub.UserId,
 				Token:       sub.Token,
@@ -277,10 +279,10 @@ func (m *userRepo) BatchClearRelatedCache(ctx context.Context, u *user.User) err
 // ClearSubscribeCache and UpdateUserSubscribeCache delegate to the
 // subscription repo: the cache facade (UserCacheRepo) stays one object for
 // its consumers while each domain owns its keys.
-func (m *userRepo) ClearSubscribeCache(ctx context.Context, data ...*user.Subscribe) error {
+func (m *userRepo) ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error {
 	return m.subs.ClearSubscribeCache(ctx, data...)
 }
 
-func (m *userRepo) UpdateUserSubscribeCache(ctx context.Context, data *user.Subscribe) error {
+func (m *userRepo) UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error {
 	return m.subs.UpdateUserSubscribeCache(ctx, data)
 }

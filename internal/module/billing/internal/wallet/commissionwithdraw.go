@@ -6,6 +6,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -79,7 +80,7 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "Failed to create commission log for user %d: %v", u.Id, err)
 		}
 
-		if err = store.UserWithdrawal().InsertWithdrawal(l.ctx, &user.Withdrawal{
+		if err = store.UserWithdrawal().InsertWithdrawal(l.ctx, &walletEntity.Withdrawal{
 			UserId:  u.Id,
 			Amount:  req.Amount,
 			Content: req.Content,

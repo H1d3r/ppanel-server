@@ -10,7 +10,7 @@ import (
 	logEntity "github.com/perfect-panel/server/internal/model/entity/log"
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/internal/orderflow"
 	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
@@ -149,11 +149,11 @@ func (r *closeSubscribeRepo) RestoreInventory(_ context.Context, id int64, _ ...
 
 type closeUserRepo struct {
 	repository.WalletRepo
-	wallet      *userEntity.Wallet
+	wallet      *walletEntity.Wallet
 	updateCalls int
 }
 
-func (r *closeUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
+func (r *closeUserRepo) FindOneForUpdate(_ context.Context, id int64) (*walletEntity.Wallet, error) {
 	if r.wallet == nil || id != r.wallet.UserId {
 		return nil, gorm.ErrRecordNotFound
 	}
@@ -161,7 +161,7 @@ func (r *closeUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEnti
 	return &copy, nil
 }
 
-func (r *closeUserRepo) UpdateBalanceFields(_ context.Context, value *userEntity.Wallet, _ ...*gorm.DB) error {
+func (r *closeUserRepo) UpdateBalanceFields(_ context.Context, value *walletEntity.Wallet, _ ...*gorm.DB) error {
 	r.updateCalls++
 	r.wallet.Balance = value.Balance
 	r.wallet.GiftAmount = value.GiftAmount
@@ -226,7 +226,7 @@ func TestCloseOrderRefundsGiftAndRestoresInventory(t *testing.T) {
 		transition: true,
 	}
 	subscribes := &closeSubscribeRepo{sub: &subscribeEntity.Subscribe{Id: 99, Inventory: 2}}
-	users := &closeUserRepo{wallet: &userEntity.Wallet{UserId: 7, GiftAmount: 10}}
+	users := &closeUserRepo{wallet: &walletEntity.Wallet{UserId: 7, GiftAmount: 10}}
 	logs := &closeLogRepo{}
 	store := &closeOrderStore{orders: orders, subscribes: subscribes, users: users, logs: logs}
 	store.markReserved(t, "gift-order")

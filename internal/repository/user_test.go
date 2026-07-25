@@ -11,6 +11,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	trafficEntity "github.com/perfect-panel/server/internal/model/entity/traffic"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -69,7 +71,7 @@ func TestWalletRepoUpdateBalanceFieldsWritesWalletTable(t *testing.T) {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	err = newUserBillingRepo(newUserRepo(db, redisClient)).UpdateBalanceFields(context.Background(), &user.Wallet{UserId: 42, Balance: 100, GiftAmount: 20})
+	err = newUserBillingRepo(newUserRepo(db, redisClient)).UpdateBalanceFields(context.Background(), &walletEntity.Wallet{UserId: 42, Balance: 100, GiftAmount: 20})
 	if err != nil {
 		t.Fatalf("UpdateBalanceFields: %v", err)
 	}
@@ -268,7 +270,7 @@ func TestUserSubscribeTrafficIncrementExprSQL(t *testing.T) {
 				t.Fatalf("open gorm db: %v", err)
 			}
 
-			conn := db.Model(&user.Subscribe{})
+			conn := db.Model(&usersub.Subscribe{})
 			downloadExpr, downloadArgs := userSubscribeTrafficIncrementExpr(conn, "download", deltas)
 			uploadExpr, uploadArgs := userSubscribeTrafficIncrementExpr(conn, "upload", deltas)
 			stmt := conn.Where("id IN ?", []int64{1, 2}).Updates(map[string]interface{}{
@@ -299,7 +301,7 @@ func TestQueryUserSubscribeFiltersSharedCachedList(t *testing.T) {
 
 	repo := newUserSubscriptionRepo(newUserRepo(nil, redisClient))
 	cacheKey := fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, 42)
-	cached := []*user.SubscribeDetails{
+	cached := []*usersub.SubscribeDetails{
 		{Id: 3, UserId: 42, Status: 1},
 		{Id: 2, UserId: 42, Status: 4},
 		{Id: 1, UserId: 42, Status: 5},
@@ -513,7 +515,7 @@ func TestSubscriptionPolicyQueriesExcludeDeductedSubscriptions(t *testing.T) {
 	}
 }
 
-func subscribeDetailIDs(items []*user.SubscribeDetails) []int64 {
+func subscribeDetailIDs(items []*usersub.SubscribeDetails) []int64 {
 	ids := make([]int64, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, item.Id)

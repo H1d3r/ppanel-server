@@ -9,6 +9,8 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/entity/order"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -62,7 +64,7 @@ func (m *userRepo) Insert(ctx context.Context, data *user.User, tx ...*gorm.DB) 
 		// Every account gets its billing-owned wallet row at creation;
 		// initial money (admin-created accounts) is credited through the
 		// wallet view afterwards.
-		return conn.Create(&user.Wallet{UserId: data.Id}).Error
+		return conn.Create(&walletEntity.Wallet{UserId: data.Id}).Error
 	}, m.getCacheKeys(data)...)
 	return err
 }
@@ -262,11 +264,11 @@ func authMethodsColumn(db *gorm.DB, column string) string {
 }
 
 func userSubscribeTableName(db *gorm.DB) string {
-	return userQuoteTable(db, (&user.Subscribe{}).TableName())
+	return userQuoteTable(db, (&usersub.Subscribe{}).TableName())
 }
 
 func userSubscribeColumn(db *gorm.DB, column string) string {
-	return userQuoteColumn(db, (&user.Subscribe{}).TableName(), column)
+	return userQuoteColumn(db, (&usersub.Subscribe{}).TableName(), column)
 }
 
 func userQuoteTable(db *gorm.DB, table string) string {
@@ -344,7 +346,7 @@ func (m *userRepo) subscriptionScopedUserIDs(ctx context.Context, scope int8) (i
 		return nil, false, nil
 	}
 	err = m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
-		q := conn.Model(&user.Subscribe{}).Distinct("user_id")
+		q := conn.Model(&usersub.Subscribe{}).Distinct("user_id")
 		if statuses != nil {
 			q = q.Where("status IN ?", statuses)
 		}

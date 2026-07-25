@@ -13,6 +13,7 @@ import (
 	logEntity "github.com/perfect-panel/server/internal/model/entity/log"
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/redis/go-redis/v9"
@@ -74,10 +75,10 @@ type balancePaymentUserRepo struct {
 	repository.WalletRepo
 	repository.UserCacheRepo
 	user   *userEntity.User
-	wallet *userEntity.Wallet
+	wallet *walletEntity.Wallet
 }
 
-func (r *balancePaymentUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
+func (r *balancePaymentUserRepo) FindOneForUpdate(_ context.Context, id int64) (*walletEntity.Wallet, error) {
 	if r.wallet.UserId != id {
 		return nil, stderrors.New("unexpected user")
 	}
@@ -85,7 +86,7 @@ func (r *balancePaymentUserRepo) FindOneForUpdate(_ context.Context, id int64) (
 	return &locked, nil
 }
 
-func (r *balancePaymentUserRepo) UpdateBalanceFields(_ context.Context, data *userEntity.Wallet, _ ...*gorm.DB) error {
+func (r *balancePaymentUserRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
 	r.wallet.Balance = data.Balance
 	r.wallet.GiftAmount = data.GiftAmount
 	return nil
@@ -119,7 +120,7 @@ func newBalancePaymentLogic(t *testing.T, store *balancePaymentStore) *PurchaseC
 func TestBalancePaymentRejectsInsufficientCurrentBalance(t *testing.T) {
 	store := &balancePaymentStore{
 		orders: &balancePaymentOrderRepo{order: &orderEntity.Order{OrderNo: "order-1", UserId: 10, Amount: 2500, Status: 1}},
-		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &userEntity.Wallet{UserId: 10, Balance: 500}},
+		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &walletEntity.Wallet{UserId: 10, Balance: 500}},
 		logs:   &balancePaymentLogRepo{},
 	}
 	logic := newBalancePaymentLogic(t, store)
@@ -142,7 +143,7 @@ func TestBalancePaymentRejectsInsufficientCurrentBalance(t *testing.T) {
 func TestBalancePaymentAddsCheckoutGiftToExistingOrderGift(t *testing.T) {
 	store := &balancePaymentStore{
 		orders: &balancePaymentOrderRepo{order: &orderEntity.Order{OrderNo: "order-2", UserId: 10, Amount: 2500, GiftAmount: 300, Status: 1}},
-		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &userEntity.Wallet{UserId: 10, Balance: 2300, GiftAmount: 200}},
+		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &walletEntity.Wallet{UserId: 10, Balance: 2300, GiftAmount: 200}},
 		logs:   &balancePaymentLogRepo{},
 	}
 	logic := newBalancePaymentLogic(t, store)
@@ -167,7 +168,7 @@ func TestBalancePaymentAddsCheckoutGiftToExistingOrderGift(t *testing.T) {
 func TestBalancePaymentDoesNotDebitNonPendingOrder(t *testing.T) {
 	store := &balancePaymentStore{
 		orders: &balancePaymentOrderRepo{order: &orderEntity.Order{OrderNo: "order-3", UserId: 10, Amount: 2500, Status: 2}},
-		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &userEntity.Wallet{UserId: 10, Balance: 2500}},
+		users:  &balancePaymentUserRepo{user: &userEntity.User{Id: 10}, wallet: &walletEntity.Wallet{UserId: 10, Balance: 2500}},
 		logs:   &balancePaymentLogRepo{},
 	}
 	logic := newBalancePaymentLogic(t, store)

@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/verification"
 	"github.com/perfect-panel/server/pkg/authmethod"
@@ -106,7 +107,7 @@ func (l *TelephoneUserRegisterLogic) TelephoneUserRegister(req *dto.TelephoneReg
 	if referer != nil {
 		userInfo.RefererId = referer.Id
 	}
-	var trialSubscribe *user.Subscribe
+	var trialSubscribe *usersub.Subscribe
 	err = l.deps.Store.InTx(l.ctx, func(store repository.Store) error {
 		// Save user information
 		if err := store.User().Insert(l.ctx, userInfo); err != nil {
@@ -217,12 +218,12 @@ func (l *TelephoneUserRegisterLogic) TelephoneUserRegister(req *dto.TelephoneReg
 	}, nil
 }
 
-func (l *TelephoneUserRegisterLogic) activeTrial(store repository.Store, uid int64) (*user.Subscribe, error) {
+func (l *TelephoneUserRegisterLogic) activeTrial(store repository.Store, uid int64) (*usersub.Subscribe, error) {
 	sub, err := store.Subscribe().FindOne(l.ctx, l.deps.Config.TrialSubscribeID)
 	if err != nil {
 		return nil, err
 	}
-	userSub := &user.Subscribe{
+	userSub := &usersub.Subscribe{
 		Id:          0,
 		UserId:      uid,
 		OrderId:     0,
@@ -239,7 +240,7 @@ func (l *TelephoneUserRegisterLogic) activeTrial(store repository.Store, uid int
 	return userSub, store.UserSubscription().InsertSubscribe(l.ctx, userSub)
 }
 
-func (l *TelephoneUserRegisterLogic) clearTrialSubscribeCache(trialSub *user.Subscribe) {
+func (l *TelephoneUserRegisterLogic) clearTrialSubscribeCache(trialSub *usersub.Subscribe) {
 	if trialSub == nil {
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/verification"
 	"github.com/perfect-panel/server/pkg/authmethod"
@@ -99,7 +100,7 @@ func (l *UserRegisterLogic) UserRegister(req *dto.UserRegisterRequest) (resp *dt
 		Algo:              tool.PasswordAlgoArgon2id,
 		OnlyFirstPurchase: &l.deps.Config.OnlyFirstPurchase,
 	}
-	var trialSubscribe *user.Subscribe
+	var trialSubscribe *usersub.Subscribe
 	if referer != nil {
 		userInfo.RefererId = referer.Id
 	}
@@ -225,12 +226,12 @@ func (l *UserRegisterLogic) UserRegister(req *dto.UserRegisterRequest) (resp *dt
 	}, nil
 }
 
-func (l *UserRegisterLogic) activeTrial(store repository.Store, uid int64) (*user.Subscribe, error) {
+func (l *UserRegisterLogic) activeTrial(store repository.Store, uid int64) (*usersub.Subscribe, error) {
 	sub, err := store.Subscribe().FindOne(l.ctx, l.deps.Config.TrialSubscribeID)
 	if err != nil {
 		return nil, err
 	}
-	userSub := &user.Subscribe{
+	userSub := &usersub.Subscribe{
 		UserId:      uid,
 		OrderId:     0,
 		SubscribeId: sub.Id,
@@ -246,7 +247,7 @@ func (l *UserRegisterLogic) activeTrial(store repository.Store, uid int64) (*use
 	return userSub, store.UserSubscription().InsertSubscribe(l.ctx, userSub)
 }
 
-func (l *UserRegisterLogic) clearTrialSubscribeCache(trialSub *user.Subscribe) {
+func (l *UserRegisterLogic) clearTrialSubscribeCache(trialSub *usersub.Subscribe) {
 	if trialSub == nil {
 		return
 	}

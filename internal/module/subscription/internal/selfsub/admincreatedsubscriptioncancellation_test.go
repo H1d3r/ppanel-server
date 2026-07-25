@@ -6,6 +6,8 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	usermodel "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
@@ -17,34 +19,34 @@ type adminCreatedSubscriptionUserRepo struct {
 	repository.UserSubscriptionRepo
 	repository.UserCacheRepo
 
-	subscribe                 *usermodel.Subscribe
+	subscribe                 *usersub.Subscribe
 	findOneSubscribeCalls     int
 	findOneUserSubscribeCalls int
 	updateSubscribeCalls      int
 	clearSubscribeCacheCalls  int
 }
 
-func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribe(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
+func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribe(_ context.Context, _ int64) (*usersub.Subscribe, error) {
 	r.findOneSubscribeCalls++
 	return r.subscribe, nil
 }
 
-func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribeForUpdate(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
+func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribeForUpdate(_ context.Context, _ int64) (*usersub.Subscribe, error) {
 	return r.subscribe, nil
 }
 
-func (r *adminCreatedSubscriptionUserRepo) FindOneUserSubscribe(_ context.Context, _ int64) (*usermodel.SubscribeDetails, error) {
+func (r *adminCreatedSubscriptionUserRepo) FindOneUserSubscribe(_ context.Context, _ int64) (*usersub.SubscribeDetails, error) {
 	r.findOneUserSubscribeCalls++
-	return &usermodel.SubscribeDetails{OrderId: r.subscribe.OrderId}, nil
+	return &usersub.SubscribeDetails{OrderId: r.subscribe.OrderId}, nil
 }
 
-func (r *adminCreatedSubscriptionUserRepo) UpdateSubscribe(_ context.Context, subscribe *usermodel.Subscribe, _ ...*gorm.DB) error {
+func (r *adminCreatedSubscriptionUserRepo) UpdateSubscribe(_ context.Context, subscribe *usersub.Subscribe, _ ...*gorm.DB) error {
 	r.updateSubscribeCalls++
 	r.subscribe = subscribe
 	return nil
 }
 
-func (r *adminCreatedSubscriptionUserRepo) ClearSubscribeCache(_ context.Context, _ ...*usermodel.Subscribe) error {
+func (r *adminCreatedSubscriptionUserRepo) ClearSubscribeCache(_ context.Context, _ ...*usersub.Subscribe) error {
 	r.clearSubscribeCacheCalls++
 	return nil
 }
@@ -120,7 +122,7 @@ type adminCreatedWalletRepo struct {
 	calls int
 }
 
-func (r *adminCreatedWalletRepo) FindOneForUpdate(_ context.Context, _ int64) (*usermodel.Wallet, error) {
+func (r *adminCreatedWalletRepo) FindOneForUpdate(_ context.Context, _ int64) (*walletEntity.Wallet, error) {
 	r.calls++
 	panic("admin-created subscription cancellation must not move money")
 }
@@ -137,7 +139,7 @@ func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	)
 
 	currentUser := &usermodel.User{Id: userID}
-	userSubscribe := &usermodel.Subscribe{
+	userSubscribe := &usersub.Subscribe{
 		Id:          subscribeID,
 		UserId:      userID,
 		OrderId:     0,

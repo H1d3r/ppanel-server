@@ -7,15 +7,16 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/constant"
 )
 
 type ownershipUserSubs struct {
 	UserSubscriptionReader
-	subscribe *userEntity.SubscribeDetails
+	subscribe *usersub.SubscribeDetails
 }
 
-func (r ownershipUserSubs) FindOneUserSubscribe(_ context.Context, _ int64) (*userEntity.SubscribeDetails, error) {
+func (r ownershipUserSubs) FindOneUserSubscribe(_ context.Context, _ int64) (*usersub.SubscribeDetails, error) {
 	return r.subscribe, nil
 }
 
@@ -24,7 +25,7 @@ func ownerContext(id int64) context.Context {
 }
 
 func TestRenewalRejectsSubscriptionOwnedByAnotherUser(t *testing.T) {
-	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &userEntity.SubscribeDetails{Id: 22, UserId: 33}}})
+	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 33}}})
 
 	_, err := svc.Renewal(ownerContext(11), &dto.RenewalOrderRequest{UserSubscribeID: 22})
 	if err == nil {
@@ -33,7 +34,7 @@ func TestRenewalRejectsSubscriptionOwnedByAnotherUser(t *testing.T) {
 }
 
 func TestRenewalRejectsDeductedSubscription(t *testing.T) {
-	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &userEntity.SubscribeDetails{Id: 22, UserId: 11, Status: userEntity.SubscribeStatusDeducted}}})
+	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 11, Status: usersub.SubscribeStatusDeducted}}})
 
 	_, err := svc.Renewal(ownerContext(11), &dto.RenewalOrderRequest{UserSubscribeID: 22})
 	if err == nil {
@@ -42,7 +43,7 @@ func TestRenewalRejectsDeductedSubscription(t *testing.T) {
 }
 
 func TestResetTrafficRejectsSubscriptionOwnedByAnotherUser(t *testing.T) {
-	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &userEntity.SubscribeDetails{Id: 22, UserId: 33}}})
+	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 33}}})
 
 	_, err := svc.ResetTraffic(ownerContext(11), &dto.ResetTrafficOrderRequest{UserSubscribeID: 22})
 	if err == nil {
@@ -51,7 +52,7 @@ func TestResetTrafficRejectsSubscriptionOwnedByAnotherUser(t *testing.T) {
 }
 
 func TestResetTrafficRejectsExpiredSubscription(t *testing.T) {
-	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &userEntity.SubscribeDetails{
+	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{
 		Id: 22, UserId: 11, ExpireTime: time.Now().Add(-time.Minute),
 	}}})
 

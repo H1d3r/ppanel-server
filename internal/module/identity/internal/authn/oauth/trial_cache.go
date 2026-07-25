@@ -3,12 +3,12 @@ package oauth
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-func clearTrialSubscribeCache(ctx context.Context, userCache repository.UserCacheRepo, plans repository.SubscribeRepo, trialSub *user.Subscribe) {
+func clearTrialSubscribeCache(ctx context.Context, userCache repository.UserCacheRepo, plans repository.SubscribeRepo, trialSub *usersub.Subscribe) {
 	if trialSub == nil {
 		return
 	}

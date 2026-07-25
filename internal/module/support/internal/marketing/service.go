@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/task"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -30,8 +31,8 @@ type EmailRecipientReader interface {
 // quota-task targets; the legacy user-subscription repository satisfies it
 // structurally.
 type SubscriptionSelector interface {
-	QuerySubscribeIdsByFilter(ctx context.Context, filter *user.SubscribeFilter) ([]int64, error)
-	CountSubscribesByFilter(ctx context.Context, filter *user.SubscribeFilter) (int64, error)
+	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
+	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)
 }
 
 // Queue schedules the asynchronous execution of marketing tasks. The
@@ -251,7 +252,7 @@ func (s *Service) StopBatchSendEmailTask(ctx context.Context, req *dto.StopBatch
 
 func (s *Service) CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskRequest) error {
 	log := logger.WithContext(ctx)
-	subIds, err := s.selector.QuerySubscribeIdsByFilter(ctx, &user.SubscribeFilter{
+	subIds, err := s.selector.QuerySubscribeIdsByFilter(ctx, &usersub.SubscribeFilter{
 		Subscribers: req.Subscribers,
 		IsActive:    req.IsActive,
 		StartTime:   req.StartTime,
@@ -360,7 +361,7 @@ func (s *Service) QueryQuotaTaskList(ctx context.Context, req *dto.QueryQuotaTas
 }
 
 func (s *Service) QueryQuotaTaskPreCount(ctx context.Context, req *dto.QueryQuotaTaskPreCountRequest) (*dto.QueryQuotaTaskPreCountResponse, error) {
-	count, err := s.selector.CountSubscribesByFilter(ctx, &user.SubscribeFilter{
+	count, err := s.selector.CountSubscribesByFilter(ctx, &usersub.SubscribeFilter{
 		Subscribers: req.Subscribers,
 		IsActive:    req.IsActive,
 		StartTime:   req.StartTime,

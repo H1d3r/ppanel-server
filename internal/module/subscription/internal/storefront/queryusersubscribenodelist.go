@@ -7,6 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/model/entity/node"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -85,7 +86,7 @@ func (l *QueryUserSubscribeNodeListLogic) QueryUserSubscribeNodeList() (resp *dt
 	return
 }
 
-func (l *QueryUserSubscribeNodeListLogic) getServers(userSub *user.Subscribe) (userSubscribeNodes []*dto.UserSubscribeNodeInfo, err error) {
+func (l *QueryUserSubscribeNodeListLogic) getServers(userSub *usersub.Subscribe) (userSubscribeNodes []*dto.UserSubscribeNodeInfo, err error) {
 	userSubscribeNodes = make([]*dto.UserSubscribeNodeInfo, 0)
 	if l.isSubscriptionExpired(userSub) || l.isTrafficExhausted(userSub) {
 		return l.createExpiredServers(), nil
@@ -216,13 +217,13 @@ func (l *QueryUserSubscribeNodeListLogic) filterSubscribeNodes(nodeIds []int64, 
 	return nodes, nil
 }
 
-func (l *QueryUserSubscribeNodeListLogic) isSubscriptionExpired(userSub *user.Subscribe) bool {
+func (l *QueryUserSubscribeNodeListLogic) isSubscriptionExpired(userSub *usersub.Subscribe) bool {
 	return userSub.ExpireTime.Unix() < timeutil.Now().Unix() && userSub.ExpireTime.Unix() != 0
 }
 
 // isTrafficExhausted reports whether the subscription has used up its traffic
 // quota (Traffic == 0 means unlimited).
-func (l *QueryUserSubscribeNodeListLogic) isTrafficExhausted(userSub *user.Subscribe) bool {
+func (l *QueryUserSubscribeNodeListLogic) isTrafficExhausted(userSub *usersub.Subscribe) bool {
 	return userSub.Traffic > 0 && userSub.Download+userSub.Upload >= userSub.Traffic
 }
 
@@ -238,7 +239,7 @@ func (l *QueryUserSubscribeNodeListLogic) getFirstHostLine() string {
 	}
 	return host
 }
-func (l *QueryUserSubscribeNodeListLogic) getUserSubscribe(token string) (*user.Subscribe, error) {
+func (l *QueryUserSubscribeNodeListLogic) getUserSubscribe(token string) (*usersub.Subscribe, error) {
 	userSub, err := l.deps.UserSubs.FindOneSubscribeByToken(l.ctx, token)
 	if err != nil {
 		l.Infow("[Generate Subscribe]find subscribe error: %v", logger.Field("error", err.Error()), logger.Field("token", token))

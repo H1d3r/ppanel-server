@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/node"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 )
 
 func TestProxyFromProtocol(t *testing.T) {
@@ -53,13 +53,13 @@ func TestProxyFromProtocolRejectsUnsupportedWorkerFeatures(t *testing.T) {
 
 func TestSubscriptionState(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	if state := subscriptionState(&user.Subscribe{Status: 1, Traffic: 100, Upload: 40, Download: 60}, now); state != "traffic_exhausted" {
+	if state := subscriptionState(&usersub.Subscribe{Status: 1, Traffic: 100, Upload: 40, Download: 60}, now); state != "traffic_exhausted" {
 		t.Fatalf("expected traffic exhaustion, got %q", state)
 	}
-	if state := subscriptionState(&user.Subscribe{Status: 5}, now); state != "suspended" {
+	if state := subscriptionState(&usersub.Subscribe{Status: 5}, now); state != "suspended" {
 		t.Fatalf("expected suspended, got %q", state)
 	}
-	if state := subscriptionState(&user.Subscribe{Status: 255}, now); state != "disabled" {
+	if state := subscriptionState(&usersub.Subscribe{Status: 255}, now); state != "disabled" {
 		t.Fatalf("expected unknown status to be disabled, got %q", state)
 	}
 }

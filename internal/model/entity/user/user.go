@@ -3,7 +3,6 @@ package user
 import (
 	"time"
 
-	"github.com/perfect-panel/server/internal/model/entity/subscribe"
 	"gorm.io/gorm"
 )
 
@@ -33,39 +32,6 @@ type User struct {
 
 func (*User) TableName() string {
 	return "user"
-}
-
-type Subscribe struct {
-	Id          int64      `gorm:"primaryKey"`
-	UserId      int64      `gorm:"index:idx_user_id;not null;comment:User ID"`
-	User        User       `gorm:"foreignKey:UserId;references:Id"`
-	OrderId     int64      `gorm:"index:idx_order_id;not null;comment:Order ID"`
-	SubscribeId int64      `gorm:"index:idx_subscribe_id;not null;comment:Subscription ID"`
-	StartTime   time.Time  `gorm:"default:CURRENT_TIMESTAMP(3);not null;comment:Subscription Start Time"`
-	ExpireTime  time.Time  `gorm:"default:NULL;comment:Subscription Expire Time"`
-	FinishedAt  *time.Time `gorm:"default:NULL;comment:Finished Time"`
-	Traffic     int64      `gorm:"default:0;comment:Traffic"`
-	Download    int64      `gorm:"default:0;comment:Download Traffic"`
-	Upload      int64      `gorm:"default:0;comment:Upload Traffic"`
-	Token       string     `gorm:"index:idx_token;unique;type:varchar(255);default:'';comment:Token"`
-	UUID        string     `gorm:"type:varchar(255);unique;index:idx_uuid;default:'';comment:UUID"`
-	Status      uint8      `gorm:"type:tinyint(1);default:0;comment:Subscription Status: 0: Pending 1: Active 2: Finished 3: Expired 4: Deducted 5: stopped"`
-	Note        string     `gorm:"type:varchar(500);default:'';comment:User note for subscription"`
-	CreatedAt   time.Time  `gorm:"<-:create;comment:Creation Time"`
-	UpdatedAt   time.Time  `gorm:"comment:Update Time"`
-}
-
-const (
-	SubscribeStatusPending uint8 = iota
-	SubscribeStatusActive
-	SubscribeStatusFinished
-	SubscribeStatusExpired
-	SubscribeStatusDeducted
-	SubscribeStatusStopped
-)
-
-func (*Subscribe) TableName() string {
-	return "user_subscribe"
 }
 
 type AuthMethods struct {
@@ -113,51 +79,7 @@ func (DeviceOnlineRecord) TableName() string {
 	return "user_device_online_record"
 }
 
-type Withdrawal struct {
-	Id        int64     `gorm:"primaryKey"`
-	UserId    int64     `gorm:"index:idx_user_id;not null;comment:User ID"`
-	Amount    int64     `gorm:"not null;comment:Withdrawal Amount"`
-	Content   string    `gorm:"type:text;comment:Withdrawal Content"`
-	Status    uint8     `gorm:"type:tinyint(1);default:0;comment:Withdrawal Status: 0: Pending 1: Approved 2: Rejected"`
-	Reason    string    `gorm:"type:varchar(500);default:'';comment:Rejection Reason"`
-	CreatedAt time.Time `gorm:"<-:create;comment:Creation Time"`
-	UpdatedAt time.Time `gorm:"comment:Update Time"`
-}
-
-func (*Withdrawal) TableName() string {
-	return "user_withdrawal"
-}
-
 // SubscribeDetails is the joined view of a user subscription with its subscribe plan.
-type SubscribeDetails struct {
-	Id          int64                `gorm:"primarykey"`
-	UserId      int64                `gorm:"index:idx_user_id;not null;comment:User ID"`
-	User        *User                `gorm:"foreignKey:UserId;references:Id"`
-	OrderId     int64                `gorm:"index:idx_order_id;not null;comment:Order ID"`
-	SubscribeId int64                `gorm:"index:idx_subscribe_id;not null;comment:Subscription ID"`
-	Subscribe   *subscribe.Subscribe `gorm:"foreignKey:SubscribeId;references:Id"`
-	StartTime   time.Time            `gorm:"default:CURRENT_TIMESTAMP(3);not null;comment:Subscription Start Time"`
-	ExpireTime  time.Time            `gorm:"default:NULL;comment:Subscription Expire Time"`
-	FinishedAt  *time.Time           `gorm:"default:NULL;comment:Finished Time"`
-	Traffic     int64                `gorm:"default:0;comment:Traffic"`
-	Download    int64                `gorm:"default:0;comment:Download Traffic"`
-	Upload      int64                `gorm:"default:0;comment:Upload Traffic"`
-	Token       string               `gorm:"index:idx_token;unique;type:varchar(255);default:'';comment:Token"`
-	UUID        string               `gorm:"type:varchar(255);unique;index:idx_uuid;default:'';comment:UUID"`
-	Status      uint8                `gorm:"type:tinyint(1);default:0;comment:Subscription Status: 0: Pending 1: Active 2: Finished 3: Expired; 4: Cancelled"`
-	Note        string               `gorm:"type:varchar(500);default:'';comment:User note for subscription"`
-	CreatedAt   time.Time            `gorm:"<-:create;comment:Creation Time"`
-	UpdatedAt   time.Time            `gorm:"comment:Update Time"`
-}
-
-// SubscribeLogFilterParams filters user subscribe access logs.
-type SubscribeLogFilterParams struct {
-	IP              string
-	UserAgent       string
-	UserId          int64
-	Token           string
-	UserSubscribeId int64
-}
 
 // LoginLogFilterParams filters user login logs.
 type LoginLogFilterParams struct {
@@ -183,14 +105,6 @@ type EmailRecipientFilter struct {
 	Scope             int8
 	RegisterStartTime int64
 	RegisterEndTime   int64
-}
-
-// SubscribeFilter filters user subscriptions.
-type SubscribeFilter struct {
-	Subscribers []int64
-	IsActive    *bool
-	StartTime   int64
-	EndTime     int64
 }
 
 // UserStatisticsWithDate holds aggregated user statistics per day/month.

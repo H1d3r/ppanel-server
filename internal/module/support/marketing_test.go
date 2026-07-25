@@ -8,6 +8,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	taskEntity "github.com/perfect-panel/server/internal/model/entity/task"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support"
 )
 
@@ -59,11 +60,11 @@ type fakeQuotaTargets struct {
 	ids []int64
 }
 
-func (f fakeQuotaTargets) QuerySubscribeIdsByFilter(_ context.Context, _ *userEntity.SubscribeFilter) ([]int64, error) {
+func (f fakeQuotaTargets) QuerySubscribeIdsByFilter(_ context.Context, _ *usersub.SubscribeFilter) ([]int64, error) {
 	return f.ids, nil
 }
 
-func (f fakeQuotaTargets) CountSubscribesByFilter(_ context.Context, _ *userEntity.SubscribeFilter) (int64, error) {
+func (f fakeQuotaTargets) CountSubscribesByFilter(_ context.Context, _ *usersub.SubscribeFilter) (int64, error) {
 	return int64(len(f.ids)), nil
 }
 

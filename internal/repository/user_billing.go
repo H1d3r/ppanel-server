@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -14,14 +14,14 @@ import (
 
 // FindOneForUpdate locks the billing-owned wallet row, creating it on first
 // use so every account has a wallet once money moves.
-func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, userId int64) (*user.Wallet, error) {
-	var result *user.Wallet
+func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
+	var result *walletEntity.Wallet
 	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
-		var w user.Wallet
+		var w walletEntity.Wallet
 		err := conn.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ?", userId).First(&w).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			seed := user.Wallet{UserId: userId}
+			seed := walletEntity.Wallet{UserId: userId}
 			if err := conn.Clauses(clause.OnConflict{DoNothing: true}).Create(&seed).Error; err != nil {
 				return err
 			}
@@ -39,10 +39,10 @@ func (m *userBillingRepo) FindOneForUpdate(ctx context.Context, userId int64) (*
 
 // FindWallet reads the wallet row without locking. A nil result (no error)
 // means the account has no wallet row yet; callers treat it as zero values.
-func (m *userBillingRepo) FindWallet(ctx context.Context, userId int64) (*user.Wallet, error) {
-	var w *user.Wallet
+func (m *userBillingRepo) FindWallet(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
+	var w *walletEntity.Wallet
 	err := m.QueryNoCacheCtx(ctx, &w, func(conn *gorm.DB, v interface{}) error {
-		var row user.Wallet
+		var row walletEntity.Wallet
 		err := conn.Where("user_id = ?", userId).First(&row).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
@@ -61,12 +61,12 @@ func (m *userBillingRepo) FindWallet(ctx context.Context, userId int64) (*user.W
 
 // FindWalletsByUserIds batch-reads wallet rows for display lists; missing
 // rows are absent from the map (treat as zero values).
-func (m *userBillingRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*user.Wallet, error) {
-	result := make(map[int64]*user.Wallet, len(userIds))
+func (m *userBillingRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*walletEntity.Wallet, error) {
+	result := make(map[int64]*walletEntity.Wallet, len(userIds))
 	if len(userIds) == 0 {
 		return result, nil
 	}
-	var rows []*user.Wallet
+	var rows []*walletEntity.Wallet
 	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
 		return conn.Where("user_id IN ?", userIds).Find(v).Error
 	})
@@ -81,12 +81,12 @@ func (m *userBillingRepo) FindWalletsByUserIds(ctx context.Context, userIds []in
 
 // UpdateBalanceFields persists the balance and gift columns of a wallet row
 // previously locked by FindOneForUpdate.
-func (m *userBillingRepo) UpdateBalanceFields(ctx context.Context, data *user.Wallet, tx ...*gorm.DB) error {
+func (m *userBillingRepo) UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Model(&user.Wallet{}).
+		return conn.Model(&walletEntity.Wallet{}).
 			Where("user_id = ?", data.UserId).
 			Updates(map[string]interface{}{
 				"balance":     data.Balance,
@@ -97,12 +97,12 @@ func (m *userBillingRepo) UpdateBalanceFields(ctx context.Context, data *user.Wa
 
 // UpdateCommission persists only the commission column: balance movements
 // and commission credits may race on different flows.
-func (m *userBillingRepo) UpdateCommission(ctx context.Context, data *user.Wallet, tx ...*gorm.DB) error {
+func (m *userBillingRepo) UpdateCommission(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Model(&user.Wallet{}).
+		return conn.Model(&walletEntity.Wallet{}).
 			Where("user_id = ?", data.UserId).
 			Update("commission", data.Commission).Error
 	})
@@ -110,7 +110,7 @@ func (m *userBillingRepo) UpdateCommission(ctx context.Context, data *user.Walle
 
 // --- withdrawal ---
 
-func (m *userBillingRepo) InsertWithdrawal(ctx context.Context, data *user.Withdrawal, tx ...*gorm.DB) error {
+func (m *userBillingRepo) InsertWithdrawal(ctx context.Context, data *walletEntity.Withdrawal, tx ...*gorm.DB) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]

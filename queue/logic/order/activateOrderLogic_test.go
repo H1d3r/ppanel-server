@@ -13,6 +13,8 @@ import (
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
 	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
+	walletEntity "github.com/perfect-panel/server/internal/model/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/repository"
@@ -135,10 +137,10 @@ func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo s
 
 type activationWalletRepo struct {
 	repository.WalletRepo
-	wallet *userEntity.Wallet
+	wallet *walletEntity.Wallet
 }
 
-func (r *activationWalletRepo) FindWallet(_ context.Context, userId int64) (*userEntity.Wallet, error) {
+func (r *activationWalletRepo) FindWallet(_ context.Context, userId int64) (*walletEntity.Wallet, error) {
 	if r.wallet == nil || r.wallet.UserId != userId {
 		return nil, nil
 	}
@@ -146,9 +148,9 @@ func (r *activationWalletRepo) FindWallet(_ context.Context, userId int64) (*use
 	return &copy, nil
 }
 
-func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.Wallet, error) {
+func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*walletEntity.Wallet, error) {
 	if r.wallet == nil {
-		r.wallet = &userEntity.Wallet{UserId: id}
+		r.wallet = &walletEntity.Wallet{UserId: id}
 	}
 	if r.wallet.UserId != id {
 		return nil, gorm.ErrRecordNotFound
@@ -157,13 +159,13 @@ func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*u
 	return &copy, nil
 }
 
-func (r *activationWalletRepo) UpdateBalanceFields(_ context.Context, data *userEntity.Wallet, _ ...*gorm.DB) error {
+func (r *activationWalletRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
 	r.wallet.Balance = data.Balance
 	r.wallet.GiftAmount = data.GiftAmount
 	return nil
 }
 
-func (r *activationWalletRepo) UpdateCommission(_ context.Context, data *userEntity.Wallet, _ ...*gorm.DB) error {
+func (r *activationWalletRepo) UpdateCommission(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
 	r.wallet.Commission = data.Commission
 	return nil
 }
@@ -178,7 +180,7 @@ type activationUserRepo struct {
 	quotaCountCalls  int
 	blocking         bool
 	hasBlockingCalls int
-	subscription     *userEntity.Subscribe
+	subscription     *usersub.Subscribe
 }
 
 func (r *activationUserRepo) FindOne(_ context.Context, id int64) (*userEntity.User, error) {
@@ -212,7 +214,7 @@ func (r *activationUserRepo) HasBlockingSubscription(_ context.Context, _ int64)
 	return r.blocking, nil
 }
 
-func (r *activationUserRepo) FindOneSubscribeByToken(_ context.Context, token string) (*userEntity.Subscribe, error) {
+func (r *activationUserRepo) FindOneSubscribeByToken(_ context.Context, token string) (*usersub.Subscribe, error) {
 	if r.subscription == nil || r.subscription.Token != token {
 		return nil, gorm.ErrRecordNotFound
 	}
@@ -220,17 +222,17 @@ func (r *activationUserRepo) FindOneSubscribeByToken(_ context.Context, token st
 	return &copy, nil
 }
 
-func (r *activationUserRepo) FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*userEntity.Subscribe, error) {
+func (r *activationUserRepo) FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*usersub.Subscribe, error) {
 	return r.FindOneSubscribeByToken(ctx, token)
 }
 
-func (r *activationUserRepo) UpdateSubscribe(_ context.Context, data *userEntity.Subscribe, _ ...*gorm.DB) error {
+func (r *activationUserRepo) UpdateSubscribe(_ context.Context, data *usersub.Subscribe, _ ...*gorm.DB) error {
 	copy := *data
 	r.subscription = &copy
 	return nil
 }
 
-func (r *activationUserRepo) ClearSubscribeCache(_ context.Context, _ ...*userEntity.Subscribe) error {
+func (r *activationUserRepo) ClearSubscribeCache(_ context.Context, _ ...*usersub.Subscribe) error {
 	return nil
 }
 
@@ -267,7 +269,7 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 			OrderNo: "recharge-order", UserId: 7, Type: OrderTypeRecharge, Price: 1250, Status: OrderStatusPaid,
 		}},
 		users:  &activationUserRepo{user: &userEntity.User{Id: 7}},
-		wallet: &activationWalletRepo{wallet: &userEntity.Wallet{UserId: 7, Balance: 500}},
+		wallet: &activationWalletRepo{wallet: &walletEntity.Wallet{UserId: 7, Balance: 500}},
 		logs:   &activationLogRepo{},
 		inbox:  newActivationInboxRepo(),
 	}
@@ -305,7 +307,7 @@ func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
 			OrderNo: "recharge-replay", UserId: 7, Type: OrderTypeRecharge, Price: 1250, Status: OrderStatusPaid,
 		}},
 		users:  &activationUserRepo{user: &userEntity.User{Id: 7}},
-		wallet: &activationWalletRepo{wallet: &userEntity.Wallet{UserId: 7, Balance: 500}},
+		wallet: &activationWalletRepo{wallet: &walletEntity.Wallet{UserId: 7, Balance: 500}},
 		logs:   &activationLogRepo{},
 		inbox:  newActivationInboxRepo(),
 	}
@@ -347,9 +349,9 @@ func TestActivateRenewalReplayExtendsSubscriptionOnce(t *testing.T) {
 		}},
 		users: &activationUserRepo{
 			user: &userEntity.User{Id: 7},
-			subscription: &userEntity.Subscribe{
+			subscription: &usersub.Subscribe{
 				Id: 11, UserId: 7, SubscribeId: 9, Token: "renewal-token",
-				ExpireTime: expire, Status: userEntity.SubscribeStatusActive,
+				ExpireTime: expire, Status: usersub.SubscribeStatusActive,
 			},
 		},
 		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9, UnitTime: "Month"}},
@@ -428,9 +430,9 @@ func TestFulfillResetTrafficClearsFinishedAt(t *testing.T) {
 	store := &activationStore{
 		users: &activationUserRepo{
 			user: &userEntity.User{Id: 7},
-			subscription: &userEntity.Subscribe{
+			subscription: &usersub.Subscribe{
 				Id: 11, UserId: 7, SubscribeId: 9, Token: "subscription-token",
-				Download: 100, Upload: 200, Status: userEntity.SubscribeStatusFinished, FinishedAt: &finishedAt,
+				Download: 100, Upload: 200, Status: usersub.SubscribeStatusFinished, FinishedAt: &finishedAt,
 			},
 		},
 		orders:     &activationOrderRepo{order: &orderEntity.Order{OrderNo: "reset-order", UserId: 7, SubscribeToken: "subscription-token", Type: OrderTypeResetTraffic, Status: OrderStatusPaid}},
@@ -446,7 +448,7 @@ func TestFulfillResetTrafficClearsFinishedAt(t *testing.T) {
 	if store.users.subscription.FinishedAt != nil {
 		t.Fatal("reset traffic left FinishedAt set")
 	}
-	if store.users.subscription.Status != userEntity.SubscribeStatusActive {
+	if store.users.subscription.Status != usersub.SubscribeStatusActive {
 		t.Fatalf("status = %d, want active", store.users.subscription.Status)
 	}
 }

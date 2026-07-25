@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/log"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -513,7 +513,7 @@ func (l *ResetTrafficLogic) isRetryableError(err error) bool {
 // Uses an independent background context with a per-item timeout so that a
 // long-running parent context deadline (e.g. asynq task timeout) does not
 // cause cache/log operations to fail mid-way through large batches.
-func (l *ResetTrafficLogic) clearCache(_ context.Context, list []*user.Subscribe) {
+func (l *ResetTrafficLogic) clearCache(_ context.Context, list []*usersub.Subscribe) {
 	if len(list) != 0 {
 		subs := make(map[int64]bool)
 

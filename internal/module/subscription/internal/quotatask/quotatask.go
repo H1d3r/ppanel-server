@@ -12,7 +12,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/entity/log"
 	"github.com/perfect-panel/server/internal/model/entity/task"
-	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -156,7 +156,7 @@ func (l *QuotaTaskLogic) parseTaskData(ctx context.Context, taskInfo *task.Task)
 	return scope, content, nil
 }
 
-func (l *QuotaTaskLogic) getSubscribes(ctx context.Context, subscriberIDs []int64) ([]*user.Subscribe, error) {
+func (l *QuotaTaskLogic) getSubscribes(ctx context.Context, subscriberIDs []int64) ([]*usersub.Subscribe, error) {
 	subscribes, err := l.deps.Store.UserSubscription().FindSubscribesByIds(ctx, subscriberIDs)
 	if err != nil {
 		logger.WithContext(ctx).Error("[QuotaTaskLogic.getSubscribes] find subscribes error",
@@ -168,7 +168,7 @@ func (l *QuotaTaskLogic) getSubscribes(ctx context.Context, subscriberIDs []int6
 	return subscribes, nil
 }
 
-func (l *QuotaTaskLogic) processSubscribes(ctx context.Context, subscribes []*user.Subscribe, content task.QuotaContent, taskInfo *task.Task) error {
+func (l *QuotaTaskLogic) processSubscribes(ctx context.Context, subscribes []*usersub.Subscribe, content task.QuotaContent, taskInfo *task.Task) error {
 	// Deliberate cross-domain transaction: the scheduled gift grant reads
 	// subscription state and moves billing money atomically with its task
 	// bookkeeping; it splits into an event-driven flow when the domains
@@ -218,7 +218,7 @@ func (l *QuotaTaskLogic) processSubscribes(ctx context.Context, subscribes []*us
 	})
 }
 
-func (l *QuotaTaskLogic) processSubscription(ctx context.Context, store repository.Store, sub *user.Subscribe, content task.QuotaContent, now time.Time, errors *[]ErrorInfo) error {
+func (l *QuotaTaskLogic) processSubscription(ctx context.Context, store repository.Store, sub *usersub.Subscribe, content task.QuotaContent, now time.Time, errors *[]ErrorInfo) error {
 	// 验证订阅数据
 	if sub == nil {
 		*errors = append(*errors, ErrorInfo{
@@ -281,7 +281,7 @@ func (l *QuotaTaskLogic) processSubscription(ctx context.Context, store reposito
 	return nil
 }
 
-func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store, sub *user.Subscribe, content task.QuotaContent, now time.Time, errors *[]ErrorInfo) error {
+func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store, sub *usersub.Subscribe, content task.QuotaContent, now time.Time, errors *[]ErrorInfo) error {
 	// 验证赠送类型
 	if content.GiftType != 1 && content.GiftType != 2 {
 		*errors = append(*errors, ErrorInfo{
@@ -333,7 +333,7 @@ func (l *QuotaTaskLogic) processGift(ctx context.Context, store repository.Store
 	return nil
 }
 
-func (l *QuotaTaskLogic) getStartTime(sub *user.Subscribe, now time.Time) time.Time {
+func (l *QuotaTaskLogic) getStartTime(sub *usersub.Subscribe, now time.Time) time.Time {
 	if sub.StartTime.Unix() == 0 {
 		return now
 	}

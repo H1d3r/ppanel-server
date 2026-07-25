@@ -11,7 +11,7 @@ import (
 	orderEntity "github.com/perfect-panel/server/internal/model/entity/order"
 	paymentEntity "github.com/perfect-panel/server/internal/model/entity/payment"
 	subscribeEntity "github.com/perfect-panel/server/internal/model/entity/subscribe"
-	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/perfect-panel/server/internal/model/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
 	"github.com/perfect-panel/server/internal/repository"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
@@ -44,8 +44,8 @@ type PlanReader interface {
 type UserSubscriptionReader interface {
 	HasBlockingSubscription(ctx context.Context, userID int64) (bool, error)
 	CountQuotaConsumingSubscriptions(ctx context.Context, userID, subscribeID int64) (int64, error)
-	FindOneUserSubscribe(ctx context.Context, id int64) (*userEntity.SubscribeDetails, error)
-	FindOneSubscribe(ctx context.Context, id int64) (*userEntity.Subscribe, error)
+	FindOneUserSubscribe(ctx context.Context, id int64) (*usersub.SubscribeDetails, error)
+	FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error)
 }
 
 // OrderQueue mirrors the facade's order queue port.
