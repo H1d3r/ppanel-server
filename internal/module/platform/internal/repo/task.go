@@ -1,29 +1,21 @@
-package repository
+package repo
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/task"
 	"gorm.io/gorm"
 )
 
-// TaskRepo task 数据访问接口
-type TaskRepo interface {
-	Insert(ctx context.Context, data *task.Task) error
-	FindOne(ctx context.Context, id int64) (*task.Task, error)
-	FindOneByType(ctx context.Context, id int64, typ task.Type) (*task.Task, error)
-	QueryTaskList(ctx context.Context, filter *task.Filter) (int64, []*task.Task, error)
-	Update(ctx context.Context, data *task.Task) error
-	UpdateStatus(ctx context.Context, id int64, status int8) error
-}
-
-var _ TaskRepo = (*taskRepo)(nil)
+var _ repository.TaskRepo = (*taskRepo)(nil)
 
 type taskRepo struct {
 	db *gorm.DB
 }
 
-func newTaskRepo(db *gorm.DB) TaskRepo {
+// NewTaskRepo builds the module-owned implementation.
+func NewTaskRepo(db *gorm.DB) repository.TaskRepo {
 	return &taskRepo{
 		db: db,
 	}
@@ -52,10 +44,10 @@ func (m *taskRepo) QueryTaskList(ctx context.Context, filter *task.Filter) (int6
 		filter = &task.Filter{
 			Type: task.Undefined,
 			Page: 1,
-			Size: defaultPageSize,
+			Size: repository.DefaultPageSize,
 		}
 	}
-	filter.Page, filter.Size = NormalizePage(filter.Page, filter.Size)
+	filter.Page, filter.Size = repository.NormalizePage(filter.Page, filter.Size)
 
 	query := m.db.WithContext(ctx).Model(&task.Task{})
 	if filter.Type != task.Undefined {

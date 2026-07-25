@@ -1,7 +1,7 @@
 package repository
 
 const (
-	defaultPageSize = 20
+	DefaultPageSize = 20
 	maxPageSize     = 100
 )
 
@@ -11,7 +11,7 @@ func NormalizePage(page, size int) (int, int) {
 		page = 1
 	}
 	if size < 1 {
-		size = defaultPageSize
+		size = DefaultPageSize
 	}
 	if size > maxPageSize {
 		size = maxPageSize
@@ -25,7 +25,7 @@ func NormalizePageFloor(page, size int) (int, int) {
 		page = 1
 	}
 	if size < 1 {
-		size = defaultPageSize
+		size = DefaultPageSize
 	}
 	return page, size
 }

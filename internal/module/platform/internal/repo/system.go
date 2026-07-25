@@ -1,14 +1,14 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/entity/system"
 	"github.com/perfect-panel/server/pkg/cache"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -18,41 +18,18 @@ var (
 	cacheSystemKeyPrefix = "cache:System:key:"
 )
 
-// SystemRepo system 数据访问接口
-type SystemRepo interface {
-	Insert(ctx context.Context, data *system.System) error
-	FindOne(ctx context.Context, id int64) (*system.System, error)
-	FindOneByKey(ctx context.Context, email string) (*system.System, error)
-	Update(ctx context.Context, data *system.System) error
-	Delete(ctx context.Context, id int64) error
-	GetSmsConfig(ctx context.Context) ([]*system.System, error)
-	GetSiteConfig(ctx context.Context) ([]*system.System, error)
-	GetEmailConfig(ctx context.Context) ([]*system.System, error)
-	GetSubscribeConfig(ctx context.Context) ([]*system.System, error)
-	GetRegisterConfig(ctx context.Context) ([]*system.System, error)
-	GetVerifyConfig(ctx context.Context) ([]*system.System, error)
-	GetNodeConfig(ctx context.Context) ([]*system.System, error)
-	GetInviteConfig(ctx context.Context) ([]*system.System, error)
-	GetTelegramConfig(ctx context.Context) ([]*system.System, error)
-	GetTosConfig(ctx context.Context) ([]*system.System, error)
-	GetCurrencyConfig(ctx context.Context) ([]*system.System, error)
-	GetVerifyCodeConfig(ctx context.Context) ([]*system.System, error)
-	GetLogConfig(ctx context.Context) ([]*system.System, error)
-	UpdateValueByCategoryKey(ctx context.Context, category, key, value string, valueType ...string) error
-	UpdateNodeMultiplierConfig(ctx context.Context, config string) error
-	FindNodeMultiplierConfig(ctx context.Context) (*system.System, error)
-}
-
-var _ SystemRepo = (*systemRepo)(nil)
+var _ repository.SystemRepo = (*systemRepo)(nil)
 
 type systemRepo struct {
 	cache.CachedConn
 	table string
 }
 
-func newSystemRepo(db *gorm.DB, c *redis.Client, invalidations ...*cache.InvalidationQueue) SystemRepo {
+// NewSystemRepo builds the module-owned implementation over the shared
+// cached connection.
+func NewSystemRepo(conn cache.CachedConn) repository.SystemRepo {
 	return &systemRepo{
-		CachedConn: newCachedConn(db, c, invalidations...),
+		CachedConn: conn,
 		table:      "System",
 	}
 }

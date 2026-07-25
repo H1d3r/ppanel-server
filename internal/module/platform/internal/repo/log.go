@@ -1,9 +1,10 @@
-package repository
+package repo
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/perfect-panel/server/internal/repository"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/entity/log"
@@ -11,26 +12,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// LogRepo log 数据访问接口
-type LogRepo interface {
-	Insert(ctx context.Context, data *log.SystemLog) error
-	FindOne(ctx context.Context, id int64) (*log.SystemLog, error)
-	Update(ctx context.Context, data *log.SystemLog) error
-	Delete(ctx context.Context, id int64) error
-	FilterSystemLog(ctx context.Context, filter *log.FilterParams) ([]*log.SystemLog, int64, error)
-	FindFirstByDateType(ctx context.Context, date string, typ uint8) (*log.SystemLog, error)
-	FindByDatesType(ctx context.Context, dates []string, typ uint8) ([]*log.SystemLog, error)
-	DeleteBefore(ctx context.Context, end time.Time) error
-	SumAmountByTypeAndObjectID(ctx context.Context, typ uint8, objectID int64) (int64, error)
-}
-
-var _ LogRepo = (*logRepo)(nil)
+var _ repository.LogRepo = (*logRepo)(nil)
 
 type logRepo struct {
 	*gorm.DB
 }
 
-func newLogRepo(db *gorm.DB) LogRepo {
+// NewLogRepo builds the module-owned implementation.
+func NewLogRepo(db *gorm.DB) repository.LogRepo {
 	return &logRepo{
 		DB: db,
 	}
@@ -63,11 +52,11 @@ func (m *logRepo) FilterSystemLog(ctx context.Context, filter *log.FilterParams)
 	if filter == nil {
 		filter = &log.FilterParams{
 			Page: 1,
-			Size: defaultPageSize,
+			Size: repository.DefaultPageSize,
 		}
 	}
 
-	filter.Page, filter.Size = NormalizePage(filter.Page, filter.Size)
+	filter.Page, filter.Size = repository.NormalizePage(filter.Page, filter.Size)
 
 	if filter.Type != 0 {
 		tx = tx.Where("type = ?", filter.Type)

@@ -1,28 +1,21 @@
-package repository
+package repo
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/model/entity/client"
 	"gorm.io/gorm"
 )
 
-// ClientRepo subscribe application 数据访问接口
-type ClientRepo interface {
-	Insert(ctx context.Context, data *client.SubscribeApplication) error
-	FindOne(ctx context.Context, id int64) (*client.SubscribeApplication, error)
-	Update(ctx context.Context, data *client.SubscribeApplication) error
-	Delete(ctx context.Context, id int64) error
-	List(ctx context.Context) ([]*client.SubscribeApplication, error)
-}
-
-var _ ClientRepo = (*clientRepo)(nil)
+var _ repository.ClientRepo = (*clientRepo)(nil)
 
 type clientRepo struct {
 	*gorm.DB
 }
 
-func newClientRepo(db *gorm.DB) ClientRepo {
+// NewClientRepo builds the module-owned implementation.
+func NewClientRepo(db *gorm.DB) repository.ClientRepo {
 	return &clientRepo{
 		DB: db,
 	}

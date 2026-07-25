@@ -12,6 +12,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/internal/auditlog"
 	"github.com/perfect-panel/server/internal/module/platform/internal/dashboard"
 	"github.com/perfect-panel/server/internal/module/platform/internal/publicinfo"
+	"github.com/perfect-panel/server/internal/module/platform/internal/repo"
 	"github.com/perfect-panel/server/internal/module/platform/internal/systemsetting"
 	"github.com/perfect-panel/server/internal/module/platform/internal/tool"
 	"github.com/perfect-panel/server/internal/repository"
@@ -129,6 +130,21 @@ type Deps struct {
 	// Tool dependencies: the logger output path and the GeoIP reader.
 	LogPath string
 	GeoIP   func() *geoip2.Reader
+}
+
+// NewRepoBuilder exports the module-owned repository implementations for
+// store assembly (ADR-001 step-6 preparation).
+func NewRepoBuilder() repository.PlatformBuilder {
+	return func(c repository.ModuleConn) repository.PlatformRepos {
+		conn := c.Conn()
+		return repository.PlatformRepos{
+			System: repo.NewSystemRepo(conn),
+			Logs:   repo.NewLogRepo(c.DB),
+			Tasks:  repo.NewTaskRepo(c.DB),
+			Client: repo.NewClientRepo(c.DB),
+			Inbox:  repo.NewInboxRepo(c.DB),
+		}
+	}
 }
 
 func New(deps Deps) Service {

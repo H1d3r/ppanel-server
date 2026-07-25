@@ -622,8 +622,8 @@ func TestNormalizePage(t *testing.T) {
 		wantPage int
 		wantSize int
 	}{
-		{name: "zero values use safe defaults", page: 0, size: 0, wantPage: 1, wantSize: defaultPageSize},
-		{name: "negative values use safe defaults", page: -2, size: -10, wantPage: 1, wantSize: defaultPageSize},
+		{name: "zero values use safe defaults", page: 0, size: 0, wantPage: 1, wantSize: DefaultPageSize},
+		{name: "negative values use safe defaults", page: -2, size: -10, wantPage: 1, wantSize: DefaultPageSize},
 		{name: "large size is capped", page: 2, size: maxPageSize + 1, wantPage: 2, wantSize: maxPageSize},
 		{name: "valid values pass through", page: 3, size: 50, wantPage: 3, wantSize: 50},
 	}
