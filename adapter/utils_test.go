@@ -147,3 +147,45 @@ func getServers() []*node.Node {
 		},
 	}
 }
+
+func TestAdapterProxyCertPinForcesCertVerification(t *testing.T) {
+	const pin = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	srv := &node.Server{Id: 1, Name: "PinServer", Address: "example.com"}
+	if err := srv.MarshalProtocols([]node.Protocol{
+		{
+			Type: "vmess", Port: 443, Enable: true, Security: "tls",
+			SNI: "pin.example.com", CertMode: "self",
+			AllowInsecure: true, CertPinSHA256: pin,
+		},
+		{
+			Type: "trojan", Port: 444, Enable: true, Security: "tls",
+			SNI: "pin.example.com", CertMode: "http",
+			AllowInsecure: true,
+		},
+	}); err != nil {
+		t.Fatalf("marshal protocols: %v", err)
+	}
+
+	enabled := true
+	nodes := []*node.Node{
+		{Id: 1, Name: "Pinned", Port: 443, Address: "a.example.com", ServerId: srv.Id, Server: srv, Protocol: "vmess", Enabled: &enabled},
+		{Id: 2, Name: "Unpinned", Port: 444, Address: "b.example.com", ServerId: srv.Id, Server: srv, Protocol: "trojan", Enabled: &enabled},
+	}
+	proxies, err := NewAdapter(tpl).Proxies(nodes)
+	if err != nil {
+		t.Fatalf("proxies: %v", err)
+	}
+	if len(proxies) != 2 {
+		t.Fatalf("len(proxies) = %d, want 2", len(proxies))
+	}
+	pinned, unpinned := proxies[0], proxies[1]
+	if pinned.CertPinSHA256 != pin {
+		t.Fatalf("pinned CertPinSHA256 = %q, want %q", pinned.CertPinSHA256, pin)
+	}
+	if pinned.AllowInsecure {
+		t.Fatal("pinned proxy AllowInsecure = true, want false (pin must force cert verification)")
+	}
+	if !unpinned.AllowInsecure {
+		t.Fatal("unpinned proxy AllowInsecure = false, want true (no pin, keep configured value)")
+	}
+}
