@@ -20,6 +20,11 @@ import (
 
 const protobufContentType = "application/protobuf"
 
+// certificateSHA256Header carries the SHA256 fingerprint of the node's
+// self-signed TLS certificate; ppanel-node attaches it to every request once
+// the certificate is loaded.
+const certificateSHA256Header = "X-Node-Certificate-SHA256"
+
 func ServerMiddleware(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		ctx.Header("Vary", "Accept")

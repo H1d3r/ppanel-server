@@ -181,6 +181,7 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 						CertMode:                protocol.CertMode,
 						CertDNSProvider:         protocol.CertDNSProvider,
 						CertDNSEnv:              protocol.CertDNSEnv,
+						CertPinSHA256:           protocol.CertPinSHA256,
 					},
 				)
 			}

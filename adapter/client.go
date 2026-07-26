@@ -97,6 +97,7 @@ type Proxy struct {
 	CertMode        string  // Certificate mode, `none`｜`http`｜`dns`｜`self`
 	CertDNSProvider string  // DNS provider for certificate
 	CertDNSEnv      string  // Environment for DNS provider
+	CertPinSHA256   string  // SHA256 fingerprint of the self-signed certificate (lowercase hex)
 }
 
 type User struct {

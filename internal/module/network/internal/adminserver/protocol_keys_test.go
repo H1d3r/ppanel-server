@@ -239,3 +239,42 @@ func TestNormalizeAfterMergeClearsPluginOptionsWhenPluginDisabled(t *testing.T) 
 		t.Fatalf("plugin fields were not cleared: %#v", normalized)
 	}
 }
+
+func TestMergeMissingProtocolFieldsPreservesNodeReportedCertPin(t *testing.T) {
+	// Admin clients never submit cert_pin_sha256 (the field is absent from the
+	// dto), so an admin edit must carry the node-reported value forward.
+	const pin = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	existing := node.Protocol{
+		Type:          "vmess",
+		Port:          443,
+		Enable:        true,
+		Security:      "tls",
+		SNI:           "node.example",
+		CertMode:      "self",
+		CertPinSHA256: pin,
+	}
+	next := node.Protocol{
+		Type:     "vmess",
+		Port:     8443,
+		Enable:   true,
+		Security: "tls",
+		SNI:      "node.example",
+		CertMode: "self",
+	}
+	merged, err := mergeMissingProtocolFields(next, existing, map[string]struct{}{
+		"type": {}, "port": {}, "enable": {}, "security": {}, "sni": {}, "cert_mode": {},
+	})
+	if err != nil {
+		t.Fatalf("mergeMissingProtocolFields() error = %v", err)
+	}
+	if merged.CertPinSHA256 != pin {
+		t.Fatalf("CertPinSHA256 = %q, want %q", merged.CertPinSHA256, pin)
+	}
+	normalized, err := node.NormalizeProtocolForStorage(merged)
+	if err != nil {
+		t.Fatalf("NormalizeProtocolForStorage() error = %v", err)
+	}
+	if normalized.CertPinSHA256 != pin {
+		t.Fatalf("normalized CertPinSHA256 = %q, want %q", normalized.CertPinSHA256, pin)
+	}
+}

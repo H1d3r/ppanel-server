@@ -1,6 +1,9 @@
 package node
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeProtocolForStorageRejectsUnsupportedRuntimeProtocol(t *testing.T) {
 	for _, protocolType := range []string{"http", "socks"} {
@@ -341,5 +344,57 @@ func TestSanitizeProtocolsForNodeDistributionCleansHysteria2Alias(t *testing.T) 
 	if protocol.Type != "hysteria" || protocol.Fingerprint != "" || protocol.HopPorts != "" ||
 		protocol.CongestionController != "" {
 		t.Fatalf("hysteria runtime fields were not sanitized: %#v", protocol)
+	}
+}
+
+func TestNormalizeProtocolForStorageKeepsCertPinForSelfSignedTLS(t *testing.T) {
+	protocol, err := NormalizeProtocolForStorage(Protocol{
+		Type:          "vmess",
+		Port:          443,
+		Enable:        true,
+		Security:      "tls",
+		SNI:           "node.example",
+		CertMode:      "self",
+		CertPinSHA256: strings.ToUpper(testCertPin),
+	})
+	if err != nil {
+		t.Fatalf("NormalizeProtocolForStorage() error = %v", err)
+	}
+	if protocol.CertPinSHA256 != testCertPin {
+		t.Fatalf("CertPinSHA256 = %q, want lowercased %q", protocol.CertPinSHA256, testCertPin)
+	}
+}
+
+func TestNormalizeProtocolForStorageClearsCertPinWhenNotSelfSigned(t *testing.T) {
+	cases := []struct {
+		name     string
+		protocol Protocol
+	}{
+		{"cert_mode dns", Protocol{
+			Type: "vmess", Port: 443, Enable: true, Security: "tls",
+			SNI: "node.example", CertMode: "dns", CertDNSProvider: "cloudflare",
+			CertPinSHA256: testCertPin,
+		}},
+		{"security reality", Protocol{
+			Type: "vless", Port: 443, Enable: true, Security: "reality",
+			SNI: "node.example", RealityPrivateKey: "key", RealityShortId: "0123abcd",
+			CertPinSHA256: testCertPin,
+		}},
+		{"invalid fingerprint", Protocol{
+			Type: "vmess", Port: 443, Enable: true, Security: "tls",
+			SNI: "node.example", CertMode: "self",
+			CertPinSHA256: "not-a-fingerprint",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			protocol, err := NormalizeProtocolForStorage(tc.protocol)
+			if err != nil {
+				t.Fatalf("NormalizeProtocolForStorage() error = %v", err)
+			}
+			if protocol.CertPinSHA256 != "" {
+				t.Fatalf("CertPinSHA256 = %q, want empty", protocol.CertPinSHA256)
+			}
+		})
 	}
 }

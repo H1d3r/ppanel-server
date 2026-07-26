@@ -31,6 +31,7 @@ func ServerPushStatusHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 		req.ServerCommon = commonReq
+		req.CertPinSHA256 = string(ctx.GetHeader(certificateSHA256Header))
 		if validateErr := svcCtx.Validate(&req); validateErr != nil {
 			writeParamError(ctx, validateErr)
 			return

@@ -231,6 +231,9 @@ type Protocol struct {
 	CertDNSProvider string `json:"cert_dns_provider,omitempty"`
 	// TLS 协议通用字段：cert_mode=dns 时传给 DNS 服务商的环境变量/凭据配置。
 	CertDNSEnv string `json:"cert_dns_env"`
+	// TLS 协议通用字段：节点上报的 TLS 叶子证书 SHA256 指纹（小写 hex），仅 cert_mode=self 时保留，
+	// 供订阅端做证书锚定；admin 不读写该字段，靠部分更新的字段回填机制保留。
+	CertPinSHA256 string `json:"cert_pin_sha256,omitempty"`
 }
 
 // Marshal protocol to json

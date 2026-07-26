@@ -330,6 +330,9 @@ type ServerPushStatusRequest struct {
 	Mem       float64 `json:"mem"`
 	Disk      float64 `json:"disk"`
 	UpdatedAt int64   `json:"updated_at"`
+	// CertPinSHA256 is transport metadata carried by the
+	// X-Node-Certificate-SHA256 request header, not part of the body.
+	CertPinSHA256 string `json:"-"`
 }
 
 type ServerRuleGroup struct {

@@ -83,6 +83,12 @@ func normalizeProtocolNoopFields(protocol *Protocol) {
 		protocol.CertDNSProvider = ""
 		protocol.CertDNSEnv = ""
 	}
+	// The pin mirrors the node's self-signed certificate; under any other
+	// cert_mode a stored value is stale and would break client pinning.
+	protocol.CertPinSHA256 = NormalizeCertPinSHA256(protocol.CertPinSHA256)
+	if protocol.CertMode != "self" {
+		protocol.CertPinSHA256 = ""
+	}
 	if protocol.Encryption == "" {
 		clearEncryption(protocol)
 	}
@@ -878,6 +884,7 @@ func clearCertificate(protocol *Protocol) {
 	protocol.CertMode = ""
 	protocol.CertDNSProvider = ""
 	protocol.CertDNSEnv = ""
+	protocol.CertPinSHA256 = ""
 }
 
 func clearReality(protocol *Protocol) {

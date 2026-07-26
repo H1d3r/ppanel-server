@@ -45,10 +45,26 @@ func (l *ServerPushStatusLogic) ServerPushStatus(req *dto.ServerPushStatusReques
 	now := timeutil.Now()
 	serverInfo.LastReportedAt = &now
 
+	// The heartbeat saves the whole server row anyway, so a reported
+	// certificate fingerprint piggybacks on the same write.
+	certPinChanged := false
+	if req.CertPinSHA256 != "" {
+		certPinChanged, err = serverInfo.ApplyReportedCertPin(req.Protocol, req.CertPinSHA256)
+		if err != nil {
+			l.Errorw("[ServerPushStatus] ApplyReportedCertPin error", logger.Field("error", err))
+			certPinChanged = false
+		}
+	}
+
 	err = l.deps.Store.Node().UpdateServer(l.ctx, serverInfo)
 	if err != nil {
 		l.Errorw("[ServerPushStatus] UpdateServer error", logger.Field("error", err))
 		return nil
+	}
+	if certPinChanged {
+		if err := l.deps.Store.Node().ClearServerCache(l.ctx, req.ServerId); err != nil {
+			l.Errorw("[ServerPushStatus] ClearServerCache error", logger.Field("error", err))
+		}
 	}
 
 	return nil
