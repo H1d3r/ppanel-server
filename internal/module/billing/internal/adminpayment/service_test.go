@@ -2,6 +2,7 @@ package adminpayment
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
@@ -70,6 +71,24 @@ func TestUpdateBalancePaymentMethodTogglesEnable(t *testing.T) {
 	}
 	if orders.pendingCalls != 0 {
 		t.Fatalf("CountPendingByPaymentID calls = %d, want 0 for balance", orders.pendingCalls)
+	}
+}
+
+// The storefront depends on the seeded balance method (id -1); deleting it
+// breaks every balance purchase with a record-not-found at PreCreateOrder.
+func TestDeleteBalancePaymentMethodIsRejected(t *testing.T) {
+	repo := &updatePaymentRepo{stored: &paymentModel.Payment{
+		Id:       -1,
+		Name:     "Balance",
+		Platform: "balance",
+		Enable:   new(bool),
+	}}
+	orders := &updatePaymentOrders{}
+	svc := NewService(repo, orders, nil, "", nil)
+
+	err := svc.Delete(context.Background(), &dto.DeletePaymentMethodRequest{Id: -1})
+	if err == nil || !strings.Contains(err.Error(), "cannot be deleted") {
+		t.Fatalf("Delete error = %v, want internal-method rejection", err)
 	}
 }
 

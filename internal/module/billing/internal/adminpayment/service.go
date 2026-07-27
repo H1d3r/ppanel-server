@@ -162,6 +162,16 @@ func (s *Service) Update(ctx context.Context, req *dto.UpdatePaymentMethodReques
 }
 
 func (s *Service) Delete(ctx context.Context, req *dto.DeletePaymentMethodRequest) error {
+	method, err := s.payments.FindOne(ctx, req.Id)
+	if err != nil {
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment method error: %v", err)
+	}
+	// The seeded balance method is an internal checkout method the storefront
+	// depends on; deleting it breaks every balance purchase with an opaque
+	// record-not-found until the seed row is restored by hand.
+	if payment.ParsePlatform(method.Platform) == payment.Balance {
+		return errors.Wrapf(xerr.NewErrCodeMsg(400, "PAYMENT_METHOD_INTERNAL"), "the balance payment method cannot be deleted")
+	}
 	pending, err := s.orders.CountPendingByPaymentID(ctx, req.Id)
 	if err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count pending payment orders: %v", err)
