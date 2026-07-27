@@ -6,7 +6,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/svc"
-	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/httpx"
 	"github.com/perfect-panel/server/pkg/result"
 )
@@ -33,7 +32,6 @@ func PurchaseCheckoutHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 			return
 		}
 
-		c = context.WithValue(c, constant.CtxKeyClientIP, ctx.ClientIP())
 		resp, err := svcCtx.Billing.PortalCheckout(c, &req)
 		result.HttpResult(ctx, resp, err)
 	}

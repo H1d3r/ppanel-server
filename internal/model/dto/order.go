@@ -7,7 +7,7 @@ type CheckoutOrderRequest struct {
 }
 
 type CheckoutOrderResponse struct {
-	// Type is url (including EPay mapi payurl/urlscheme), qr, stripe, or balance.
+	// Type is url, qr, stripe, or balance.
 	Type        string         `json:"type" enums:"url,qr,stripe,balance" example:"url"`
 	CheckoutUrl string         `json:"checkout_url,omitempty"`
 	Stripe      *StripePayment `json:"stripe,omitempty"`

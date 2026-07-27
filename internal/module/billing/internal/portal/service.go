@@ -14,7 +14,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/jwt"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/uuidx"
@@ -89,7 +88,6 @@ func NewService(deps Deps) *Service {
 
 // Checkout drives the gateway or balance payment for a pending order.
 func (s *Service) Checkout(ctx context.Context, req *dto.CheckoutOrderRequest) (*dto.CheckoutOrderResponse, error) {
-	clientIP, _ := ctx.Value(constant.CtxKeyClientIP).(string)
 	l := NewPurchaseCheckoutLogic(ctx, CheckoutDependencies{
 		Store:              NewCheckoutStore(s.deps.Store),
 		GuestCheckoutCache: s.deps.GuestCheckoutCache,
@@ -99,7 +97,6 @@ func (s *Service) Checkout(ctx context.Context, req *dto.CheckoutOrderRequest) (
 			SiteName:          s.deps.Config.SiteName(),
 			CurrencyUnit:      s.deps.Config.CurrencyUnit(),
 			CurrencyAccessKey: s.deps.Config.CurrencyAccessKey(),
-			ClientIP:          clientIP,
 			IsGatewayMode:     s.deps.Config.IsGatewayMode,
 		},
 		ExchangeRateCache: s.deps.ExchangeRate,

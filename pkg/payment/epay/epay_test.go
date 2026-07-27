@@ -12,7 +12,10 @@ func TestEpay(t *testing.T) {
 		NotifyUrl: "http://127.0.0.1",
 		ReturnUrl: "http://127.0.0.1",
 	}
-	url := client.CreatePayUrl(order)
+	url, err := client.CreatePayUrl(order)
+	if err != nil {
+		t.Fatalf("CreatePayUrl: %v", err)
+	}
 	t.Logf("PayUrl: %s\n", url)
 
 }

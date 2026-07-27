@@ -121,9 +121,6 @@ type EPayConfig struct {
 	Url  string `json:"url"`
 	Key  string `json:"key"`
 	Type string `json:"type"`
-	// Mode selects the EPay transport: "submit" (browser redirect, default)
-	// or "mapi" (server-side POST API).
-	Mode string `json:"mode,omitempty"`
 }
 
 func (l *EPayConfig) Marshal() ([]byte, error) {
