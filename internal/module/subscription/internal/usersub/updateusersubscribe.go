@@ -32,8 +32,9 @@ func (l *UpdateUserSubscribeLogic) UpdateUserSubscribe(req *dto.UpdateUserSubscr
 		l.Errorw("FindOneUserSubscribe failed:", logger.Field("error", err.Error()), logger.Field("userSubscribeId", req.UserSubscribeId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneUserSubscribe failed: %v", err.Error())
 	}
+	// ExpiredAt == 0 is the NoLimit sentinel (see tool.AddTime), not an expired epoch time
 	expiredAt := time.UnixMilli(req.ExpiredAt)
-	if time.Since(expiredAt).Minutes() > 0 {
+	if req.ExpiredAt != 0 && time.Since(expiredAt).Minutes() > 0 {
 		userSub.Status = 3
 	} else {
 		userSub.Status = 1
