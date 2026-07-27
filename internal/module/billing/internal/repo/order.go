@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/perfect-panel/server/internal/repository"
 	"time"
+
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/pkg/cache"
@@ -201,7 +202,7 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 	var count int64
 	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&order.Order{}).
-			Where("user_id = ? AND coupon = ? AND status IN ?", userID, coupon, []uint8{1, 2, 5}).
+			Where("user_id = ? AND coupon = ? AND status IN ?", userID, coupon, []int64{1, 2, 5}).
 			Count(&count).Error
 	})
 	return count, err
