@@ -3,16 +3,21 @@ package checkout
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
+	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
+	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	inboxEntity "github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	subscribeEntity "github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/orderflow"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/constant"
 	"gorm.io/gorm"
 )
 
@@ -176,6 +181,87 @@ type closeLogRepo struct {
 func (r *closeLogRepo) Insert(_ context.Context, _ *logEntity.SystemLog) error {
 	r.insertCalls++
 	return nil
+}
+
+type closePaymentRepo struct {
+	repository.PaymentRepo
+	method *paymentEntity.Payment
+}
+
+func (r *closePaymentRepo) FindOne(_ context.Context, _ int64) (*paymentEntity.Payment, error) {
+	return r.method, nil
+}
+
+func epayCloseFixture(gatewayURL string) (*closeOrderStore, *Service) {
+	orders := &closeOrderRepo{
+		order: &orderEntity.Order{
+			Id: 1, OrderNo: "epay-order", Status: 1, UserId: 7,
+			Method: "EPay", PaymentId: 2, PaymentCurrency: "CNY", PaymentAmount: 1000,
+		},
+		transition: true,
+	}
+	store := &closeOrderStore{orders: orders}
+	svc := NewService(Deps{
+		Orders: orders,
+		Payments: &closePaymentRepo{method: &paymentEntity.Payment{
+			Id: 2, Platform: "EPay",
+			Config: fmt.Sprintf(`{"pid":"1001","url":%q,"key":"secret","type":"alipay"}`, gatewayURL),
+		}},
+		Store: store,
+	})
+	return store, svc
+}
+
+// unreachableGatewayURL returns a URL on a port that refuses connections
+// immediately, so query failures do not wait out the client timeout.
+func unreachableGatewayURL() string {
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+	return server.URL
+}
+
+// The order's owner explicitly gives up the order, so a gateway that reports
+// unpaid — or cannot be confirmed at all — must not block the cancellation.
+func TestCloseEPayOrderUserCancelBypassesUnconfirmedGateway(t *testing.T) {
+	unpaidGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"code":1,"msg":"ok","trade_no":"","out_trade_no":"epay-order","type":"alipay","money":"10.00","pid":"1001","status":0}`))
+	}))
+	defer unpaidGateway.Close()
+
+	tests := []struct {
+		name       string
+		gatewayURL string
+	}{
+		{name: "gateway reports unpaid", gatewayURL: unpaidGateway.URL},
+		{name: "gateway unreachable", gatewayURL: unreachableGatewayURL()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, svc := epayCloseFixture(tt.gatewayURL)
+			ctx := context.WithValue(context.Background(), constant.CtxKeyUser, &userEntity.User{Id: 7})
+
+			if err := svc.Close(ctx, &dto.CloseOrderRequest{OrderNo: "epay-order"}); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			if store.orders.order.Status != 3 {
+				t.Fatalf("status = %d, want closed", store.orders.order.Status)
+			}
+		})
+	}
+}
+
+// Without an explicit owner request (queue reconciler context), an EPay order
+// that cannot be confirmed as paid keeps its pending reservation.
+func TestCloseEPayOrderReconcilerStaysStrict(t *testing.T) {
+	store, svc := epayCloseFixture(unreachableGatewayURL())
+
+	err := svc.Close(context.Background(), &dto.CloseOrderRequest{OrderNo: "epay-order"})
+	if err == nil {
+		t.Fatal("Close error = nil, want cannot-safely-expire rejection")
+	}
+	if store.orders.order.Status != 1 {
+		t.Fatalf("status = %d, want still pending", store.orders.order.Status)
+	}
 }
 
 func TestCloseOrderDoesNotOverwriteConcurrentPayment(t *testing.T) {

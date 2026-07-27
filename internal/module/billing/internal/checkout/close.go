@@ -43,7 +43,9 @@ func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
 	// Public callers are authenticated by the route. Queue workers use a
 	// context without a user and are the only internal callers allowed to close
 	// any expired order.
-	if currentUser, ok := ctx.Value(constant.CtxKeyUser).(*user.User); ok && currentUser != nil && orderInfo.UserId != currentUser.Id {
+	currentUser, userInitiated := ctx.Value(constant.CtxKeyUser).(*user.User)
+	userInitiated = userInitiated && currentUser != nil
+	if userInitiated && orderInfo.UserId != currentUser.Id {
 		return errors.New("order does not belong to the current user")
 	}
 	// If the order status is not 1, it means that the order has been closed or paid
@@ -60,7 +62,7 @@ func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
 		}
 		return nil
 	}
-	settled, err := s.settleOrCancelGatewayOrder(ctx, orderInfo)
+	settled, err := s.settleOrCancelGatewayOrder(ctx, orderInfo, userInitiated)
 	if err != nil {
 		return err
 	}
@@ -178,13 +180,14 @@ func (s *Service) restoreReservedInventory(ctx context.Context, orderInfo *order
 
 // settleOrCancelGatewayOrder ensures that closing locally cannot leave an
 // active provider checkout able to charge the user after stock and coupons
-// have been released.
-func (s *Service) settleOrCancelGatewayOrder(ctx context.Context, orderInfo *order.Order) (bool, error) {
+// have been released. userInitiated marks a cancellation the order's owner
+// explicitly requested, which consents to forfeiting an unconfirmed payment.
+func (s *Service) settleOrCancelGatewayOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
 	switch paymentPlatform.ParsePlatform(orderInfo.Method) {
 	case paymentPlatform.Stripe:
 		return s.settleOrCancelStripeOrder(ctx, orderInfo)
 	case paymentPlatform.EPay:
-		return s.settleEPayOrder(ctx, orderInfo)
+		return s.settleEPayOrder(ctx, orderInfo, userInitiated)
 	default:
 		return false, nil
 	}
@@ -248,7 +251,10 @@ func (s *Service) settleOrCancelStripeOrder(ctx context.Context, orderInfo *orde
 // locally and accepting a later customer charge with no fulfillment. Gateways
 // with an order-query endpoint are reconciled here; unsupported or unavailable
 // gateways remain pending for retry/manual resolution instead of losing funds.
-func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order) (bool, error) {
+// A user-initiated cancellation is the exception: the owner explicitly gives
+// up the order, so absent any evidence of payment the close proceeds. A late
+// callback on the closed order is still rejected and leaves an audit trail.
+func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
 	if orderInfo.PaymentCurrency == "" {
 		return false, nil // checkout was never started; safe to close.
 	}
@@ -262,9 +268,19 @@ func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order) (
 	}
 	result, err := epay.NewClient(config.Pid, config.Url, config.Key, config.Type).QueryOrder(orderInfo.OrderNo)
 	if err != nil {
+		if userInitiated {
+			logger.WithContext(ctx).Infow("[CloseOrder] user-requested close of EPay order without gateway confirmation",
+				logger.Field("orderNo", orderInfo.OrderNo),
+				logger.Field("queryError", err.Error()),
+			)
+			return false, nil
+		}
 		return false, fmt.Errorf("cannot safely expire EPay order %s: %w", orderInfo.OrderNo, err)
 	}
 	if !result.Paid {
+		if userInitiated {
+			return false, nil
+		}
 		return false, fmt.Errorf("cannot safely expire unpaid EPay order %s; gateway does not provide cancellation", orderInfo.OrderNo)
 	}
 	if result.StatusOnly {
