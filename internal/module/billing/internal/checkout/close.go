@@ -3,6 +3,7 @@ package checkout
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -23,6 +24,11 @@ import (
 )
 
 const orderTypeSubscribe uint8 = 1
+
+// ErrGatewayUnconfirmed reports that an EPay order could not be confirmed as
+// paid, so the close was refused and the order intentionally stays pending.
+// Schedulers treat it as an expected outcome, not a per-order failure.
+var ErrGatewayUnconfirmed = stderrors.New("gateway could not confirm the order as paid")
 
 // Close closes a pending order: the billing transaction releases the coupon
 // reservation and refunds the gift deduction, then the reserved plan
@@ -275,13 +281,13 @@ func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order, u
 			)
 			return false, nil
 		}
-		return false, fmt.Errorf("cannot safely expire EPay order %s: %w", orderInfo.OrderNo, err)
+		return false, fmt.Errorf("cannot safely expire EPay order %s: %v: %w", orderInfo.OrderNo, err, ErrGatewayUnconfirmed)
 	}
 	if !result.Paid {
 		if userInitiated {
 			return false, nil
 		}
-		return false, fmt.Errorf("cannot safely expire unpaid EPay order %s; gateway does not provide cancellation", orderInfo.OrderNo)
+		return false, fmt.Errorf("cannot safely expire unpaid EPay order %s; gateway does not provide cancellation: %w", orderInfo.OrderNo, ErrGatewayUnconfirmed)
 	}
 	if result.StatusOnly {
 		return false, fmt.Errorf("cannot safely reconcile paid EPay order %s: gateway query has no transaction details", orderInfo.OrderNo)

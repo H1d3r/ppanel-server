@@ -19,8 +19,25 @@ import (
 
 // ErrQueryNotSupported is returned when the payment gateway implements
 // neither the standard EPay order query API nor the EasyPay-compatible
-// fallback API (e.g., both return HTTP 404).
+// fallback API — the endpoint returns HTTP 404 or answers with something
+// that is not JSON at all (e.g. an HTML error page).
 var ErrQueryNotSupported = errors.New("gateway does not support order query API")
+
+// decodeQueryResponse parses a gateway query payload. A body that is not
+// JSON at all is evidence the gateway does not implement the query protocol,
+// so it maps to ErrQueryNotSupported instead of a fatal decode error —
+// otherwise a gateway serving HTML error pages on the query path would also
+// block signature-verified callbacks and close attempts.
+func decodeQueryResponse(name string, body []byte, target interface{}) error {
+	if err := json.Unmarshal(body, target); err != nil {
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			return fmt.Errorf("%s query returned a non-JSON response: %w", name, ErrQueryNotSupported)
+		}
+		return fmt.Errorf("decode %s query response: %w", name, err)
+	}
+	return nil
+}
 
 type Client struct {
 	Pid        string
@@ -179,8 +196,8 @@ func (c *Client) queryStandardOrder(orderNo string) (*QueryResult, error) {
 		return nil, errors.New("query response is too large")
 	}
 	var response queryOrderResponse
-	if err := json.Unmarshal(value, &response); err != nil {
-		return nil, fmt.Errorf("decode query response: %w", err)
+	if err := decodeQueryResponse("gateway", value, &response); err != nil {
+		return nil, err
 	}
 	if response.Code != 1 {
 		return nil, fmt.Errorf("gateway order lookup failed: code=%d", response.Code)
@@ -239,8 +256,8 @@ func (c *Client) queryEasyPayOrder(orderNo string) (*QueryResult, error) {
 		return nil, errors.New("EasyPay query response is too large")
 	}
 	var response easyPayQueryOrderResponse
-	if err := json.Unmarshal(value, &response); err != nil {
-		return nil, fmt.Errorf("decode EasyPay query response: %w", err)
+	if err := decodeQueryResponse("EasyPay", value, &response); err != nil {
+		return nil, err
 	}
 	if response.Code != 1 {
 		return nil, fmt.Errorf("EasyPay order lookup failed: code=%d", response.Code)

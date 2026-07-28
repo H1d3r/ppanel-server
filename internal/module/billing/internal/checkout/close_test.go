@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -251,13 +252,14 @@ func TestCloseEPayOrderUserCancelBypassesUnconfirmedGateway(t *testing.T) {
 }
 
 // Without an explicit owner request (queue reconciler context), an EPay order
-// that cannot be confirmed as paid keeps its pending reservation.
+// that cannot be confirmed as paid keeps its pending reservation, and the
+// error carries the sentinel so schedulers can treat it as expected.
 func TestCloseEPayOrderReconcilerStaysStrict(t *testing.T) {
 	store, svc := epayCloseFixture(unreachableGatewayURL())
 
 	err := svc.Close(context.Background(), &dto.CloseOrderRequest{OrderNo: "epay-order"})
-	if err == nil {
-		t.Fatal("Close error = nil, want cannot-safely-expire rejection")
+	if !stderrors.Is(err, ErrGatewayUnconfirmed) {
+		t.Fatalf("Close error = %v, want ErrGatewayUnconfirmed", err)
 	}
 	if store.orders.order.Status != 1 {
 		t.Fatalf("status = %d, want still pending", store.orders.order.Status)

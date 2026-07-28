@@ -216,6 +216,23 @@ func TestQueryOrderReportsUnsupportedWhenGatewayReturnsNotFound(t *testing.T) {
 	}
 }
 
+// A gateway that answers the query path with an HTML error page does not
+// implement the query protocol; that must classify as unsupported so
+// signature-verified callbacks and close attempts are not blocked by it.
+func TestQueryOrderTreatsNonJSONResponseAsUnsupported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
+	}))
+	defer server.Close()
+
+	client := NewClient("1001", server.URL+"/gateway", "secret", "alipay")
+	_, err := client.QueryOrder("order-1")
+	if !errors.Is(err, ErrQueryNotSupported) {
+		t.Fatalf("QueryOrder error = %v, want ErrQueryNotSupported", err)
+	}
+}
+
 func TestQueryOrderDoesNotTreatOtherHTTPFailuresAsUnsupported(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "gateway failure", http.StatusInternalServerError)

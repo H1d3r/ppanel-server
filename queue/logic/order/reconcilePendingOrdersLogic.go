@@ -2,10 +2,12 @@ package orderLogic
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/model/dto"
+	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 )
@@ -28,6 +30,7 @@ func NewReconcilePendingOrdersLogic(svc *svc.ServiceContext) *ReconcilePendingOr
 
 func (l *ReconcilePendingOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	var afterID int64
+	var unconfirmed int
 	cutoff := time.Now().Add(-pendingOrderExpiry)
 	for {
 		orders, err := l.svc.Store.Order().QueryOrdersByStatusAfterID(ctx, OrderStatusPending, afterID, pendingOrderReconcileBatchSize)
@@ -40,6 +43,14 @@ func (l *ReconcilePendingOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.
 				continue
 			}
 			if err := l.svc.Billing.CloseOrder(ctx, &dto.CloseOrderRequest{OrderNo: orderInfo.OrderNo}); err != nil {
+				// Staying pending until the gateway confirms payment is the
+				// intended behaviour for EPay orders, and the same orders
+				// recur every scan — count them once instead of emitting a
+				// per-order error each minute.
+				if errors.Is(err, billing.ErrGatewayUnconfirmed) {
+					unconfirmed++
+					continue
+				}
 				// Keep the order pending for a later reconciliation instead of
 				// failing the entire batch because one gateway is unavailable.
 				logger.WithContext(ctx).Error("[ReconcilePendingOrders] close failed",
@@ -49,6 +60,11 @@ func (l *ReconcilePendingOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.
 			}
 		}
 		if len(orders) < pendingOrderReconcileBatchSize {
+			if unconfirmed > 0 {
+				logger.WithContext(ctx).Infow("[ReconcilePendingOrders] EPay orders remain pending awaiting gateway payment confirmation",
+					logger.Field("count", unconfirmed),
+				)
+			}
 			return nil
 		}
 	}

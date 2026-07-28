@@ -114,6 +114,10 @@ var ErrIdempotencyKeyReused = v2orch.ErrIdempotencyKeyReused
 // EPayNotifyMeta re-exports the callback subdomain's raw transport details.
 type EPayNotifyMeta = callbacks.EPayNotifyMeta
 
+// ErrGatewayUnconfirmed marks a refused close whose order stays pending until
+// the gateway confirms payment; schedulers treat it as an expected outcome.
+var ErrGatewayUnconfirmed = checkout.ErrGatewayUnconfirmed
+
 // Order lifecycle constants shared with the V2 orchestration layer.
 const (
 	CloseOrderTimeMinutes = checkout.CloseOrderTimeMinutes

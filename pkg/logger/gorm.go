@@ -2,9 +2,11 @@ package logger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
@@ -60,7 +62,14 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql 
 			Key:   "error",
 			Value: err.Error(),
 		})
-		WithContext(ctx).WithCallerSkip(6).WithDuration(time.Since(begin)).Errorw(TAG, fields...)
+		// A missed lookup is an expected outcome the caller handles (inbox
+		// dedup probes, lazily-created rows, existence checks) — logging it
+		// as an error drowns out real failures.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			WithContext(ctx).WithCallerSkip(6).WithDuration(time.Since(begin)).Infow(TAG, fields...)
+		} else {
+			WithContext(ctx).WithCallerSkip(6).WithDuration(time.Since(begin)).Errorw(TAG, fields...)
+		}
 	} else {
 		WithContext(ctx).WithCallerSkip(6).WithDuration(time.Since(begin)).Infow(fmt.Sprintf("%s SQL Executed", TAG), fields...)
 	}
