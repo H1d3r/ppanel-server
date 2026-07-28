@@ -162,7 +162,7 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "order amount exceeds maximum limit")
 		}
 		if orderInfo.Coupon != "" {
-			reserved, reserveErr := txStore.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().Unix())
+			reserved, reserveErr := txStore.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().UnixMilli())
 			if reserveErr != nil {
 				return reserveErr
 			}

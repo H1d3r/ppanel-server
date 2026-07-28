@@ -105,7 +105,10 @@ func ensureCouponEnabled(couponInfo *coupon.Coupon) error {
 	if !couponInfo.IsEnabled() {
 		return errors.Wrapf(xerr.NewErrCode(xerr.CouponDisabled), "coupon disabled")
 	}
-	now := timeutil.Now().Unix()
+	// Coupon start/expire times are stored as Unix milliseconds; comparing
+	// them against seconds made every coupon with a start time permanently
+	// "not active".
+	now := timeutil.Now().UnixMilli()
 	if couponInfo.StartTime > 0 && now < couponInfo.StartTime {
 		return errors.Wrapf(xerr.NewErrCode(xerr.CouponNotApplicable), "coupon is not active")
 	}

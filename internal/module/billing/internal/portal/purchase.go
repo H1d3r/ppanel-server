@@ -136,7 +136,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	// settle together.
 	err = s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		if orderInfo.Coupon != "" {
-			reserved, reserveErr := store.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().Unix())
+			reserved, reserveErr := store.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().UnixMilli())
 			if reserveErr != nil {
 				return reserveErr
 			}

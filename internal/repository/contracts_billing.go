@@ -72,6 +72,8 @@ type CouponRepo interface {
 	Update(ctx context.Context, data *coupon.Coupon) error
 	Delete(ctx context.Context, id int64) error
 	UpdateCount(ctx context.Context, code string) error
+	// ReserveUsage atomically claims one coupon use. now is a Unix
+	// millisecond timestamp, matching the stored start/expire columns.
 	ReserveUsage(ctx context.Context, code string, now int64, tx ...*gorm.DB) (bool, error)
 	ReleaseUsage(ctx context.Context, code string, tx ...*gorm.DB) error
 	QueryCouponListByPage(ctx context.Context, page, size int, subscribe int64, search string) (total int64, list []*coupon.Coupon, err error)

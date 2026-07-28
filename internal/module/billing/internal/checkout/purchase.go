@@ -224,7 +224,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 			}
 		}
 		if orderInfo.Coupon != "" {
-			reserved, e := txStore.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().Unix())
+			reserved, e := txStore.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().UnixMilli())
 			if e != nil {
 				return e
 			}
