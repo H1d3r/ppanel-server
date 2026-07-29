@@ -18,6 +18,7 @@ import (
 	"github.com/perfect-panel/server/pkg/jwt"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/oauth/apple"
+	facebookoauth "github.com/perfect-panel/server/pkg/oauth/facebook"
 	githuboauth "github.com/perfect-panel/server/pkg/oauth/github"
 	"github.com/perfect-panel/server/pkg/oauth/google"
 	"github.com/perfect-panel/server/pkg/oauth/telegram"
@@ -35,6 +36,7 @@ const (
 	OAuthApple    = "apple"
 	OAuthTelegram = "telegram"
 	OAuthGithub   = "github"
+	OAuthFacebook = "facebook"
 	AuthEmail     = "email"
 	AuthExpire    = 86400
 )
@@ -425,6 +427,86 @@ func (l *OAuthLoginGetTokenLogic) github(req *dto.OAuthLoginGetTokenRequest, req
 	return l.findOrRegisterUser(OAuthGithub, fmt.Sprintf("%d", githubUserInfo.OpenID), githubUserInfo.Email, githubUserInfo.Avatar, requestID, ip, userAgent)
 }
 
+func (l *OAuthLoginGetTokenLogic) facebook(req *dto.OAuthLoginGetTokenRequest, requestID, ip, userAgent string) (*user.User, error) {
+	startTime := timeutil.Now()
+	l.Infow("facebook oauth processing started",
+		logger.Field("request_id", requestID),
+		logger.Field("provider", OAuthFacebook),
+	)
+
+	var request oauthRequest
+	if err := tool.CloneMapToStruct(req.Callback.(map[string]interface{}), &request); err != nil {
+		l.Errorw("failed to parse facebook callback data",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthFacebook),
+			logger.Field("error", err.Error()),
+		)
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "parse callback data failed: %v", err)
+	}
+
+	l.Debugw("facebook oauth state validation started",
+		logger.Field("request_id", requestID),
+		logger.Field("state", request.State),
+	)
+
+	redirect, err := l.validateStateCode(OAuthFacebook, request.State, requestID)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := l.getFacebookConfig(requestID)
+	if err != nil {
+		return nil, err
+	}
+
+	client := facebookoauth.New(&facebookoauth.Config{
+		ClientID:     cfg.ClientId,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  redirect,
+	})
+
+	l.Debugw("exchanging facebook authorization code for token",
+		logger.Field("request_id", requestID),
+		logger.Field("redirect_url", redirect),
+	)
+
+	token, err := client.Exchange(l.ctx, request.Code)
+	if err != nil {
+		l.Errorw("failed to exchange facebook authorization code",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthFacebook),
+			logger.Field("error", err.Error()),
+		)
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "exchange token failed: %v", err)
+	}
+
+	l.Debugw("fetching facebook user information",
+		logger.Field("request_id", requestID),
+	)
+
+	facebookUserInfo, err := client.GetUserInfo(token.AccessToken)
+	if err != nil {
+		l.Errorw("failed to get facebook user info",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthFacebook),
+			logger.Field("error", err.Error()),
+		)
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "get user info failed: %v", err)
+	}
+
+	l.Infow("facebook oauth processing completed",
+		logger.Field("request_id", requestID),
+		logger.Field("provider", OAuthFacebook),
+		logger.Field("openid", facebookUserInfo.OpenID),
+		logger.Field("email", facebookUserInfo.Email),
+		logger.Field("duration_ms", time.Since(startTime).Milliseconds()),
+	)
+
+	// The Graph API only returns a confirmed address, so a non-empty email
+	// is safe to bind as a verified email auth method.
+	return l.findOrRegisterUser(OAuthFacebook, facebookUserInfo.OpenID, facebookUserInfo.Email, facebookUserInfo.Picture, requestID, ip, userAgent)
+}
+
 func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, requestID, ip, userAgent string) (*user.User, error) {
 	startTime := timeutil.Now()
 	l.Infow("user registration started",
@@ -672,6 +754,8 @@ func (l *OAuthLoginGetTokenLogic) handleOAuthProvider(req *dto.OAuthLoginGetToke
 		return l.telegram(req, requestID, ip, userAgent)
 	case OAuthGithub:
 		return l.github(req, requestID, ip, userAgent)
+	case OAuthFacebook:
+		return l.facebook(req, requestID, ip, userAgent)
 	default:
 		l.Errorw("unsupported oauth login method",
 			logger.Field("request_id", requestID),
@@ -887,6 +971,40 @@ func (l *OAuthLoginGetTokenLogic) getGithubConfig(requestID string) (*auth.Githu
 	l.Debugw("github oauth config loaded successfully",
 		logger.Field("request_id", requestID),
 		logger.Field("provider", OAuthGithub),
+		logger.Field("client_id", cfg.ClientId),
+	)
+	return &cfg, nil
+}
+
+func (l *OAuthLoginGetTokenLogic) getFacebookConfig(requestID string) (*auth.FacebookAuthConfig, error) {
+	l.Debugw("fetching facebook oauth config",
+		logger.Field("request_id", requestID),
+		logger.Field("provider", OAuthFacebook),
+	)
+
+	authMethod, err := l.deps.Store.Auth().FindOneByMethod(l.ctx, OAuthFacebook)
+	if err != nil {
+		l.Errorw("failed to find facebook auth method",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthFacebook),
+			logger.Field("error", err.Error()),
+		)
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find facebook auth method failed: %v", err)
+	}
+
+	var cfg auth.FacebookAuthConfig
+	if err = cfg.Unmarshal(authMethod.Config); err != nil {
+		l.Errorw("failed to unmarshal facebook config",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthFacebook),
+			logger.Field("error", err.Error()),
+		)
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "unmarshal facebook config failed: %v", err)
+	}
+
+	l.Debugw("facebook oauth config loaded successfully",
+		logger.Field("request_id", requestID),
+		logger.Field("provider", OAuthFacebook),
 		logger.Field("client_id", cfg.ClientId),
 	)
 	return &cfg, nil

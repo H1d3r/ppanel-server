@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/pkg/logger"
+	facebookoauth "github.com/perfect-panel/server/pkg/oauth/facebook"
 	githuboauth "github.com/perfect-panel/server/pkg/oauth/github"
 	"github.com/perfect-panel/server/pkg/oauth/google"
 	"github.com/perfect-panel/server/pkg/oauth/telegram"
@@ -49,7 +50,7 @@ func (l *OAuthLoginLogic) OAuthLogin(req *dto.OAthLoginRequest) (resp *dto.OAuth
 	case "github":
 		uri, err = l.github(req)
 	case "facebook":
-		uri, err = l.facebook()
+		uri, err = l.facebook(req)
 
 	}
 	if err != nil {
@@ -88,8 +89,30 @@ func (l *OAuthLoginLogic) google(req *dto.OAthLoginRequest) (string, error) {
 	return uri, nil
 }
 
-func (l *OAuthLoginLogic) facebook() (string, error) {
-	return "", nil
+func (l *OAuthLoginLogic) facebook(req *dto.OAthLoginRequest) (string, error) {
+	authMethod, err := l.deps.Store.Auth().FindOneByMethod(l.ctx, "facebook")
+	if err != nil {
+		return "", err
+	}
+	var cfg auth.FacebookAuthConfig
+	err = json.Unmarshal([]byte(authMethod.Config), &cfg)
+	if err != nil {
+		l.Errorw("error unmarshal facebook config", logger.Field("error", err.Error()))
+		return "", err
+	}
+	client := facebookoauth.New(&facebookoauth.Config{
+		ClientID:     cfg.ClientId,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  req.Redirect,
+	})
+	// generate the state code
+	code := random.KeyNew(32, 1)
+	// save the state code
+	err = l.deps.Redis.Set(l.ctx, fmt.Sprintf("facebook:%s", code), req.Redirect, 5*60*time.Second).Err()
+	if err != nil {
+		return "", err
+	}
+	return client.AuthCodeURL(code), nil
 }
 func (l *OAuthLoginLogic) apple(req *dto.OAthLoginRequest) (string, error) {
 	authMethod, err := l.deps.Store.Auth().FindOneByMethod(l.ctx, "apple")

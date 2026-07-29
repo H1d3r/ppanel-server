@@ -13,6 +13,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/oauth/apple"
+	facebookoauth "github.com/perfect-panel/server/pkg/oauth/facebook"
 	githuboauth "github.com/perfect-panel/server/pkg/oauth/github"
 	"github.com/perfect-panel/server/pkg/oauth/google"
 	"github.com/perfect-panel/server/pkg/oauth/telegram"
@@ -67,6 +68,8 @@ func (l *BindOAuthCallbackLogic) BindOAuthCallback(req *dto.BindOAuthCallbackReq
 		err = l.telegram(req)
 	case "github":
 		err = l.github(req)
+	case "facebook":
+		err = l.facebook(req)
 	default:
 		l.Errorw("oauth login method not support", logger.Field("method", req.Method))
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "oauth login method not support: %v", req.Method)
@@ -230,6 +233,83 @@ func (l *BindOAuthCallbackLogic) apple(req *dto.BindOAuthCallbackRequest) error 
 	if err != nil {
 		l.Errorw("[BindOAuthCallbackLogic] InsertUserAuthMethods error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert user auth method failed: %v", err.Error())
+	}
+	return nil
+}
+
+func (l *BindOAuthCallbackLogic) facebook(req *dto.BindOAuthCallbackRequest) error {
+	u, ok := l.ctx.Value(constant.CtxKeyUser).(*user.User)
+	if !ok {
+		logger.Error("current user is not found in context")
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+	}
+
+	var request googleRequest
+	err := tool.CloneMapToStruct(req.Callback.(map[string]interface{}), &request)
+	if err != nil {
+		l.Errorw("error CloneMapToStruct: %v", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "CloneMapToStruct failed")
+	}
+
+	// validate the state code
+	redirect, err := oauthstate.Consume(l.ctx, l.deps.Redis, fmt.Sprintf("facebook:%s", request.State))
+	if err != nil {
+		l.Errorw("error get facebook state code: %v", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "get facebook state code failed")
+	}
+
+	// get facebook config
+	authMethod, err := l.deps.Auth.FindOneByMethod(l.ctx, "facebook")
+	if err != nil {
+		l.Errorw("error find facebook auth method: %v", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find facebook auth method failed")
+	}
+
+	var cfg auth.FacebookAuthConfig
+	err = cfg.Unmarshal(authMethod.Config)
+	if err != nil {
+		l.Errorw("error unmarshal facebook config", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "unmarshal facebook config failed")
+	}
+
+	client := facebookoauth.New(&facebookoauth.Config{
+		ClientID:     cfg.ClientId,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  redirect,
+	})
+
+	token, err := client.Exchange(l.ctx, request.Code)
+	if err != nil {
+		l.Errorw("error exchange facebook token: %v", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "exchange facebook token failed")
+	}
+
+	facebookUserInfo, err := client.GetUserInfo(token.AccessToken)
+	if err != nil {
+		l.Errorw("error get facebook user info: %v", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "get facebook user info failed")
+	}
+
+	// check if this Facebook account is already bound to another user
+	userAuthMethod, err := l.deps.UserAuth.FindUserAuthMethodByOpenID(l.ctx, "facebook", facebookUserInfo.OpenID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query user auth method failed")
+	}
+	if userAuthMethod.Id > 0 {
+		return errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "facebook user already exists")
+	}
+
+	// bind facebook
+	userAuthMethod = &user.AuthMethods{
+		UserId:         u.Id,
+		AuthType:       "facebook",
+		AuthIdentifier: facebookUserInfo.OpenID,
+		Verified:       true,
+	}
+	err = l.deps.UserAuth.InsertUserAuthMethods(l.ctx, userAuthMethod)
+	if err != nil {
+		l.Errorw("error insert user auth method: %v", logger.Field("error", err.Error()))
+		return err
 	}
 	return nil
 }
