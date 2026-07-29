@@ -398,3 +398,36 @@ func TestNormalizeProtocolForStorageClearsCertPinWhenNotSelfSigned(t *testing.T)
 		})
 	}
 }
+
+func TestNormalizeProtocolForStorageAllowsTrojanReality(t *testing.T) {
+	protocol, err := NormalizeProtocolForStorage(Protocol{
+		Type:              "trojan",
+		Port:              443,
+		Enable:            true,
+		Security:          "reality",
+		SNI:               "node.example",
+		RealityPrivateKey: "key",
+		RealityPublicKey:  "public",
+		RealityShortId:    "0123abcd",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeProtocolForStorage() error = %v", err)
+	}
+	if protocol.Security != "reality" || protocol.RealityPrivateKey != "key" ||
+		protocol.RealityPublicKey != "public" || protocol.RealityShortId != "0123abcd" {
+		t.Fatalf("reality fields were not preserved: %#v", protocol)
+	}
+	if protocol.CertMode != "" {
+		t.Fatalf("CertMode = %q, want empty for reality", protocol.CertMode)
+	}
+}
+
+func TestNormalizeProtocolForStorageRejectsTrojanWithoutSecurity(t *testing.T) {
+	if _, err := NormalizeProtocolForStorage(Protocol{
+		Type:   "trojan",
+		Port:   443,
+		Enable: true,
+	}); err == nil {
+		t.Fatal("NormalizeProtocolForStorage() expected trojan security error")
+	}
+}

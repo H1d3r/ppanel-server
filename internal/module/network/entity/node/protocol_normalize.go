@@ -268,11 +268,11 @@ func sanitizeRuntimeProtocol(protocol *Protocol) bool {
 
 func validateRuntimeProtocol(protocol *Protocol) error {
 	switch protocol.Type {
-	case "hysteria", "naive", "trojan", "tuic":
+	case "hysteria", "naive", "tuic":
 		if protocol.Security != "tls" {
 			return fmt.Errorf("%s requires tls security", protocol.Type)
 		}
-	case "anytls":
+	case "anytls", "trojan":
 		if protocol.Security != "tls" && protocol.Security != "reality" {
 			return fmt.Errorf("%s requires tls or reality security", protocol.Type)
 		}
