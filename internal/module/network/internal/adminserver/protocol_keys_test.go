@@ -93,13 +93,29 @@ func TestEnsureRealityProtocolKeyKeepsProvidedCompleteKey(t *testing.T) {
 	}
 }
 
-func TestEnsureRealityProtocolKeyGeneratesForNewVlessReality(t *testing.T) {
-	protocol := node.Protocol{Type: "vless", Security: "reality"}
+func TestEnsureRealityProtocolKeyGeneratesForNewReality(t *testing.T) {
+	for _, protocolType := range []string{"vless", "vmess", "trojan", "anytls"} {
+		t.Run(protocolType, func(t *testing.T) {
+			protocol := node.Protocol{Type: protocolType, Security: "reality"}
+			if err := ensureRealityProtocolKey(&protocol, nil); err != nil {
+				t.Fatalf("ensureRealityProtocolKey() error = %v", err)
+			}
+			if protocol.RealityPrivateKey == "" || protocol.RealityPublicKey == "" ||
+				protocol.RealityShortId == "" {
+				t.Fatalf("Reality keys were not generated: %#v", protocol)
+			}
+		})
+	}
+}
+
+func TestEnsureRealityProtocolKeySkipsNonRealitySecurity(t *testing.T) {
+	protocol := node.Protocol{Type: "trojan", Security: "tls"}
 	if err := ensureRealityProtocolKey(&protocol, nil); err != nil {
 		t.Fatalf("ensureRealityProtocolKey() error = %v", err)
 	}
-	if protocol.RealityPrivateKey == "" || protocol.RealityPublicKey == "" || protocol.RealityShortId == "" {
-		t.Fatalf("Reality keys were not generated: %#v", protocol)
+	if protocol.RealityPrivateKey != "" || protocol.RealityPublicKey != "" ||
+		protocol.RealityShortId != "" {
+		t.Fatalf("Reality keys were generated for tls security: %#v", protocol)
 	}
 }
 

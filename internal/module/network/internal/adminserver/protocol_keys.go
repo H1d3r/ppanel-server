@@ -169,9 +169,6 @@ func ensureRealityProtocolKey(protocol *node.Protocol, existing map[string]reali
 		protocol.RealityShortId = oldKey.shortID
 		return nil
 	}
-	if normalizedProtocolType(protocol.Type) != "vless" {
-		return nil
-	}
 	public, private, err := tool.Curve25519Genkey(false, "")
 	if err != nil {
 		return err
