@@ -12,6 +12,7 @@ import (
 	githuboauth "github.com/perfect-panel/server/pkg/oauth/github"
 	"github.com/perfect-panel/server/pkg/oauth/google"
 	"github.com/perfect-panel/server/pkg/oauth/telegram"
+	"github.com/perfect-panel/server/pkg/oauthstate"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -101,6 +102,11 @@ func (l *OAuthLoginLogic) apple(req *dto.OAthLoginRequest) (string, error) {
 		l.Errorw("error unmarshal apple config", logger.Field("error", err.Error()))
 		return "", err
 	}
+	// The stored redirect becomes a browser redirect in the Apple form-post
+	// callback, so pin it to the configured site host.
+	if err := oauthstate.ValidateRedirect(req.Redirect, l.deps.SiteHost); err != nil {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid redirect: %v", err)
+	}
 	uri := "https://appleid.apple.com/auth/authorize?client_id=%s&redirect_uri=%s&response_type=code&state=%s&scope=name email&response_mode=form_post"
 	// generate the state code
 	code := random.KeyNew(32, 1)
@@ -108,6 +114,7 @@ func (l *OAuthLoginLogic) apple(req *dto.OAthLoginRequest) (string, error) {
 	err = l.deps.Redis.Set(l.ctx, fmt.Sprintf("apple:%s", code), req.Redirect, 5*60*time.Second).Err()
 	if err != nil {
 		l.Errorw("error save state code to redis", logger.Field("error", err.Error()))
+		return "", err
 	}
 	return fmt.Sprintf(uri, cfg.ClientId, fmt.Sprintf("%s/v1/auth/oauth/callback/apple", cfg.RedirectURL), code), nil
 }
@@ -148,13 +155,8 @@ func (l *OAuthLoginLogic) telegram(req *dto.OAthLoginRequest) (string, error) {
 		l.Errorw("error unmarshal telegram config", logger.Field("error", err.Error()))
 		return "", err
 	}
-	// generate the state code
-	code := random.KeyNew(32, 1)
-	// save the state code under correct telegram prefix
-	err = l.deps.Redis.Set(l.ctx, fmt.Sprintf("telegram:%s", code), req.Redirect, 5*60*time.Second).Err()
-	if err != nil {
-		l.Errorw("error save state code to redis", logger.Field("error", err.Error()))
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "error save state code to redis")
-	}
-	return telegram.GenerateTelegramOAuthURL(cfg.BotToken, code, req.Redirect), nil
+	// Telegram Login has no OAuth state round-trip: the token step
+	// authenticates the widget result by its HMAC signature and auth_date
+	// freshness. The random value only feeds the URL's embed parameter.
+	return telegram.GenerateTelegramOAuthURL(cfg.BotToken, random.KeyNew(32, 1), req.Redirect), nil
 }

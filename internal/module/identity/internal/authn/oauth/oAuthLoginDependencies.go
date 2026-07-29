@@ -26,4 +26,7 @@ type OAuthLoginURLDependencies struct {
 	Store  OAuthLoginURLStore
 	Redis  *redis.Client
 	Policy OAuthLoginURLPolicy
+	// SiteHost anchors the redirect allowlist for flows whose stored
+	// redirect later becomes a browser redirect; empty disables the pin.
+	SiteHost string
 }

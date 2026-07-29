@@ -35,6 +35,9 @@ type Deps struct {
 
 	// EmailDomains snapshots the runtime-mutable email domain-suffix policy.
 	EmailDomains func() (domainList string, restrict bool)
+	// SiteHost snapshots the runtime-mutable site host that anchors the
+	// OAuth redirect allowlist.
+	SiteHost func() string
 	// TelegramBotName snapshots the runtime-mutable Telegram bot name.
 	TelegramBotName func() string
 	// NotifyUnbind sends the best-effort Telegram unbind notice through the

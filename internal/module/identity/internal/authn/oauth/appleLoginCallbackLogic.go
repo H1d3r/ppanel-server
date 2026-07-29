@@ -8,6 +8,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/oauthstate"
 )
 
 type AppleLoginCallbackLogic struct {
@@ -35,6 +36,12 @@ func (l *AppleLoginCallbackLogic) AppleLoginCallback(req *dto.AppleLoginCallback
 	result, err := l.deps.Redis.Get(l.ctx, fmt.Sprintf("apple:%s", req.State)).Result()
 	if err != nil {
 		l.Errorw("get apple state code from redis failed", logger.Field("error", err.Error()), logger.Field("code", req.State))
+		return appleLoginRedirect(l.deps.FallbackRedirect, req, http.StatusTemporaryRedirect), nil
+	}
+	// Never 302 off the configured site host, even if a hostile redirect
+	// slipped into the state store.
+	if err := oauthstate.ValidateRedirect(result, l.deps.FallbackRedirect); err != nil {
+		l.Errorw("stored apple redirect rejected", logger.Field("error", err.Error()), logger.Field("redirect", result))
 		return appleLoginRedirect(l.deps.FallbackRedirect, req, http.StatusTemporaryRedirect), nil
 	}
 	redirect := appleLoginRedirect(result, req, http.StatusFound)

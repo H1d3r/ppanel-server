@@ -217,6 +217,7 @@ func New(deps Deps) Service {
 			Store:           deps.Store,
 			Policy:          authSvc.Policy(),
 			EmailDomains:    deps.EmailDomains,
+			SiteHost:        func() string { return deps.AuthConfig().SiteHost },
 			TelegramBotName: deps.TelegramBotName,
 			NotifyUnbind:    deps.NotifyTelegramUnbind,
 		}),

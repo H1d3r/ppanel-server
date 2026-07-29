@@ -58,6 +58,53 @@ func Test_appleLoginRedirect_preserves_temporary_redirect_when_state_is_invalid(
 	}
 }
 
+func TestAppleLoginCallbackFollowsStoredRedirectOnTheSiteHost(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Set(context.Background(), "apple:state-1", "https://panel.example/callback", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	logic := NewAppleLoginCallbackLogic(context.Background(), AppleLoginCallbackDependencies{
+		Redis:            client,
+		FallbackRedirect: "https://panel.example",
+	})
+
+	redirect, err := logic.AppleLoginCallback(&dto.AppleLoginCallbackRequest{State: "state-1", Code: "code-1"})
+	if err != nil {
+		t.Fatalf("AppleLoginCallback error = %v", err)
+	}
+	if redirect.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want %d", redirect.StatusCode, http.StatusFound)
+	}
+	if redirect.Location != "https://panel.example/callback?code=code-1&method=apple&state=state-1" {
+		t.Fatalf("location = %q", redirect.Location)
+	}
+}
+
+func TestAppleLoginCallbackRejectsStoredRedirectOffTheSiteHost(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Set(context.Background(), "apple:state-1", "https://evil.example/phish", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	logic := NewAppleLoginCallbackLogic(context.Background(), AppleLoginCallbackDependencies{
+		Redis:            client,
+		FallbackRedirect: "https://panel.example",
+	})
+
+	redirect, err := logic.AppleLoginCallback(&dto.AppleLoginCallbackRequest{State: "state-1", Code: "code-1"})
+	if err != nil {
+		t.Fatalf("AppleLoginCallback error = %v", err)
+	}
+	if redirect.StatusCode != http.StatusTemporaryRedirect || redirect.Location != "https://panel.example" {
+		t.Fatalf("redirect = %#v, want temporary fallback redirect", redirect)
+	}
+}
+
 func TestAppleLoginCallbackUsesInjectedStateStoreAndFallbackRedirect(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})

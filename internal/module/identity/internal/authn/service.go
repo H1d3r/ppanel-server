@@ -42,8 +42,8 @@ type Snapshot struct {
 	IpRegisterLimit         int64
 	IpRegisterLimitDuration int64
 
-	// SiteHost is the fallback redirect target for the Apple form-post
-	// callback.
+	// SiteHost anchors the OAuth redirect allowlist and is the fallback
+	// redirect target for the Apple form-post callback.
 	SiteHost string
 }
 
@@ -225,9 +225,10 @@ func (s *Service) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) 
 
 func (s *Service) OAuthLogin(ctx context.Context, req *dto.OAthLoginRequest) (*dto.OAuthLoginResponse, error) {
 	return oauth.NewOAuthLoginLogic(ctx, oauth.OAuthLoginURLDependencies{
-		Store:  s.deps.Store,
-		Redis:  s.deps.Redis,
-		Policy: s.policy,
+		Store:    s.deps.Store,
+		Redis:    s.deps.Redis,
+		Policy:   s.policy,
+		SiteHost: s.deps.Config().SiteHost,
 	}).OAuthLogin(req)
 }
 
