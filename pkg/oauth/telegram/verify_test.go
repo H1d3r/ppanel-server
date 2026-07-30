@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -147,14 +148,14 @@ func TestValidateRejectsTamperedAndUnsignedPayloads(t *testing.T) {
 // The secret half of a bot token must never reach a browser-facing URL, so a
 // token that is not "<bot_id>:<secret>" yields no URL at all.
 func TestBuildTelegramOAuthURLRequiresAWellFormedBotToken(t *testing.T) {
-	if _, err := BuildTelegramOAuthURL("no-colon-token", "embed", "https://panel.example.com/cb"); err == nil {
+	if _, err := BuildTelegramOAuthURL("no-colon-token", "https://panel.example.com/cb"); err == nil {
 		t.Fatal("BuildTelegramOAuthURL error = nil, want malformed-token rejection")
 	}
-	if got := GenerateTelegramOAuthURL("no-colon-token", "embed", "https://panel.example.com/cb"); got != "" {
+	if got := GenerateTelegramOAuthURL("no-colon-token", "https://panel.example.com/cb"); got != "" {
 		t.Fatalf("GenerateTelegramOAuthURL = %q, want empty", got)
 	}
 
-	uri, err := BuildTelegramOAuthURL(testBotToken, "embed", "https://panel.example.com/cb")
+	uri, err := BuildTelegramOAuthURL(testBotToken, "https://panel.example.com/cb")
 	if err != nil {
 		t.Fatalf("BuildTelegramOAuthURL error = %v", err)
 	}
@@ -163,5 +164,29 @@ func TestBuildTelegramOAuthURLRequiresAWellFormedBotToken(t *testing.T) {
 	}
 	if strings.Contains(uri, "AA-test-token") {
 		t.Fatalf("url %q leaks the bot token secret", uri)
+	}
+}
+
+// embed must be 0: any other value puts Telegram in widget mode, where it
+// posts the result to window.opener and closes itself instead of redirecting
+// back — the browser tab simply disappears and the login is lost.
+func TestBuildTelegramOAuthURLUsesTheRedirectFlow(t *testing.T) {
+	uri, err := BuildTelegramOAuthURL(testBotToken, "https://panel.example.com/bind/telegram")
+	if err != nil {
+		t.Fatalf("BuildTelegramOAuthURL error = %v", err)
+	}
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	query := parsed.Query()
+	if got := query.Get("embed"); got != "0" {
+		t.Fatalf("embed = %q, want \"0\" (redirect flow)", got)
+	}
+	if got := query.Get("return_to"); got != "https://panel.example.com/bind/telegram" {
+		t.Fatalf("return_to = %q", got)
+	}
+	if got := query.Get("origin"); got != "https://panel.example.com" {
+		t.Fatalf("origin = %q, want the redirect's scheme and host", got)
 	}
 }

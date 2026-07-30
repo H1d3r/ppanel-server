@@ -189,8 +189,8 @@ func (l *BindOAuthLogic) telegram(req *dto.BindOAuthRequest) (string, error) {
 	}
 	// Telegram Login has no OAuth state round-trip: the bind callback
 	// authenticates the widget result by its HMAC signature and auth_date
-	// freshness. The random value only feeds the URL's embed parameter.
-	uri, err := telegram.BuildTelegramOAuthURL(cfg.BotToken, random.KeyNew(32, 1), req.Redirect)
+	// freshness.
+	uri, err := telegram.BuildTelegramOAuthURL(cfg.BotToken, req.Redirect)
 	if err != nil {
 		l.Errorw("error build telegram oauth url", logger.Field("error", err.Error()))
 		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "build telegram oauth url failed: %v", err)

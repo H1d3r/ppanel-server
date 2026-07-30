@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -69,8 +70,12 @@ func TestTelegramLoginPinsRedirectToSiteHost(t *testing.T) {
 			if err != nil {
 				t.Fatalf("telegram() error = %v, want nil", err)
 			}
-			if !strings.Contains(uri, "return_to="+tt.redirect) {
-				t.Fatalf("url %q does not carry the redirect", uri)
+			parsed, parseErr := url.Parse(uri)
+			if parseErr != nil {
+				t.Fatalf("parse url %q: %v", uri, parseErr)
+			}
+			if got := parsed.Query().Get("return_to"); got != tt.redirect {
+				t.Fatalf("return_to = %q, want %q", got, tt.redirect)
 			}
 			if strings.Contains(uri, "AA-secret") {
 				t.Fatalf("url %q leaks the bot token secret", uri)

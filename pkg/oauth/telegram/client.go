@@ -89,8 +89,8 @@ func BotID(botToken string) (string, error) {
 }
 
 // GenerateTelegramOAuthURL generates a URL for Telegram OAuth
-func GenerateTelegramOAuthURL(botToken, embed, redirect string) string {
-	uri, err := BuildTelegramOAuthURL(botToken, embed, redirect)
+func GenerateTelegramOAuthURL(botToken, redirect string) string {
+	uri, err := BuildTelegramOAuthURL(botToken, redirect)
 	if err != nil {
 		return ""
 	}
@@ -99,7 +99,13 @@ func GenerateTelegramOAuthURL(botToken, embed, redirect string) string {
 
 // BuildTelegramOAuthURL is GenerateTelegramOAuthURL with the failure reason
 // preserved, so callers can log why no URL could be produced.
-func BuildTelegramOAuthURL(botToken, embed, redirect string) (string, error) {
+//
+// embed=0 selects the redirect flow: Telegram sends the browser back to
+// return_to with the signed result in the fragment. A non-zero embed puts
+// Telegram in widget mode, where it posts the result to window.opener and
+// closes itself — which loses the result entirely for a full-page
+// navigation, since there is no opener.
+func BuildTelegramOAuthURL(botToken, redirect string) (string, error) {
 	botID, err := BotID(botToken)
 	if err != nil {
 		return "", err
@@ -111,6 +117,12 @@ func BuildTelegramOAuthURL(botToken, embed, redirect string) (string, error) {
 	if parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return "", fmt.Errorf("redirect %q must be an absolute URL", redirect)
 	}
-	uri := "https://oauth.telegram.org/auth?bot_id=%s&origin=%s&embed=%s&request_access=write&return_to=%s"
-	return fmt.Sprintf(uri, botID, fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host), embed, redirect), nil
+	query := url.Values{
+		"bot_id":         []string{botID},
+		"origin":         []string{fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)},
+		"embed":          []string{"0"},
+		"request_access": []string{"write"},
+		"return_to":      []string{redirect},
+	}
+	return "https://oauth.telegram.org/auth?" + query.Encode(), nil
 }
