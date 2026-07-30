@@ -361,6 +361,9 @@ func (a *TelegramAdmin) authenticate(msg *tgbotapi.Message) (admin *user.User, r
 		a.Infow("admin auth: user is not admin", logger.Field("user_id", u.Id))
 		return nil, "您没有管理权限。"
 	}
+	// This chat is proven to belong to an administrator, so give it the
+	// administrator command menu; ordinary users never see those entries.
+	a.ensureAdminMenu(msg.Chat.ID)
 	return u, ""
 }
 

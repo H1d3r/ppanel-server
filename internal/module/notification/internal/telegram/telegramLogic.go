@@ -84,6 +84,27 @@ func (m telegramBotMessenger) Send(chatID int64, message string) error {
 	return err
 }
 
+// SetCommands publishes a command menu. A zero chatID targets the default
+// scope every user sees; otherwise the menu applies to that chat alone, which
+// is how administrator commands stay hidden from ordinary users.
+func (m telegramBotMessenger) SetCommands(chatID int64, commands []Command) error {
+	botCommands := make([]tgbotapi.BotCommand, 0, len(commands))
+	for _, command := range commands {
+		botCommands = append(botCommands, tgbotapi.BotCommand{
+			Command:     command.Command,
+			Description: command.Description,
+		})
+	}
+
+	config := tgbotapi.NewSetMyCommands(botCommands...)
+	if chatID != 0 {
+		config = tgbotapi.NewSetMyCommandsWithScope(
+			tgbotapi.NewBotCommandScopeChat(chatID), botCommands...)
+	}
+	_, err := m.bot.Request(config)
+	return err
+}
+
 func (l *TelegramLogic) traffic(userId int64) error {
 	return nil
 }

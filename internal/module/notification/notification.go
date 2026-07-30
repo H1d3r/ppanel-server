@@ -26,6 +26,10 @@ type Service interface {
 	HandleTelegramUpdate(ctx context.Context, update *tgbotapi.Update)
 	// NotifyTelegramUnbind sends the best-effort unbind notice to the chat.
 	NotifyTelegramUnbind(userID, chatID int64) error
+	// PublishTelegramCommands registers the command menu every user sees.
+	// The bot initialiser calls it once the client is ready, so the composer
+	// offers the commands instead of leaving users to guess them.
+	PublishTelegramCommands() error
 }
 
 // Message templates other domains render before handing the text to the bot.
@@ -70,6 +74,7 @@ func (s *service) HandleTelegramUpdate(ctx context.Context, update *tgbotapi.Upd
 	sessions := telegram.NewTelegramRedisStore(s.deps.Redis)
 	admin := telegram.NewTelegramAdmin(ctx, telegram.TelegramAdminDependencies{
 		Messenger:     messenger,
+		Commands:      telegram.NewTelegramBotCommandRegistrar(s.deps.Bot()),
 		Actions:       sessions,
 		Tickets:       s.deps.Tickets,
 		Orders:        s.deps.Orders,
@@ -88,6 +93,15 @@ func (s *service) HandleTelegramUpdate(ctx context.Context, update *tgbotapi.Upd
 		UserCache: s.deps.UserCache,
 		Admin:     admin,
 	}).TelegramLogic(update)
+}
+
+func (s *service) PublishTelegramCommands() error {
+	bot := s.deps.Bot()
+	if bot == nil {
+		return errors.New("telegram bot is not configured")
+	}
+	return telegram.NewTelegramBotCommandRegistrar(bot).
+		SetCommands(0, telegram.PublicCommands())
 }
 
 func (s *service) NotifyTelegramUnbind(userID, chatID int64) error {

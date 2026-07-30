@@ -88,5 +88,13 @@ func Telegram(svc *svc.ServiceContext) {
 	}
 	svc.TelegramBot = bot
 
+	// Publish the command menu so the composer offers the bot's commands.
+	// It is set on the bot itself, so it must be re-published whenever the
+	// bot is (re)initialised. A failure is not fatal: the commands work
+	// without a menu.
+	if err := svc.Notification.PublishTelegramCommands(); err != nil {
+		logger.Error("[Init Telegram Config] Publish Commands Error: ", logger.Field("error", err.Error()))
+	}
+
 	logger.Info("[Init Telegram Config] Telegram init success")
 }

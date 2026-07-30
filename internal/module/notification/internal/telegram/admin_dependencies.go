@@ -24,7 +24,10 @@ type TelegramAdminActionStore interface {
 // TelegramAdminDependencies contains only the collaborators used by Telegram
 // administrator commands. It intentionally does not accept ServiceContext.
 type TelegramAdminDependencies struct {
-	Messenger     TelegramMessenger
+	Messenger TelegramMessenger
+	// Commands publishes the administrator command menu; optional so tests
+	// and deployments without a live bot still work.
+	Commands      TelegramCommandRegistrar
 	Actions       TelegramAdminActionStore
 	Tickets       repository.TicketRepo
 	Orders        repository.OrderRepo

@@ -45,6 +45,12 @@ func NewTelegramBotMessenger(bot *tgbotapi.BotAPI) TelegramMessenger {
 	return telegramBotMessenger{bot: bot}
 }
 
+// NewTelegramBotCommandRegistrar adapts a Telegram Bot API client to the
+// command-menu port.
+func NewTelegramBotCommandRegistrar(bot *tgbotapi.BotAPI) TelegramCommandRegistrar {
+	return telegramBotMessenger{bot: bot}
+}
+
 // NewTelegramRedisStore adapts Redis to the binding-session and administrator
 // confirmation ports.
 func NewTelegramRedisStore(client *redis.Client) TelegramRedisStore {
