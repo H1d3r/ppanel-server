@@ -38,7 +38,14 @@ const (
 	OAuthGithub   = "github"
 	OAuthFacebook = "facebook"
 	AuthEmail     = "email"
-	AuthExpire    = 86400
+	// AuthExpire bounds how stale a Telegram widget result may be. The
+	// result is a bearer credential that reaches us through a URL fragment,
+	// so the window is kept to the round trip a user actually needs rather
+	// than the day-long window it used to allow.
+	AuthExpire = 300
+	// telegramCallbackRetryGrace lets a client re-submit the same widget
+	// result after a timed-out exchange; beyond it, a repeat is a replay.
+	telegramCallbackRetryGrace = 60 * time.Second
 )
 
 type oauthRequest struct {
@@ -330,6 +337,12 @@ func (l *OAuthLoginGetTokenLogic) telegram(req *dto.OAuthLoginGetTokenRequest, r
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "auth date expired")
 	}
 
+	// The signature alone does not bind the result to one exchange, so the
+	// payload is redeemable once (plus a short retry grace).
+	if err := l.claimTelegramCallback(encodeText, requestID); err != nil {
+		return nil, err
+	}
+
 	userID := fmt.Sprintf("%v", *callbackData.Id)
 	avatar := ""
 	if callbackData.PhotoUrl != nil {
@@ -346,6 +359,31 @@ func (l *OAuthLoginGetTokenLogic) telegram(req *dto.OAuthLoginGetTokenRequest, r
 	// Telegram Login does not provide an email address. Keep the account bound
 	// only to the verified Telegram identity instead of inventing a fake email.
 	return l.findOrRegisterUser(OAuthTelegram, userID, "", avatar, requestID, ip, userAgent)
+}
+
+// claimTelegramCallback enforces single use of a Telegram widget result. A
+// Redis outage must not lock users out, so an unavailable store degrades to
+// the signature and freshness checks alone.
+func (l *OAuthLoginGetTokenLogic) claimTelegramCallback(payload, requestID string) error {
+	key := fmt.Sprintf("%s:%s", config.TelegramCallbackKey, oauthstate.PayloadFingerprint(payload))
+	allowed, err := oauthstate.ClaimSingleUse(l.ctx, l.deps.Redis, key,
+		timeutil.Now(), telegramCallbackRetryGrace, time.Duration(AuthExpire)*time.Second)
+	if err != nil {
+		l.Errorw("telegram callback replay check unavailable",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthTelegram),
+			logger.Field("error", err.Error()),
+		)
+		return nil
+	}
+	if !allowed {
+		l.Errorw("telegram callback replayed",
+			logger.Field("request_id", requestID),
+			logger.Field("provider", OAuthTelegram),
+		)
+		return errors.Wrap(xerr.NewErrCode(xerr.ERROR), "telegram callback has already been used")
+	}
+	return nil
 }
 
 func (l *OAuthLoginGetTokenLogic) github(req *dto.OAuthLoginGetTokenRequest, requestID, ip, userAgent string) (*user.User, error) {

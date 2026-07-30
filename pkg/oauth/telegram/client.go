@@ -11,21 +11,49 @@ import (
 // ParseAuthDataJson parses provided json content for AuthData
 func ParseAuthDataJson(content []byte) (*AuthData, error) {
 	data := &AuthData{}
-	err := json.Unmarshal(content, data)
-	if err != nil {
+	if err := json.Unmarshal(content, data); err != nil {
+		return nil, fmt.Errorf("unmarshaling error: %w", err)
+	}
+	// Keep the raw payload too: the signature covers every field Telegram
+	// sent, not just the ones this struct models.
+	if err := json.Unmarshal(content, &data.raw); err != nil {
 		return nil, fmt.Errorf("unmarshaling error: %w", err)
 	}
 	return data, nil
 }
 
-// ParseAuthDataBase64 decodes provided content from base64 and parses result for AuthData
+// ParseAuthDataBase64 decodes provided content from base64 and parses result for AuthData.
+// Telegram's tgAuthResult reaches us in whichever base64 flavour the widget
+// and the surrounding URL handling produced, so all four combinations of
+// alphabet (standard or URL-safe) and padding are accepted.
 func ParseAuthDataBase64(content []byte) (*AuthData, error) {
-
-	decodedBytes, err := base64.RawStdEncoding.DecodeString(string(content))
-	if err != nil && len(decodedBytes) == 0 {
-		return nil, fmt.Errorf("base64 decoding error: %w", err)
+	decoded, err := decodeBase64Any(string(content))
+	if err != nil {
+		return nil, err
 	}
-	return ParseAuthDataJson(decodedBytes)
+	return ParseAuthDataJson(decoded)
+}
+
+func decodeBase64Any(content string) ([]byte, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, fmt.Errorf("base64 decoding error: content is empty")
+	}
+	encodings := []*base64.Encoding{
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+	}
+	var lastErr error
+	for _, enc := range encodings {
+		decoded, err := enc.DecodeString(content)
+		if err == nil {
+			return decoded, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("base64 decoding error: %w", lastErr)
 }
 
 // ParseAndValidateBase64 parses base64 content for AuthData and validates it
@@ -48,13 +76,41 @@ func ParseAndValidateJson(content []byte, botToken []byte) (*AuthData, error) {
 	return authData, err
 }
 
+// BotID extracts the public bot identifier from a bot token, which Telegram
+// formats as "<bot_id>:<secret>". The secret half must never leave the
+// server, so a token without that shape is rejected instead of being pasted
+// into a browser-facing URL.
+func BotID(botToken string) (string, error) {
+	id, secret, found := strings.Cut(strings.TrimSpace(botToken), ":")
+	if !found || id == "" || secret == "" {
+		return "", fmt.Errorf("telegram bot token is malformed: expected \"<bot_id>:<secret>\"")
+	}
+	return id, nil
+}
+
 // GenerateTelegramOAuthURL generates a URL for Telegram OAuth
 func GenerateTelegramOAuthURL(botToken, embed, redirect string) string {
-	bot := strings.Split(botToken, ":")
-	uri := "https://oauth.telegram.org/auth?bot_id=%s&origin=%s&embed=%s&request_access=write&return_to=%s"
-	parsedURL, err := url.Parse(redirect)
+	uri, err := BuildTelegramOAuthURL(botToken, embed, redirect)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf(uri, bot[0], fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host), embed, redirect)
+	return uri
+}
+
+// BuildTelegramOAuthURL is GenerateTelegramOAuthURL with the failure reason
+// preserved, so callers can log why no URL could be produced.
+func BuildTelegramOAuthURL(botToken, embed, redirect string) (string, error) {
+	botID, err := BotID(botToken)
+	if err != nil {
+		return "", err
+	}
+	parsedURL, err := url.Parse(redirect)
+	if err != nil {
+		return "", fmt.Errorf("parse redirect %q: %w", redirect, err)
+	}
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return "", fmt.Errorf("redirect %q must be an absolute URL", redirect)
+	}
+	uri := "https://oauth.telegram.org/auth?bot_id=%s&origin=%s&embed=%s&request_access=write&return_to=%s"
+	return fmt.Sprintf(uri, botID, fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host), embed, redirect), nil
 }

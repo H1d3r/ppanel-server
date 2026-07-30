@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/timeutil"
 
+	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -24,7 +26,13 @@ import (
 	"gorm.io/gorm"
 )
 
-const telegramBindAuthExpire = 86400
+// telegramBindAuthExpire bounds how stale a Telegram widget result may be
+// when binding, and telegramBindRetryGrace lets a client re-submit the same
+// result after a timed-out request without treating it as a replay.
+const (
+	telegramBindAuthExpire = 300
+	telegramBindRetryGrace = 60 * time.Second
+)
 
 type BindOAuthCallbackLogic struct {
 	logger.Logger
@@ -366,6 +374,19 @@ func (l *BindOAuthCallbackLogic) telegram(req *dto.BindOAuthCallbackRequest) err
 			logger.Field("expire_seconds", telegramBindAuthExpire),
 		)
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "auth date expired")
+	}
+
+	// The signature alone does not bind the result to one exchange, so the
+	// payload is redeemable once (plus a short retry grace). A Redis outage
+	// must not lock users out, so it degrades to signature and freshness.
+	claimKey := fmt.Sprintf("%s:%s", config.TelegramCallbackKey, oauthstate.PayloadFingerprint(encodeText))
+	allowed, claimErr := oauthstate.ClaimSingleUse(l.ctx, l.deps.Redis, claimKey,
+		timeutil.Now(), telegramBindRetryGrace, telegramBindAuthExpire*time.Second)
+	if claimErr != nil {
+		l.Errorw("telegram bind replay check unavailable", logger.Field("error", claimErr.Error()))
+	} else if !allowed {
+		l.Errorw("telegram bind callback replayed")
+		return errors.Wrap(xerr.NewErrCode(xerr.ERROR), "telegram callback has already been used")
 	}
 
 	telegramUserID := fmt.Sprintf("%d", *callbackData.Id)

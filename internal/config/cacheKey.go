@@ -42,6 +42,17 @@ const VerifyCodeConfigKey = "system:verify_code_config"
 // SessionIdKey cache session key
 const SessionIdKey = "auth:session_id"
 
+// TelegramBindKey prefixes the single-use Telegram account-binding tokens
+// handed to the bot's deep link. It is deliberately separate from
+// SessionIdKey: a binding capability must not double as a session
+// credential, and it is consumed on first use.
+const TelegramBindKey = "auth:telegram_bind"
+
+// TelegramCallbackKey prefixes the redeemed Telegram login/bind callbacks.
+// The widget result is a bearer credential that travels in a URL fragment,
+// so it may only be exchanged once.
+const TelegramCallbackKey = "auth:telegram_callback"
+
 // GlobalConfigKey Global Config Key
 const GlobalConfigKey = "system:global_config"
 

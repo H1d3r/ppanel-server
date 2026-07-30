@@ -88,20 +88,35 @@ func (l *TelegramLogic) traffic(userId int64) error {
 	return nil
 }
 
+// bindTokenKey addresses a single-use account-binding token. Binding tokens
+// live under their own prefix: the account's session id must never double as
+// a binding capability, because the deep link carrying it is shared through
+// Telegram chats.
+func bindTokenKey(token string) string {
+	return fmt.Sprintf("%v:%v", config.TelegramBindKey, token)
+}
+
+// consumeBindToken invalidates a binding token once it has been redeemed, so
+// a link that leaks afterwards cannot rebind the account.
+func (l *TelegramLogic) consumeBindToken(token string) {
+	if err := l.deps.Sessions.Delete(context.Background(), bindTokenKey(token)); err != nil {
+		l.Errorw("TelegramLogic failed to invalidate bind token", logger.Field("error", err.Error()))
+	}
+}
+
 func (l *TelegramLogic) bind(userId int64, token string) error {
 	if token == "" {
 		return l.sendMessage("Please provide a bind token. Usage: /bind <token>", userId)
 	}
 
-	// Look up the session from Redis using the token as session ID
-	sessionIdCacheKey := fmt.Sprintf("%v:%v", config.SessionIdKey, token)
-	value, err := l.deps.Sessions.Get(context.Background(), sessionIdCacheKey)
+	// Resolve the single-use binding token issued by the panel
+	value, err := l.deps.Sessions.Get(context.Background(), bindTokenKey(token))
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			l.Errorw("TelegramLogic bind token not found or expired", logger.Field("token", token))
+			l.Errorw("TelegramLogic bind token not found or expired")
 			return l.sendMessage("Bind token is invalid or expired. Please request a new one.", userId)
 		}
-		l.Errorw("TelegramLogic bind Redis Get Error", logger.Field("error", err.Error()), logger.Field("token", token))
+		l.Errorw("TelegramLogic bind Redis Get Error", logger.Field("error", err.Error()))
 		return l.sendMessage("Bind failed. Please try again later.", userId)
 	}
 
@@ -158,6 +173,7 @@ func (l *TelegramLogic) bind(userId int64, token string) error {
 		l.Errorw("TelegramLogic bind InsertUserAuthMethod Error", logger.Field("error", err.Error()), logger.Field("bindUserId", bindUserId))
 		return l.sendMessage("Bind failed. Please try again later.", userId)
 	}
+	l.consumeBindToken(token)
 
 	// Update user cache
 	err = l.deps.UserCache.UpdateUserCache(l.ctx, &user.User{
@@ -183,24 +199,23 @@ func (l *TelegramLogic) start(req *tgbotapi.Update) error {
 		return l.sendMessage("Please bind account!", req.Message.Chat.ID)
 	}
 
-	sessionId := req.Message.CommandArguments()
+	bindToken := req.Message.CommandArguments()
 	chatIdStr := strconv.FormatInt(req.Message.Chat.ID, 10)
 
-	// Get session from Redis
-	sessionIdCacheKey := fmt.Sprintf("%v:%v", config.SessionIdKey, sessionId)
-	value, err := l.deps.Sessions.Get(context.Background(), sessionIdCacheKey)
+	// Resolve the single-use binding token issued by the panel
+	value, err := l.deps.Sessions.Get(context.Background(), bindTokenKey(bindToken))
 	if err != nil && !errors.Is(err, redis.Nil) {
-		l.Errorw("TelegramLogic start Redis Get Error", logger.Field("error", err.Error()), logger.Field("session", sessionId))
+		l.Errorw("TelegramLogic start Redis Get Error", logger.Field("error", err.Error()))
 		return l.sendMessage("Bind failed!", req.Message.Chat.ID)
 	}
 	if value == "" {
-		l.Errorw("TelegramLogic start session not found or expired", logger.Field("session", sessionId))
+		l.Errorw("TelegramLogic start bind token not found or expired")
 		return l.sendMessage("Session expired. Please request a new bind link.", req.Message.Chat.ID)
 	}
 
 	userId, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
-		l.Errorw("TelegramLogic start ParseInt Error", logger.Field("error", err.Error()), logger.Field("session", sessionId))
+		l.Errorw("TelegramLogic start ParseInt Error", logger.Field("error", err.Error()))
 		return l.sendMessage("Bind failed!", req.Message.Chat.ID)
 	}
 
@@ -254,6 +269,7 @@ func (l *TelegramLogic) start(req *tgbotapi.Update) error {
 		l.Errorw("TelegramLogic start InsertUserAuthMethod Error", logger.Field("error", err.Error()), logger.Field("userId", userId))
 		return l.sendMessage("Bind failed!", req.Message.Chat.ID)
 	}
+	l.consumeBindToken(bindToken)
 
 	// Update user cache
 	err = l.deps.UserCache.UpdateUserCache(l.ctx, &user.User{
