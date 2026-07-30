@@ -178,8 +178,19 @@ func (l *OAuthLoginLogic) telegram(req *dto.OAthLoginRequest) (string, error) {
 		l.Errorw("error unmarshal telegram config", logger.Field("error", err.Error()))
 		return "", err
 	}
+	// Telegram sends the signed widget result to this redirect, so pin it to
+	// the configured site host rather than relying only on the allowed-URL
+	// list registered with BotFather.
+	if err := oauthstate.ValidateRedirect(req.Redirect, l.deps.SiteHost); err != nil {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid redirect: %v", err)
+	}
 	// Telegram Login has no OAuth state round-trip: the token step
 	// authenticates the widget result by its HMAC signature and auth_date
 	// freshness. The random value only feeds the URL's embed parameter.
-	return telegram.GenerateTelegramOAuthURL(cfg.BotToken, random.KeyNew(32, 1), req.Redirect), nil
+	uri, err := telegram.BuildTelegramOAuthURL(cfg.BotToken, random.KeyNew(32, 1), req.Redirect)
+	if err != nil {
+		l.Errorw("error build telegram oauth url", logger.Field("error", err.Error()))
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "build telegram oauth url failed: %v", err)
+	}
+	return uri, nil
 }
