@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"strconv"
 	"time"
@@ -211,7 +212,7 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 			}
 		},
 		UserAuths:       store.UserAuth(),
-		LifecycleNotify: lifecycleEmailNotifier{srv: srv},
+		LifecycleNotify: lifecycleNotifier{srv: srv},
 		DeliveryConfig: func() subscription.DeliveryConfig {
 			return subscription.DeliveryConfig{
 				SiteName:              srv.Config.Site.SiteName,
@@ -226,14 +227,15 @@ func newSubscriptionModule(store repository.Store, srv *ServiceContext) subscrip
 	})
 }
 
-// lifecycleEmailNotifier adapts the subscription sweep's owner notices to
-// the email delivery queue; the site branding is read per send because the
-// admin can change it at runtime.
-type lifecycleEmailNotifier struct {
+// lifecycleNotifier adapts the subscription sweep's owner notices to their
+// delivery channel: expiry and traffic notices go to the email queue, while
+// the pre-expiry reminder goes over Telegram. Site branding is read per send
+// because the admin can change it at runtime.
+type lifecycleNotifier struct {
 	srv *ServiceContext
 }
 
-func (n lifecycleEmailNotifier) enqueue(ctx context.Context, payload queuetypes.SendEmailPayload, userEmail string) {
+func (n lifecycleNotifier) enqueue(ctx context.Context, payload queuetypes.SendEmailPayload, userEmail string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		logger.Errorw("[CheckSubscription] Marshal payload failed", logger.Field("error", err.Error()))
@@ -249,7 +251,7 @@ func (n lifecycleEmailNotifier) enqueue(ctx context.Context, payload queuetypes.
 		logger.Field("taskID", info.ID), logger.Field("Email", userEmail))
 }
 
-func (n lifecycleEmailNotifier) NotifySubscriptionExpired(ctx context.Context, email string, expiredAt time.Time) {
+func (n lifecycleNotifier) NotifySubscriptionExpired(ctx context.Context, email string, expiredAt time.Time) {
 	n.enqueue(ctx, queuetypes.SendEmailPayload{
 		Type:    queuetypes.EmailTypeExpiration,
 		Email:   email,
@@ -262,7 +264,7 @@ func (n lifecycleEmailNotifier) NotifySubscriptionExpired(ctx context.Context, e
 	}, email)
 }
 
-func (n lifecycleEmailNotifier) NotifyTrafficExceeded(ctx context.Context, email string) {
+func (n lifecycleNotifier) NotifyTrafficExceeded(ctx context.Context, email string) {
 	n.enqueue(ctx, queuetypes.SendEmailPayload{
 		Type:    queuetypes.EmailTypeTrafficExceed,
 		Email:   email,
@@ -272,6 +274,34 @@ func (n lifecycleEmailNotifier) NotifyTrafficExceeded(ctx context.Context, email
 			"SiteName": n.srv.Config.Site.SiteName,
 		},
 	}, email)
+}
+
+// NotifySubscriptionExpiring warns the owner over Telegram before the
+// subscription stops. Telegram is the only channel here: the email templates
+// cover expiry after the fact, and the notice is gated on the operator's
+// notification switch like every other bot message.
+func (n lifecycleNotifier) NotifySubscriptionExpiring(ctx context.Context, userID int64, planName string, expireAt time.Time, renewalAmount int64) {
+	if !n.srv.Config.Telegram.EnableNotify {
+		return
+	}
+	if planName == "" {
+		planName = "订阅"
+	}
+	text, err := tool.RenderTemplateToString(notification.SubscribeExpireNotify, map[string]string{
+		"SubscribeName": planName,
+		"ExpiredAt":     expireAt.Format("2006-01-02 15:04:05"),
+		"RenewalAmount": fmt.Sprintf("%.2f", float64(renewalAmount)/100),
+	})
+	if err != nil {
+		logger.Errorw("[RemindExpiring] Render template failed", logger.Field("error", err.Error()))
+		return
+	}
+	if err := n.srv.Notification.NotifyTelegramUser(ctx, userID, text); err != nil {
+		logger.Infow("[RemindExpiring] Telegram notice skipped",
+			logger.Field("user_id", userID),
+			logger.Field("reason", err.Error()),
+		)
+	}
 }
 
 // newIdentityModule wires the identity module against the legacy store;

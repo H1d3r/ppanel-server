@@ -92,6 +92,28 @@ type OrdersTotalWithDate struct {
 	RenewalOrderAmount int64
 }
 
+// DailyBreakdown is one row of a settled-order breakdown, grouped by plan or
+// by payment method for the daily report.
+type DailyBreakdown struct {
+	// Name is the plan name or the payment platform, depending on the group.
+	Name string
+	// Id is the grouped plan id; zero for a payment-method group and for
+	// orders that carry no plan, such as balance top-ups.
+	Id     int64
+	Orders int64
+	Amount int64
+}
+
+// DailyReport totals the orders settled on one day, alongside the plan and
+// payment-method breakdowns.
+type DailyReport struct {
+	Date     time.Time
+	Orders   int64
+	Amount   int64
+	ByPlan   []DailyBreakdown
+	ByMethod []DailyBreakdown
+}
+
 // UserCounts  User counts for new and renewal users
 type UserCounts struct {
 	NewUsers     int64 `gorm:"column:new_users"`

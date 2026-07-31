@@ -85,6 +85,9 @@ type UserSubscriptionRepo interface {
 	FindOneUserSubscribe(ctx context.Context, id int64) (*usersub.SubscribeDetails, error)
 	FindTrafficExceededSubscribes(ctx context.Context) ([]*usersub.Subscribe, error)
 	FindExpiredSubscribes(ctx context.Context, now time.Time) ([]*usersub.Subscribe, error)
+	// FindExpiringSubscribes returns active subscriptions expiring inside the
+	// window, for the pre-expiry reminder.
+	FindExpiringSubscribes(ctx context.Context, from, to time.Time) ([]*usersub.Subscribe, error)
 	MarkSubscribesFinished(ctx context.Context, ids []int64, status uint8, finishedAt time.Time, tx ...*gorm.DB) error
 	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
 	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)

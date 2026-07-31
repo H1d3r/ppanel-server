@@ -28,6 +28,10 @@ type Service interface {
 	// expired), committing status flips in subscription transactions with
 	// notification and cache invalidation as post-commit side effects.
 	CheckSubscriptions(ctx context.Context) error
+	// RemindExpiringSubscriptions warns owners whose subscription expires
+	// soon. It is a daily pass, not part of the minute-by-minute sweep: the
+	// notice is once per expiry and reaching users at a civil hour matters.
+	RemindExpiringSubscriptions(ctx context.Context) error
 	// ProcessQuotaTask executes an admin-scheduled quota grant (time
 	// extension / gift credit) for the task's subscription scope.
 	ProcessQuotaTask(ctx context.Context, taskID int64) error
@@ -422,6 +426,10 @@ func (s *service) PreviewSubscribeTemplate(ctx context.Context, req *dto.Preview
 
 func (s *service) CheckSubscriptions(ctx context.Context) error {
 	return s.sweeper.CheckSubscriptions(ctx)
+}
+
+func (s *service) RemindExpiringSubscriptions(ctx context.Context) error {
+	return s.sweeper.RemindExpiringSubscribes(ctx)
 }
 
 func (s *service) ProcessQuotaTask(ctx context.Context, taskID int64) error {

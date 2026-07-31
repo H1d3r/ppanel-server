@@ -61,8 +61,8 @@ const AdminOrderNotify = `
 const AdminOrderDaily = `
 📊 **每日流水统计**
 
-**统计日期**: {{.Date}}  
-**总订单数**: **{{.Orders}}**  
+**统计日期**: {{.Date}}
+**总订单数**: **{{.Orders}}**
 **总成交金额**: **{{.Amount}}**
 
 **按套餐分类：**
@@ -70,10 +70,6 @@ const AdminOrderDaily = `
 
 **按支付方式：**
 {{.Payment}}
-
-**总览：**
- **当日退款数**: {{.RefundOrders}} 单，退款金额：**{{RefundAmount}}**
- **实际入账金额**: **{{ActualAmount}}**
 
 **请注意**:
 以上数据为系统自动统计，仅供参考。如需详细数据或对账，请查看管理后台。

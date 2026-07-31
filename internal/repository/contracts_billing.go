@@ -37,6 +37,9 @@ type OrderRepo interface {
 	QueryTotalUserCounts(ctx context.Context) (int64, int64, error)
 	IsUserEligibleForNewOrder(ctx context.Context, userID int64) (bool, error)
 	QueryDailyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
+	// QueryDailyReport totals one day's settled orders with the plan and
+	// payment-method breakdowns the daily operations report needs.
+	QueryDailyReport(ctx context.Context, date time.Time) (*order.DailyReport, error)
 	QueryMonthlyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
 }
 

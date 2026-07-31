@@ -36,6 +36,8 @@ func RegisterHandlers(mux *asynq.ServeMux, serverCtx *svc.ServiceContext) {
 	mux.Handle(types.SchedulerDispatchDomainEvents, events.NewDispatchDomainEventsLogic(serverCtx))
 	mux.Handle(types.EventDeliver, events.NewDeliverDomainEventLogic(serverCtx))
 	mux.Handle(types.SchedulerCleanupOrderEvents, orderLogic.NewCleanupOrderEventsLogic(serverCtx))
+	// Daily settlement summary for administrators bound on Telegram.
+	mux.Handle(types.SchedulerDailyOrderReport, orderLogic.NewDailyOrderReportLogic(serverCtx))
 
 	// Forthwith traffic statistics
 	mux.Handle(types.ForthwithTrafficStatistics, traffic.NewTrafficStatisticsLogic(serverCtx))
@@ -44,6 +46,8 @@ func RegisterHandlers(mux *asynq.ServeMux, serverCtx *svc.ServiceContext) {
 
 	// Schedule check subscription
 	mux.Handle(types.SchedulerCheckSubscription, subscription.NewCheckSubscriptionLogic(serverCtx))
+	// Warn owners before their subscription expires.
+	mux.Handle(types.SchedulerRemindExpiringSubscriptions, subscription.NewRemindExpiringLogic(serverCtx))
 
 	// Schedule total server data
 	mux.Handle(types.SchedulerTotalServerData, traffic.NewServerDataLogic(serverCtx))

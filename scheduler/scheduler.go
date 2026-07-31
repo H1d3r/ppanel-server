@@ -73,6 +73,21 @@ func (m *Service) Start() {
 		logger.Errorf("register reset traffic task failed: %s", err.Error())
 	}
 
+	// schedule pre-expiry reminder task: every day at 10:00. A reminder is
+	// user-facing, so it goes out during the day rather than overnight, and
+	// once daily rather than on the minute-by-minute lifecycle sweep.
+	remindExpiringTask := asynq.NewTask(types.SchedulerRemindExpiringSubscriptions, nil)
+	if _, err := m.server.Register("0 10 * * *", remindExpiringTask, asynq.MaxRetry(3)); err != nil {
+		logger.Errorf("register expiring subscription reminder task failed: %s", err.Error())
+	}
+
+	// schedule daily order report task: every day at 00:10, reporting the
+	// day that just ended
+	dailyOrderReportTask := asynq.NewTask(types.SchedulerDailyOrderReport, nil)
+	if _, err := m.server.Register("10 0 * * *", dailyOrderReportTask, asynq.MaxRetry(3)); err != nil {
+		logger.Errorf("register daily order report task failed: %s", err.Error())
+	}
+
 	// schedule traffic stat task: every day at 00:00
 	trafficStatTask := asynq.NewTask(types.SchedulerTrafficStat, nil)
 	if _, err := m.server.Register("0 0 * * *", trafficStatTask, asynq.MaxRetry(3)); err != nil {

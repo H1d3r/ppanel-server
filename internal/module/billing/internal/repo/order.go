@@ -477,6 +477,52 @@ func (m *orderRepo) QueryDateOrders(ctx context.Context, date time.Time) (order.
 	return result, err
 }
 
+// QueryDailyReport totals the orders settled on one calendar day and breaks
+// them down by plan and by payment method. Unlike the dashboard totals it
+// counts balance-funded orders too: the daily report is an operational
+// summary of everything that was settled, not of gateway revenue only.
+func (m *orderRepo) QueryDailyReport(ctx context.Context, date time.Time) (*order.DailyReport, error) {
+	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	end := start.AddDate(0, 0, 1)
+	settled := []int64{2, 5}
+
+	report := &order.DailyReport{Date: start}
+	err := m.QueryNoCacheCtx(ctx, report, func(conn *gorm.DB, _ interface{}) error {
+		var totals struct {
+			Orders int64
+			Amount int64
+		}
+		if err := conn.Model(&order.Order{}).
+			Select("COUNT(*) AS orders, COALESCE(SUM(amount), 0) AS amount").
+			Where("status IN ? AND created_at >= ? AND created_at < ?", settled, start, end).
+			Scan(&totals).Error; err != nil {
+			return err
+		}
+		report.Orders = totals.Orders
+		report.Amount = totals.Amount
+
+		if err := conn.Model(&order.Order{}).
+			Select("subscribe_id AS id, COUNT(*) AS orders, COALESCE(SUM(amount), 0) AS amount").
+			Where("status IN ? AND created_at >= ? AND created_at < ?", settled, start, end).
+			Group("subscribe_id").
+			Order("amount DESC").
+			Scan(&report.ByPlan).Error; err != nil {
+			return err
+		}
+
+		return conn.Model(&order.Order{}).
+			Select("method AS name, COUNT(*) AS orders, COALESCE(SUM(amount), 0) AS amount").
+			Where("status IN ? AND created_at >= ? AND created_at < ?", settled, start, end).
+			Group("method").
+			Order("amount DESC").
+			Scan(&report.ByMethod).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
 func (m *orderRepo) QueryTotalOrders(ctx context.Context) (order.OrdersTotal, error) {
 	var result order.OrdersTotal
 

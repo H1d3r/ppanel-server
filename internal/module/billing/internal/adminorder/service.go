@@ -7,6 +7,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -24,15 +25,24 @@ type ActivationEnqueuer interface {
 	EnqueueActivation(ctx context.Context, orderNo string) error
 }
 
+// PlanNameReader is the read port onto the subscription domain's plan
+// catalogue, used to label the daily report's plan breakdown.
+type PlanNameReader interface {
+	FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error)
+}
+
 type Service struct {
 	orders   repository.OrderRepo
 	payments repository.PaymentRepo
 	tx       Transactor
 	queue    ActivationEnqueuer
+	// plans resolves plan names for the daily report; optional so callers
+	// that only manage orders need not provide it.
+	plans PlanNameReader
 }
 
-func NewService(orders repository.OrderRepo, payments repository.PaymentRepo, tx Transactor, queue ActivationEnqueuer) *Service {
-	return &Service{orders: orders, payments: payments, tx: tx, queue: queue}
+func NewService(orders repository.OrderRepo, payments repository.PaymentRepo, tx Transactor, queue ActivationEnqueuer, plans PlanNameReader) *Service {
+	return &Service{orders: orders, payments: payments, tx: tx, queue: queue, plans: plans}
 }
 
 func (s *Service) Create(ctx context.Context, req *dto.CreateOrderRequest) error {

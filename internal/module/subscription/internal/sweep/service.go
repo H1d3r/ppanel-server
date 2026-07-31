@@ -21,6 +21,10 @@ import (
 type Notifier interface {
 	NotifySubscriptionExpired(ctx context.Context, email string, expiredAt time.Time)
 	NotifyTrafficExceeded(ctx context.Context, email string)
+	// NotifySubscriptionExpiring warns the owner before the subscription
+	// stops. Renewal amount is in minor units; an empty plan name or a zero
+	// amount means the plan could not be read.
+	NotifySubscriptionExpiring(ctx context.Context, userID int64, planName string, expireAt time.Time, renewalAmount int64)
 }
 
 // OwnerEmailReader is the read-only identity port resolving a user's email

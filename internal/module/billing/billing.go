@@ -105,7 +105,18 @@ type Service interface {
 	ActivateRecharge(ctx context.Context, orderNo string) (balance int64, err error)
 	SettleOrderCommission(ctx context.Context, orderNo string, buyerID int64) error
 	FinalizeOrder(ctx context.Context, orderNo string) error
+
+	// DailyOrderReport totals one day's settled orders for the operations
+	// report; plan names are resolved so the caller only formats.
+	DailyOrderReport(ctx context.Context, date time.Time) (*DailyOrderReport, error)
 }
+
+// DailyOrderReport and its lines re-export the admin order subdomain's daily
+// summary for the queue shell that formats and delivers it.
+type (
+	DailyOrderReport     = adminorder.DailyReport
+	DailyOrderReportLine = adminorder.DailyReportLine
+)
 
 // ErrIdempotencyKeyReused is handled as HTTP 409 by the V2 handler. It is a
 // distinct transport condition: the original order remains intact.
@@ -263,7 +274,7 @@ func New(deps Deps) Service {
 		Config:             deps.Portal,
 	})
 	return &service{
-		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue),
+		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue, deps.Plans),
 		payments:   adminpayment.NewService(deps.Payments, deps.Orders, deps.Tx, deps.Host, deps.IsGatewayMode),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders, deps.Plans),
@@ -488,4 +499,8 @@ func (s *service) SettleOrderCommission(ctx context.Context, orderNo string, buy
 
 func (s *service) FinalizeOrder(ctx context.Context, orderNo string) error {
 	return s.activation.FinalizeOrder(ctx, orderNo)
+}
+
+func (s *service) DailyOrderReport(ctx context.Context, date time.Time) (*DailyOrderReport, error) {
+	return s.orders.DailyReport(ctx, date)
 }

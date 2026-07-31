@@ -7,6 +7,7 @@ package notification
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -26,6 +27,10 @@ type Service interface {
 	HandleTelegramUpdate(ctx context.Context, update *tgbotapi.Update)
 	// NotifyTelegramUnbind sends the best-effort unbind notice to the chat.
 	NotifyTelegramUnbind(userID, chatID int64) error
+	// NotifyTelegramUser sends already-rendered text to the user's bound
+	// Telegram chat. It reports an error when the user has no binding or the
+	// bot is unconfigured, which callers treat as "nothing to deliver".
+	NotifyTelegramUser(ctx context.Context, userID int64, text string) error
 	// PublishTelegramCommands registers the command menu every user sees.
 	// The bot initialiser calls it once the client is ready, so the composer
 	// offers the commands instead of leaving users to guess them.
@@ -34,11 +39,13 @@ type Service interface {
 
 // Message templates other domains render before handing the text to the bot.
 const (
-	PurchaseNotify     = telegram.PurchaseNotify
-	RenewalNotify      = telegram.RenewalNotify
-	ResetTrafficNotify = telegram.ResetTrafficNotify
-	RechargeNotify     = telegram.RechargeNotify
-	AdminOrderNotify   = telegram.AdminOrderNotify
+	PurchaseNotify        = telegram.PurchaseNotify
+	RenewalNotify         = telegram.RenewalNotify
+	ResetTrafficNotify    = telegram.ResetTrafficNotify
+	RechargeNotify        = telegram.RechargeNotify
+	AdminOrderNotify      = telegram.AdminOrderNotify
+	AdminOrderDaily       = telegram.AdminOrderDaily
+	SubscribeExpireNotify = telegram.SubscribeExpireNotify
 )
 
 // Deps declares everything the module needs; the composition root
@@ -102,6 +109,25 @@ func (s *service) PublishTelegramCommands() error {
 	}
 	return telegram.NewTelegramBotCommandRegistrar(bot).
 		SetCommands(0, telegram.PublicCommands())
+}
+
+func (s *service) NotifyTelegramUser(ctx context.Context, userID int64, text string) error {
+	bot := s.deps.Bot()
+	if bot == nil {
+		return errors.New("telegram bot is not configured")
+	}
+	method, err := s.deps.UserAuth.FindUserAuthMethodByUserId(ctx, "telegram", userID)
+	if err != nil {
+		return err
+	}
+	chatID, err := strconv.ParseInt(method.AuthIdentifier, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram chat id %q is malformed: %w", method.AuthIdentifier, err)
+	}
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "markdown"
+	_, err = bot.Send(msg)
+	return err
 }
 
 func (s *service) NotifyTelegramUnbind(userID, chatID int64) error {
