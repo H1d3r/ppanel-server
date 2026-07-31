@@ -361,6 +361,10 @@ func validateRuntimeProtocol(protocol *Protocol) error {
 		if !validShadowsocksrObfs(protocol.Obfs) {
 			return fmt.Errorf("shadowsocksr obfs is invalid")
 		}
+		// Obfs only wraps TCP, so a UDP-only listener has nothing to obfuscate.
+		if protocol.Transport == "udp" && protocol.Obfs != "plain" {
+			return fmt.Errorf("shadowsocksr udp-only transport requires plain obfs")
+		}
 	}
 	if protocolRequiresTLSCertificate(*protocol) && !hasTLSCertificate(*protocol) {
 		return fmt.Errorf("%s requires sni and cert_mode", protocol.Type)
@@ -684,9 +688,12 @@ func validShadowsocksrCipher(cipher string) bool {
 	}
 }
 
+// Only the protocols that carry a wire UID are allowed: origin and the legacy
+// verify/auth families cap the node at exactly one active user.
 func validShadowsocksrProtocol(protocol string) bool {
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
-	case "auth_aes128_md5", "auth_aes128_sha1", "auth_chain_a":
+	case "auth_aes128_md5", "auth_aes128_sha1", "auth_chain_a", "auth_chain_b",
+		"auth_chain_c", "auth_chain_d", "auth_chain_e", "auth_chain_f":
 		return true
 	default:
 		return false
@@ -695,7 +702,8 @@ func validShadowsocksrProtocol(protocol string) bool {
 
 func validShadowsocksrObfs(obfs string) bool {
 	switch strings.ToLower(strings.TrimSpace(obfs)) {
-	case "plain", "http_simple", "http_post", "tls1.2_ticket_auth", "tls1.2_ticket_fastauth":
+	case "plain", "http_simple", "http_post", "tls1.0_session_auth",
+		"tls1.2_ticket_auth", "tls1.2_ticket_fastauth":
 		return true
 	default:
 		return false

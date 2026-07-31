@@ -536,3 +536,78 @@ func TestSanitizeProtocolsForNodeDistributionClearsStaleSnellServerKey(t *testin
 		t.Fatalf("node distribution ServerKey = %q, want empty", protocols[0].ServerKey)
 	}
 }
+
+func TestNormalizeProtocolForStorageAcceptsMultiUserShadowsocksrProtocols(t *testing.T) {
+	for _, ssrProtocol := range []string{
+		"auth_aes128_md5", "auth_aes128_sha1", "auth_chain_a", "auth_chain_b",
+		"auth_chain_c", "auth_chain_d", "auth_chain_e", "auth_chain_f",
+	} {
+		t.Run(ssrProtocol, func(t *testing.T) {
+			protocol, err := NormalizeProtocolForStorage(Protocol{
+				Type: "shadowsocksr", Port: 443, Enable: true, Cipher: "aes-256-cfb",
+				ServerKey: "key", SSRProtocol: ssrProtocol, Obfs: "plain",
+			})
+			if err != nil {
+				t.Fatalf("NormalizeProtocolForStorage() error = %v", err)
+			}
+			if protocol.SSRProtocol != ssrProtocol {
+				t.Fatalf("SSRProtocol = %q, want %q", protocol.SSRProtocol, ssrProtocol)
+			}
+		})
+	}
+}
+
+func TestNormalizeProtocolForStorageRejectsSingleUserShadowsocksrProtocols(t *testing.T) {
+	for _, ssrProtocol := range []string{
+		"origin", "verify_simple", "verify_sha1", "auth_simple", "auth_sha1",
+		"auth_sha1_v2", "auth_sha1_v4",
+	} {
+		t.Run(ssrProtocol, func(t *testing.T) {
+			if _, err := NormalizeProtocolForStorage(Protocol{
+				Type: "shadowsocksr", Port: 443, Enable: true, Cipher: "aes-256-cfb",
+				ServerKey: "key", SSRProtocol: ssrProtocol, Obfs: "plain",
+			}); err == nil {
+				t.Fatalf("NormalizeProtocolForStorage(%q) expected single-user protocol error", ssrProtocol)
+			}
+		})
+	}
+}
+
+func TestNormalizeProtocolForStorageAcceptsShadowsocksrTLS10Obfs(t *testing.T) {
+	protocol, err := NormalizeProtocolForStorage(Protocol{
+		Type: "shadowsocksr", Port: 443, Enable: true, Cipher: "aes-256-cfb",
+		ServerKey: "key", SSRProtocol: "auth_chain_f", Obfs: "tls1.0_session_auth",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeProtocolForStorage() error = %v", err)
+	}
+	if protocol.Obfs != "tls1.0_session_auth" {
+		t.Fatalf("Obfs = %q, want tls1.0_session_auth", protocol.Obfs)
+	}
+}
+
+func TestNormalizeProtocolForStorageRejectsShadowsocksrUDPOnlyNonPlainObfs(t *testing.T) {
+	if _, err := NormalizeProtocolForStorage(Protocol{
+		Type: "shadowsocksr", Port: 443, Enable: true, Cipher: "aes-256-cfb",
+		ServerKey: "key", SSRProtocol: "auth_chain_a", Obfs: "http_simple",
+		Transport: "udp",
+	}); err == nil {
+		t.Fatal("NormalizeProtocolForStorage() expected udp-only obfs error")
+	}
+}
+
+func TestNormalizeProtocolForStorageAllowsShadowsocksrTCPUDPNonPlainObfs(t *testing.T) {
+	for _, transport := range []string{"", "both", "tcp", "tcp+udp"} {
+		protocol, err := NormalizeProtocolForStorage(Protocol{
+			Type: "shadowsocksr", Port: 443, Enable: true, Cipher: "aes-256-cfb",
+			ServerKey: "key", SSRProtocol: "auth_chain_a", Obfs: "http_simple",
+			Transport: transport,
+		})
+		if err != nil {
+			t.Fatalf("NormalizeProtocolForStorage(%q) error = %v", transport, err)
+		}
+		if protocol.Obfs != "http_simple" {
+			t.Fatalf("Obfs = %q, want http_simple", protocol.Obfs)
+		}
+	}
+}
