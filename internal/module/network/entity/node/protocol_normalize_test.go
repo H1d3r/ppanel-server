@@ -431,3 +431,67 @@ func TestNormalizeProtocolForStorageRejectsTrojanWithoutSecurity(t *testing.T) {
 		t.Fatal("NormalizeProtocolForStorage() expected trojan security error")
 	}
 }
+
+func TestSanitizeProtocolsForNodeDistributionKeepsShadowsocksMultiplex(t *testing.T) {
+	protocols := SanitizeProtocolsForNodeDistribution([]Protocol{{
+		Type:      "shadowsocks",
+		Port:      443,
+		Enable:    true,
+		Cipher:    "chacha20-ietf-poly1305",
+		Multiplex: "smux",
+	}})
+	if len(protocols) != 1 {
+		t.Fatalf("SanitizeProtocolsForNodeDistribution() len = %d, want 1", len(protocols))
+	}
+	if protocols[0].Multiplex != "smux" {
+		t.Fatalf("node distribution Multiplex = %q, want smux", protocols[0].Multiplex)
+	}
+}
+
+func TestSanitizeProtocolsForNodeDistributionClearsMultiplexWhereUnsupported(t *testing.T) {
+	cases := []struct {
+		name     string
+		protocol Protocol
+	}{
+		{"snell", Protocol{
+			Type: "snell", Port: 443, Enable: true, ServerKey: "0123456789abcdef",
+			Multiplex: "smux",
+		}},
+		{"hysteria", Protocol{
+			Type: "hysteria", Port: 443, Enable: true, Security: "tls",
+			SNI: "node.example", CertMode: "self", Multiplex: "smux",
+		}},
+		{"naive", Protocol{
+			Type: "naive", Port: 443, Enable: true, Security: "tls",
+			SNI: "node.example", CertMode: "self", Multiplex: "smux",
+		}},
+		{"shadowsocksr", Protocol{
+			Type: "shadowsocksr", Port: 443, Enable: true, Cipher: "aes-256-cfb",
+			ServerKey: "key", SSRProtocol: "auth_aes128_md5", Multiplex: "smux",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			protocols := SanitizeProtocolsForNodeDistribution([]Protocol{tc.protocol})
+			if len(protocols) != 1 {
+				t.Fatalf("SanitizeProtocolsForNodeDistribution() len = %d, want 1", len(protocols))
+			}
+			if protocols[0].Multiplex != "" {
+				t.Fatalf("node distribution Multiplex = %q, want empty", protocols[0].Multiplex)
+			}
+		})
+	}
+}
+
+func TestSanitizeProtocolsForNodeDistributionKeepsAnytlsPaddingScheme(t *testing.T) {
+	protocols := SanitizeProtocolsForNodeDistribution([]Protocol{{
+		Type: "anytls", Port: 443, Enable: true, Security: "tls",
+		SNI: "node.example", CertMode: "self", PaddingScheme: "stop=8\n0=30-30",
+	}})
+	if len(protocols) != 1 {
+		t.Fatalf("SanitizeProtocolsForNodeDistribution() len = %d, want 1", len(protocols))
+	}
+	if protocols[0].PaddingScheme != "stop=8\n0=30-30" {
+		t.Fatalf("node distribution PaddingScheme = %q, want preserved", protocols[0].PaddingScheme)
+	}
+}

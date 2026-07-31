@@ -171,6 +171,8 @@ func sanitizeRuntimeProtocol(protocol *Protocol) bool {
 	case "snell":
 		protocol.Security = ""
 		protocol.SNI = ""
+		// Snell multiplexes inside the protocol, so the node exposes no knob.
+		protocol.Multiplex = ""
 		clearTLSClient(protocol)
 		clearCertificate(protocol)
 		clearReality(protocol)
@@ -187,6 +189,8 @@ func sanitizeRuntimeProtocol(protocol *Protocol) bool {
 		return protocol.Port > 0 && protocol.ServerKey != "" && (protocol.Version == 5 || protocol.Version == 6)
 	case "hysteria":
 		protocol.Security = "tls"
+		// The node rejects a multiplex value on QUIC inbounds.
+		protocol.Multiplex = ""
 		clearTLSClient(protocol)
 		clearReality(protocol)
 		clearStreamTransport(protocol)
@@ -195,6 +199,8 @@ func sanitizeRuntimeProtocol(protocol *Protocol) bool {
 		return protocol.Port > 0 && hasTLSCertificate(*protocol)
 	case "naive":
 		protocol.Security = "tls"
+		// The node rejects a multiplex value on QUIC inbounds.
+		protocol.Multiplex = ""
 		clearTLSClient(protocol)
 		clearReality(protocol)
 		clearStreamTransport(protocol)
@@ -919,7 +925,6 @@ func clearQUICControls(protocol *Protocol) {
 	protocol.QUICCongestionControl = ""
 	protocol.ReduceRtt = false
 	protocol.Heartbeat = 0
-	protocol.Multiplex = ""
 	protocol.PaddingScheme = ""
 }
 
