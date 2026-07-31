@@ -236,15 +236,32 @@ func TestNormalizeProtocolForStorageAcceptsSnellV6(t *testing.T) {
 	if protocol.Mode != "unshaped" || protocol.Transport != "tcp" {
 		t.Fatalf("Snell fields were not normalized: %#v", protocol)
 	}
+	if protocol.ServerKey != "" {
+		t.Fatalf("ServerKey = %q, want cleared", protocol.ServerKey)
+	}
+}
+
+func TestNormalizeProtocolForStorageAcceptsSnellWithoutServerKey(t *testing.T) {
+	for _, version := range []int{5, 6} {
+		protocol, err := NormalizeProtocolForStorage(Protocol{
+			Type: "snell", Port: 443, Enable: true, Version: version,
+		})
+		if err != nil {
+			t.Fatalf("NormalizeProtocolForStorage() v%d error = %v", version, err)
+		}
+		if protocol.ServerKey != "" {
+			t.Fatalf("ServerKey = %q, want empty", protocol.ServerKey)
+		}
+	}
 }
 
 func TestNormalizeProtocolForStorageRejectsInvalidSnell(t *testing.T) {
 	_, err := NormalizeProtocolForStorage(Protocol{
-		Type:      "snell",
-		Port:      443,
-		Enable:    true,
-		Version:   6,
-		ServerKey: "short",
+		Type:    "snell",
+		Port:    443,
+		Enable:  true,
+		Version: 6,
+		Obfs:    "http",
 	})
 	if err == nil {
 		t.Fatal("NormalizeProtocolForStorage() expected invalid Snell error")
@@ -493,5 +510,29 @@ func TestSanitizeProtocolsForNodeDistributionKeepsAnytlsPaddingScheme(t *testing
 	}
 	if protocols[0].PaddingScheme != "stop=8\n0=30-30" {
 		t.Fatalf("node distribution PaddingScheme = %q, want preserved", protocols[0].PaddingScheme)
+	}
+}
+
+func TestSanitizeProtocolsForNodeDistributionKeepsSnellWithoutServerKey(t *testing.T) {
+	protocols := SanitizeProtocolsForNodeDistribution([]Protocol{{
+		Type: "snell", Port: 443, Enable: true, Version: 6,
+	}})
+	if len(protocols) != 1 {
+		t.Fatalf("SanitizeProtocolsForNodeDistribution() len = %d, want 1", len(protocols))
+	}
+	if protocols[0].ServerKey != "" {
+		t.Fatalf("node distribution ServerKey = %q, want empty", protocols[0].ServerKey)
+	}
+}
+
+func TestSanitizeProtocolsForNodeDistributionClearsStaleSnellServerKey(t *testing.T) {
+	protocols := SanitizeProtocolsForNodeDistribution([]Protocol{{
+		Type: "snell", Port: 443, Enable: true, Version: 6, ServerKey: "short",
+	}})
+	if len(protocols) != 1 {
+		t.Fatalf("SanitizeProtocolsForNodeDistribution() len = %d, want 1", len(protocols))
+	}
+	if protocols[0].ServerKey != "" {
+		t.Fatalf("node distribution ServerKey = %q, want empty", protocols[0].ServerKey)
 	}
 }

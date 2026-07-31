@@ -6,8 +6,8 @@ import (
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 )
 
-func TestEnsureGeneratedProtocolKeyGeneratesForEmptySnellAndSSR(t *testing.T) {
-	for _, protocolType := range []string{"snell", "shadowsocksr", "ssr"} {
+func TestEnsureGeneratedProtocolKeyGeneratesForEmptySSR(t *testing.T) {
+	for _, protocolType := range []string{"shadowsocksr", "ssr"} {
 		t.Run(protocolType, func(t *testing.T) {
 			protocol := node.Protocol{Type: protocolType}
 			ensureGeneratedProtocolKey(&protocol, nil)
@@ -18,9 +18,17 @@ func TestEnsureGeneratedProtocolKeyGeneratesForEmptySnellAndSSR(t *testing.T) {
 	}
 }
 
-func TestEnsureGeneratedProtocolKeyPreservesExistingKey(t *testing.T) {
+func TestEnsureGeneratedProtocolKeySkipsSnell(t *testing.T) {
 	protocol := node.Protocol{Type: "snell"}
-	ensureGeneratedProtocolKey(&protocol, map[string]string{"snell": "existing-psk"})
+	ensureGeneratedProtocolKey(&protocol, nil)
+	if protocol.ServerKey != "" {
+		t.Fatalf("ServerKey = %q, want empty for snell", protocol.ServerKey)
+	}
+}
+
+func TestEnsureGeneratedProtocolKeyPreservesExistingKey(t *testing.T) {
+	protocol := node.Protocol{Type: "shadowsocksr"}
+	ensureGeneratedProtocolKey(&protocol, map[string]string{"shadowsocksr": "existing-psk"})
 	if protocol.ServerKey != "existing-psk" {
 		t.Fatalf("ServerKey = %q, want existing-psk", protocol.ServerKey)
 	}

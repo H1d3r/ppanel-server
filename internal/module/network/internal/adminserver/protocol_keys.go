@@ -195,12 +195,12 @@ func (k realityProtocolKey) complete() bool {
 	return k.privateKey != "" && k.publicKey != "" && k.shortID != ""
 }
 
+// Snell is absent on purpose: its users authenticate with their own UUID, so
+// there is no listener key left to generate.
 func generatedKeyProtocolType(raw string) string {
 	switch normalizedProtocolType(raw) {
 	case "ssr", "shadowsocks-r", "shadowsocksr":
 		return "shadowsocksr"
-	case "snell":
-		return "snell"
 	default:
 		return ""
 	}

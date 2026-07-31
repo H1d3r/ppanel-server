@@ -173,6 +173,9 @@ func sanitizeRuntimeProtocol(protocol *Protocol) bool {
 		protocol.SNI = ""
 		// Snell multiplexes inside the protocol, so the node exposes no knob.
 		protocol.Multiplex = ""
+		// The node ignores the listener PSK but still bounds it on v6, so a
+		// stale value could reject an otherwise valid inbound.
+		protocol.ServerKey = ""
 		clearTLSClient(protocol)
 		clearCertificate(protocol)
 		clearReality(protocol)
@@ -186,7 +189,7 @@ func sanitizeRuntimeProtocol(protocol *Protocol) bool {
 		} else {
 			protocol.Obfs = ""
 		}
-		return protocol.Port > 0 && protocol.ServerKey != "" && (protocol.Version == 5 || protocol.Version == 6)
+		return protocol.Port > 0 && (protocol.Version == 5 || protocol.Version == 6)
 	case "hysteria":
 		protocol.Security = "tls"
 		// The node rejects a multiplex value on QUIC inbounds.
@@ -305,9 +308,9 @@ func validateRuntimeProtocol(protocol *Protocol) error {
 		if protocol.Version != 5 && protocol.Version != 6 {
 			return fmt.Errorf("snell requires version 5 or 6")
 		}
-		if protocol.ServerKey == "" || protocol.Version == 6 && len(protocol.ServerKey) < 12 {
-			return fmt.Errorf("snell requires valid server_key")
-		}
+		// Every user authenticates with their own UUID as the PSK, so the
+		// listener key is obsolete for both versions.
+		protocol.ServerKey = ""
 		if protocol.Version == 5 {
 			if protocol.Mode != "" {
 				return fmt.Errorf("snell v5 does not support mode")
