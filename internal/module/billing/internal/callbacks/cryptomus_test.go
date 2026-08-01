@@ -126,6 +126,14 @@ func TestCryptomusNotifyRejectsUnpaidStatusAndAmountMismatch(t *testing.T) {
 		t.Fatalf("non-paid status must be rejected, got %v", err)
 	}
 
+	walletTopup := signCryptomusTestPayload(t, "api-key", map[string]interface{}{
+		"type": "wallet", "uuid": "uuid-1", "order_id": "order-1",
+		"amount": "10.00", "currency": "USD", "status": "paid", "is_final": true,
+	})
+	if err := svc.CryptomusNotify(ctx, walletTopup); err == nil || !strings.Contains(err.Error(), "notification type") {
+		t.Fatalf("wallet webhooks must not settle orders, got %v", err)
+	}
+
 	underpaid := signCryptomusTestPayload(t, "api-key", map[string]interface{}{
 		"type": "payment", "uuid": "uuid-1", "order_id": "order-1",
 		"amount": "9.00", "currency": "USD", "status": "paid", "is_final": true,

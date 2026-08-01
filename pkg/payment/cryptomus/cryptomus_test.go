@@ -177,6 +177,22 @@ func TestGatewayErrorsMapToAPIError(t *testing.T) {
 	}
 }
 
+func TestInvoiceStatePrefersStatusOverPaymentStatus(t *testing.T) {
+	// The create endpoint reports only payment_status; the info endpoint
+	// fills both. State and Paid must work with either shape.
+	infoOnly := &Invoice{PaymentStatus: "paid"}
+	if infoOnly.State() != "paid" || !infoOnly.Paid() {
+		t.Fatal("payment_status alone must drive the settlement state")
+	}
+	both := &Invoice{Status: "wrong_amount", PaymentStatus: "paid"}
+	if both.State() != "wrong_amount" || both.Paid() {
+		t.Fatal("a contradictory status field must win over payment_status")
+	}
+	if (&Invoice{}).Paid() {
+		t.Fatal("an invoice without any status must not report paid")
+	}
+}
+
 func TestFormatMoney(t *testing.T) {
 	tests := map[int64]string{0: "0.00", 5: "0.05", 100: "1.00", 1050: "10.50", 123456: "1234.56"}
 	for amount, want := range tests {

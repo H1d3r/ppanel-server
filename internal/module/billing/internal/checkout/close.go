@@ -303,13 +303,16 @@ func (s *Service) settleCryptomusOrder(ctx context.Context, orderInfo *order.Ord
 		}
 		return true, nil
 	}
-	if invoice.IsFinal && invoice.Status != cryptomus.StatusWrongAmount {
+	// wrong_amount and locked are final states that still hold customer money
+	// (an underpayment or AML-frozen funds); they stay pending for manual
+	// resolution instead of silently releasing the reservation.
+	if state := invoice.State(); invoice.IsFinal && state != cryptomus.StatusWrongAmount && state != cryptomus.StatusLocked {
 		return false, nil // invoice ended without payment; safe to close.
 	}
 	if userInitiated {
 		return false, nil // the owner explicitly forfeits the unconfirmed invoice.
 	}
-	return false, fmt.Errorf("cannot safely expire Cryptomus order %s with invoice status %q: %w", orderInfo.OrderNo, invoice.Status, ErrGatewayUnconfirmed)
+	return false, fmt.Errorf("cannot safely expire Cryptomus order %s with invoice status %q: %w", orderInfo.OrderNo, invoice.State(), ErrGatewayUnconfirmed)
 }
 
 // EPay-compatible gateways have no standard cancellation API. Once a payment

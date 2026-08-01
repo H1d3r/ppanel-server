@@ -29,14 +29,16 @@ const (
 	maxResponseSize = 1 << 20
 )
 
-// Paid statuses documented by Cryptomus. paid_over means the payer sent more
-// than the invoice amount; the invoice itself is still settled in full.
+// Payment statuses documented by Cryptomus. paid_over means the payer sent
+// more than the invoice amount; the invoice itself is still settled in full.
 // wrong_amount is a final state in which the payer sent less than the invoice
-// amount: money was received without covering the order.
+// amount, and locked is a final state in which received funds were frozen by
+// the AML program: both hold money without covering the order.
 const (
 	StatusPaid        = "paid"
 	StatusPaidOver    = "paid_over"
 	StatusWrongAmount = "wrong_amount"
+	StatusLocked      = "locked"
 )
 
 // PaidStatus reports whether an invoice status represents a completed payment.
@@ -97,8 +99,18 @@ type Invoice struct {
 	IsFinal       bool   `json:"is_final"`
 }
 
+// State returns the invoice's settlement state. The create endpoint reports
+// it only in payment_status while the info endpoint fills both fields; the
+// status field wins when both are present.
+func (i *Invoice) State() string {
+	if i.Status != "" {
+		return i.Status
+	}
+	return i.PaymentStatus
+}
+
 func (i *Invoice) Paid() bool {
-	return PaidStatus(i.Status) || PaidStatus(i.PaymentStatus)
+	return PaidStatus(i.State())
 }
 
 // Notification is the webhook payload for invoice payments.

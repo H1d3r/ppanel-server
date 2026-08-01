@@ -99,6 +99,11 @@ func (s *Service) CryptomusNotify(ctx context.Context, payload []byte) error {
 }
 
 func validateCryptomusNotification(notification *cryptomus.Notification) (int64, error) {
+	// The gateway also emits wallet-topup webhooks with the same shape; only
+	// invoice payments may settle orders.
+	if notification.Type != "" && notification.Type != "payment" {
+		return 0, errors.New("unsupported notification type")
+	}
 	if notification.OrderNo == "" || len(notification.OrderNo) > 255 || strings.TrimSpace(notification.OrderNo) != notification.OrderNo {
 		return 0, errors.New("invalid order number")
 	}
