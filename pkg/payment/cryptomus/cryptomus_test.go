@@ -73,6 +73,54 @@ func TestVerifyNotificationSign(t *testing.T) {
 	}
 }
 
+// TestVerifyNotificationSignPreservesPHPEscaping guards against the classic
+// re-serialization pitfall: Cryptomus produces webhook bodies with PHP's
+// json_encode, which escapes "/" as "\/" and leaves unicode unescaped, while
+// most other JSON encoders do neither. Implementations that decode the body
+// and re-encode it before hashing must patch the escaping back by hand; this
+// verifier hashes the original bytes with only the sign member removed, so
+// the sender's escaping never enters the picture. The fixture below is the
+// exact byte shape PHP delivers.
+func TestVerifyNotificationSignPreservesPHPEscaping(t *testing.T) {
+	const apiKey = "api-key"
+	unsigned := `{"type":"payment","uuid":"uuid-1","order_id":"order-1","amount":"10.00",` +
+		`"currency":"USD","additional_data":"https:\/\/merchant.example\/return?plan=年付","status":"paid","is_final":true}`
+	sign := signBody([]byte(unsigned), apiKey)
+	body := []byte(strings.TrimSuffix(unsigned, "}") + `,"sign":"` + sign + `"}`)
+
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: apiKey})
+	if !client.VerifyNotificationSign(body) {
+		t.Fatal("a PHP-escaped payload signed over its own bytes must verify")
+	}
+
+	// The same payload naively decoded and re-encoded by encoding/json loses
+	// the "\/" escaping, which is exactly the mismatch the raw-byte approach
+	// avoids; the fixture must actually exercise that difference.
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode PHP-escaped payload: %v", err)
+	}
+	delete(decoded, "sign")
+	reencoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("re-encode payload: %v", err)
+	}
+	if strings.Contains(string(reencoded), `\/`) {
+		t.Fatal("fixture no longer demonstrates the escaping mismatch")
+	}
+	if signBody(reencoded, apiKey) == sign {
+		t.Fatal("re-encoded bytes must not accidentally reproduce the signature")
+	}
+
+	notification, err := ParseNotification(body)
+	if err != nil {
+		t.Fatalf("ParseNotification: %v", err)
+	}
+	if notification.OrderNo != "order-1" || !PaidStatus(notification.Status) {
+		t.Fatalf("unexpected notification: %+v", notification)
+	}
+}
+
 func TestCreateInvoiceSendsSignedRequest(t *testing.T) {
 	const apiKey = "api-key"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
