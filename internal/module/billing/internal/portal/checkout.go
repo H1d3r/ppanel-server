@@ -26,8 +26,10 @@ import (
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/payment/alipay"
+	"github.com/perfect-panel/server/pkg/payment/cryptomus"
 	"github.com/perfect-panel/server/pkg/payment/epay"
 	"github.com/perfect-panel/server/pkg/payment/stripe"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -35,7 +37,7 @@ import (
 )
 
 // PurchaseCheckoutLogic handles the checkout process for various payment methods
-// including EPay, Stripe, Alipay F2F, and balance payments
+// including EPay, Stripe, Alipay F2F, Cryptomus, and balance payments
 type PurchaseCheckoutLogic struct {
 	logger.Logger
 	ctx  context.Context
@@ -255,6 +257,18 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		resp = &dto.CheckoutOrderResponse{
 			Type:        "qr", // Client should display QR code
 			CheckoutUrl: url,
+		}
+
+	case paymentPlatform.Cryptomus:
+		// Process Cryptomus crypto payment - generates hosted invoice URL for redirect
+		url, err := l.cryptomusPayment(paymentConfig, orderInfo, req.ReturnUrl)
+		if err != nil {
+			l.Errorw("[PurchaseCheckout] cryptomusPayment error", logger.Field("error", err.Error()))
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "cryptomusPayment error: %v", err.Error())
+		}
+		resp = &dto.CheckoutOrderResponse{
+			CheckoutUrl: url,
+			Type:        "url", // Client should redirect to URL
 		}
 
 	case paymentPlatform.Balance:
@@ -510,6 +524,104 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 		NotifyUrl: notifyURL,
 		ReturnUrl: returnUrl,
 	})
+}
+
+// cryptomusPayment processes a Cryptomus crypto payment by creating a hosted
+// invoice in the system currency; the gateway converts it to the payer's
+// chosen cryptocurrency at payment time.
+func (l *PurchaseCheckoutLogic) cryptomusPayment(config *payment.Payment, info *order.Order, returnUrl string) (string, error) {
+	cryptomusConfig := &payment.CryptomusConfig{}
+	if err := cryptomusConfig.Unmarshal([]byte(config.Config)); err != nil {
+		l.Errorw("[PurchaseCheckout] Unmarshal Cryptomus config error", logger.Field("error", err.Error()))
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Unmarshal error: %s", err.Error())
+	}
+	client := cryptomus.NewClient(cryptomus.Config{
+		MerchantID: cryptomusConfig.MerchantID,
+		APIKey:     cryptomusConfig.APIKey,
+	})
+
+	currency := strings.ToUpper(l.deps.Config.CurrencyUnit)
+	if err := l.persistPaymentExpectation(info, info.Amount, currency); err != nil {
+		return "", err
+	}
+
+	// A pending order owns exactly one Cryptomus invoice. The claimed trade
+	// number keeps every checkout retry on the same hosted URL, so a callback
+	// can never reference an invoice the order does not know about.
+	if info.TradeNo != "" {
+		invoice, err := client.GetInvoice(info.TradeNo, "")
+		if err != nil {
+			l.Errorw("[PurchaseCheckout] Cryptomus invoice lookup error", logger.Field("error", err.Error()))
+			return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Cryptomus invoice lookup error: %s", err.Error())
+		}
+		return l.cryptomusInvoiceURL(invoice, info)
+	}
+
+	notifyURL := l.paymentPublicBaseURL(config) + "/v1/notify/" + config.Platform + "/" + config.Token
+	invoice, err := client.CreateInvoice(cryptomus.Order{
+		OrderNo:   info.OrderNo,
+		Amount:    info.Amount,
+		Currency:  currency,
+		NotifyURL: notifyURL,
+		ReturnURL: returnUrl,
+		// The invoice must not outlive the order's close window: a payment made
+		// after the order closed could no longer be fulfilled.
+		Lifetime: checkout.CloseOrderTimeMinutes * 60,
+	})
+	if err != nil {
+		// The gateway enforces one active invoice per order number. A previous
+		// checkout may have created it and crashed before claiming the trade
+		// number, so recover that invoice instead of failing the checkout.
+		existing, queryErr := client.GetInvoice("", info.OrderNo)
+		if queryErr != nil {
+			l.Errorw("[PurchaseCheckout] Create Cryptomus invoice error", logger.Field("error", err.Error()))
+			return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "create Cryptomus invoice: %s", err.Error())
+		}
+		invoice = existing
+	}
+
+	claimed, claimErr := l.deps.Store.SetPaymentTradeNoIfEmpty(l.ctx, info.OrderNo, invoice.UUID)
+	if claimErr != nil {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "claim Cryptomus invoice: %v", claimErr)
+	}
+	if !claimed {
+		// Another concurrent checkout claimed the order's one invoice first;
+		// expose that invoice instead. The loser invoice is never referenced
+		// again and simply expires at the gateway.
+		latest, latestErr := l.deps.Store.FindOrderByOrderNo(l.ctx, info.OrderNo)
+		if latestErr != nil {
+			return "", errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "reload Cryptomus invoice: %v", latestErr)
+		}
+		if latest.Status != 1 || latest.TradeNo == "" {
+			return "", errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order no longer has a pending Cryptomus invoice")
+		}
+		if latest.TradeNo != invoice.UUID {
+			invoice, err = client.GetInvoice(latest.TradeNo, "")
+			if err != nil {
+				return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Cryptomus invoice lookup error: %s", err.Error())
+			}
+		}
+	} else {
+		info.TradeNo = invoice.UUID
+	}
+	return l.cryptomusInvoiceURL(invoice, info)
+}
+
+// cryptomusInvoiceURL guards the reused invoice against drift: the checkout
+// URL handed to the payer must belong to this order and charge exactly the
+// persisted payment expectation.
+func (l *PurchaseCheckoutLogic) cryptomusInvoiceURL(invoice *cryptomus.Invoice, info *order.Order) (string, error) {
+	if invoice.OrderNo != info.OrderNo {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Cryptomus invoice order mismatch")
+	}
+	amount, err := cryptomus.ParseMoney(invoice.Amount)
+	if err != nil || amount != info.PaymentAmount || !strings.EqualFold(invoice.Currency, info.PaymentCurrency) {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Cryptomus invoice does not match payment expectation")
+	}
+	if invoice.URL == "" {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Cryptomus invoice has no checkout URL")
+	}
+	return invoice.URL, nil
 }
 
 func (l *PurchaseCheckoutLogic) paymentPublicBaseURL(config *payment.Payment) string {

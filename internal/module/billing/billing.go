@@ -77,6 +77,7 @@ type Service interface {
 	EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error
 	StripeNotify(ctx context.Context, payload []byte, signature string) error
 	AlipayNotify(ctx context.Context, form url.Values) error
+	CryptomusNotify(ctx context.Context, payload []byte) error
 
 	// The V2 orchestration: idempotent create-and-checkout, guest checkout
 	// capabilities and SSE event-stream tickets.
@@ -439,6 +440,10 @@ func (s *service) StripeNotify(ctx context.Context, payload []byte, signature st
 
 func (s *service) AlipayNotify(ctx context.Context, form url.Values) error {
 	return s.callbacks.AlipayNotify(ctx, form)
+}
+
+func (s *service) CryptomusNotify(ctx context.Context, payload []byte) error {
+	return s.callbacks.CryptomusNotify(ctx, payload)
 }
 
 func (s *service) V2CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderRequest, idempotencyKey string) (*dto.V2OrderResponse, error) {

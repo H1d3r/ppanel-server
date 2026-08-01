@@ -1,7 +1,7 @@
 // Package callbacks implements the payment gateway callback subdomain of the
-// billing module: it authenticates EPay/Stripe/Alipay notifications, verifies
-// them against the order's immutable payment expectation, re-confirms with
-// the gateway and settles the payment. Only the module facade may reach it.
+// billing module: it authenticates EPay/Stripe/Alipay/Cryptomus notifications,
+// verifies them against the order's immutable payment expectation, re-confirms
+// with the gateway and settles the payment. Only the module facade may reach it.
 package callbacks
 
 import (

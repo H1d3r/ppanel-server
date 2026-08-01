@@ -1,0 +1,215 @@
+package cryptomus
+
+import (
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func md5Hex(value string) string {
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func signBody(body []byte, apiKey string) string {
+	return md5Hex(base64.StdEncoding.EncodeToString(body) + apiKey)
+}
+
+// signedNotification builds a webhook payload the way the gateway does: the
+// signature covers the JSON without the sign member, which is then appended
+// as the last top-level field.
+func signedNotification(t *testing.T, apiKey string, fields map[string]interface{}) []byte {
+	t.Helper()
+	unsigned, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("marshal notification: %v", err)
+	}
+	sign := signBody(unsigned, apiKey)
+	signed := strings.TrimSuffix(string(unsigned), "}") + `,"sign":"` + sign + `"}`
+	return []byte(signed)
+}
+
+func TestSignPayloadMatchesDocumentedAlgorithm(t *testing.T) {
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key"})
+	body := []byte(`{"amount":"10.00","currency":"USD","order_id":"order-1"}`)
+	if got, want := client.signPayload(body), signBody(body, "api-key"); got != want {
+		t.Fatalf("signPayload=%s, want %s", got, want)
+	}
+}
+
+func TestVerifyNotificationSign(t *testing.T) {
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key"})
+	body := signedNotification(t, "api-key", map[string]interface{}{
+		"type": "payment", "uuid": "uuid-1", "order_id": "order-1",
+		"amount": "10.00", "currency": "USD", "status": "paid", "is_final": true,
+	})
+	if !client.VerifyNotificationSign(body) {
+		t.Fatal("valid signature must be accepted")
+	}
+
+	tampered := []byte(strings.Replace(string(body), `"10.00"`, `"1.00"`, 1))
+	if client.VerifyNotificationSign(tampered) {
+		t.Fatal("changing a signed field must invalidate the signature")
+	}
+
+	wrongKey := NewClient(Config{MerchantID: "merchant-1", APIKey: "other-key"})
+	if wrongKey.VerifyNotificationSign(body) {
+		t.Fatal("signature must be bound to the API key")
+	}
+
+	if client.VerifyNotificationSign([]byte(`{"order_id":"order-1"}`)) {
+		t.Fatal("missing signature must be rejected")
+	}
+
+	duplicated := []byte(strings.TrimSuffix(string(body), "}") + `,"sign":"` + md5Hex("second") + `"}`)
+	if client.VerifyNotificationSign(duplicated) {
+		t.Fatal("payload with two sign members must be rejected")
+	}
+}
+
+func TestCreateInvoiceSendsSignedRequest(t *testing.T) {
+	const apiKey = "api-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != createInvoicePath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("merchant") != "merchant-1" {
+			t.Errorf("merchant header = %q", r.Header.Get("merchant"))
+		}
+		body := make([]byte, r.ContentLength)
+		if _, err := r.Body.Read(body); err != nil && err.Error() != "EOF" {
+			t.Fatalf("read request: %v", err)
+		}
+		if r.Header.Get("sign") != signBody(body, apiKey) {
+			t.Errorf("request signature mismatch")
+		}
+		var request map[string]interface{}
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if request["amount"] != "10.50" || request["currency"] != "USD" || request["order_id"] != "order-1" {
+			t.Errorf("unexpected request fields: %v", request)
+		}
+		if request["url_callback"] != "https://merchant.example/v1/notify/Cryptomus/token" {
+			t.Errorf("unexpected callback: %v", request["url_callback"])
+		}
+		fmt.Fprint(w, `{"state":0,"result":{"uuid":"uuid-1","order_id":"order-1","amount":"10.50","currency":"USD","url":"https://pay.cryptomus.com/pay/uuid-1","status":"check"}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: apiKey, BaseURL: server.URL})
+	invoice, err := client.CreateInvoice(Order{
+		OrderNo:   "order-1",
+		Amount:    1050,
+		Currency:  "usd",
+		NotifyURL: "https://merchant.example/v1/notify/Cryptomus/token",
+	})
+	if err != nil {
+		t.Fatalf("CreateInvoice: %v", err)
+	}
+	if invoice.UUID != "uuid-1" || invoice.URL != "https://pay.cryptomus.com/pay/uuid-1" {
+		t.Fatalf("unexpected invoice: %+v", invoice)
+	}
+}
+
+func TestCreateInvoiceRejectsInvalidOrder(t *testing.T) {
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key"})
+	if _, err := client.CreateInvoice(Order{OrderNo: "", Amount: 100, Currency: "USD"}); err == nil {
+		t.Fatal("empty order number must be rejected")
+	}
+	if _, err := client.CreateInvoice(Order{OrderNo: "order-1", Amount: 0, Currency: "USD"}); err == nil {
+		t.Fatal("zero amount must be rejected")
+	}
+}
+
+func TestGetInvoiceLooksUpByUUIDOrOrderNo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != invoiceInfoPath {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		var request map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if request["uuid"] == "" && request["order_id"] == "" {
+			t.Error("lookup request has no identifier")
+		}
+		fmt.Fprint(w, `{"state":0,"result":{"uuid":"uuid-1","order_id":"order-1","amount":"10.50","currency":"USD","payment_status":"paid","is_final":true}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key", BaseURL: server.URL})
+	invoice, err := client.GetInvoice("uuid-1", "")
+	if err != nil {
+		t.Fatalf("GetInvoice by uuid: %v", err)
+	}
+	if !invoice.Paid() {
+		t.Fatal("payment_status=paid must report Paid()")
+	}
+	if _, err := client.GetInvoice("", "order-1"); err != nil {
+		t.Fatalf("GetInvoice by order number: %v", err)
+	}
+	if _, err := client.GetInvoice("", ""); err == nil {
+		t.Fatal("lookup without identifiers must be rejected")
+	}
+}
+
+func TestGatewayErrorsMapToAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"state":1,"message":"Payment not found"}`)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key", BaseURL: server.URL})
+	_, err := client.GetInvoice("uuid-unknown", "")
+	if err == nil {
+		t.Fatal("gateway error must be returned")
+	}
+	if !IsNotFound(err) {
+		t.Fatalf("expected not-found error, got %v", err)
+	}
+}
+
+func TestFormatMoney(t *testing.T) {
+	tests := map[int64]string{0: "0.00", 5: "0.05", 100: "1.00", 1050: "10.50", 123456: "1234.56"}
+	for amount, want := range tests {
+		if got := FormatMoney(amount); got != want {
+			t.Fatalf("FormatMoney(%d)=%s, want %s", amount, got, want)
+		}
+	}
+}
+
+func TestParseMoneyToleratesTrailingZeroDecimals(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    int64
+		wantErr bool
+	}{
+		{value: "15", want: 1500},
+		{value: "15.00", want: 1500},
+		{value: "3.00000000", want: 300},
+		{value: "3.14000000", want: 314},
+		{value: "10.5", want: 1050},
+		{value: "3.14159", wantErr: true},
+		{value: "-1.00", wantErr: true},
+		{value: "", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			got, err := ParseMoney(test.value)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ParseMoney(%q) error=%v", test.value, err)
+			}
+			if err == nil && got != test.want {
+				t.Fatalf("ParseMoney(%q)=%d, want %d", test.value, got, test.want)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ const (
 	AlipayF2F
 	EPay
 	Balance
+	Cryptomus
 	UNSUPPORTED Platform = -1
 )
 
@@ -17,6 +18,7 @@ var platformNames = map[string]Platform{
 	"AlipayF2F":   AlipayF2F,
 	"EPay":        EPay,
 	"balance":     Balance,
+	"Cryptomus":   Cryptomus,
 	"unsupported": UNSUPPORTED,
 }
 
@@ -41,7 +43,7 @@ func ParsePlatform(s string) Platform {
 // an internal checkout method rather than an administrator-configurable
 // gateway.
 func SupportedPlatformNames() []string {
-	return []string{Stripe.String(), AlipayF2F.String(), EPay.String(), Balance.String()}
+	return []string{Stripe.String(), AlipayF2F.String(), EPay.String(), Balance.String(), Cryptomus.String()}
 }
 
 func GetSupportedPlatforms() []platform.Info {
@@ -75,6 +77,14 @@ func GetSupportedPlatforms() []platform.Info {
 				"url":  "URL",
 				"key":  "Key",
 				"type": "Type",
+			},
+		},
+		{
+			Platform:    Cryptomus.String(),
+			PlatformURL: "https://cryptomus.com",
+			PlatformFieldDescription: map[string]string{
+				"merchant_id": "Merchant UUID",
+				"api_key":     "Payment API Key",
 			},
 		},
 	}

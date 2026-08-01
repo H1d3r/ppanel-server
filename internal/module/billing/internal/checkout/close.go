@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
@@ -17,6 +18,7 @@ import (
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
+	"github.com/perfect-panel/server/pkg/payment/cryptomus"
 	"github.com/perfect-panel/server/pkg/payment/epay"
 	"github.com/perfect-panel/server/pkg/payment/stripe"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -194,6 +196,8 @@ func (s *Service) settleOrCancelGatewayOrder(ctx context.Context, orderInfo *ord
 		return s.settleOrCancelStripeOrder(ctx, orderInfo)
 	case paymentPlatform.EPay:
 		return s.settleEPayOrder(ctx, orderInfo, userInitiated)
+	case paymentPlatform.Cryptomus:
+		return s.settleCryptomusOrder(ctx, orderInfo, userInitiated)
 	default:
 		return false, nil
 	}
@@ -250,6 +254,62 @@ func (s *Service) settleOrCancelStripeOrder(ctx context.Context, orderInfo *orde
 		return false, err
 	}
 	return true, nil
+}
+
+// Cryptomus invoices cannot be cancelled through the API, but they expire on
+// their own after the checkout lifetime and report a final state. Closing is
+// safe only when the gateway confirms no money was collected: a paid invoice
+// is settled instead, a still-active invoice keeps the order pending unless
+// the owner explicitly forfeits it, and an underpaid (wrong_amount) invoice
+// stays pending for manual resolution because funds were received without
+// covering the order.
+func (s *Service) settleCryptomusOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
+	if orderInfo.PaymentCurrency == "" {
+		return false, nil // checkout was never started; safe to close.
+	}
+	paymentConfig, err := s.deps.Payments.FindOne(ctx, orderInfo.PaymentId)
+	if err != nil {
+		return false, err
+	}
+	config := payment.CryptomusConfig{}
+	if err := json.Unmarshal([]byte(paymentConfig.Config), &config); err != nil {
+		return false, err
+	}
+	client := cryptomus.NewClient(cryptomus.Config{MerchantID: config.MerchantID, APIKey: config.APIKey})
+	// The trade number is claimed right after invoice creation, but a checkout
+	// may have crashed between the two steps; the order-number lookup still
+	// finds the invoice the gateway holds for this order.
+	invoice, err := client.GetInvoice(orderInfo.TradeNo, orderInfo.OrderNo)
+	if err != nil {
+		if cryptomus.IsNotFound(err) {
+			return false, nil // no invoice was ever issued; safe to close.
+		}
+		if userInitiated {
+			logger.WithContext(ctx).Infow("[CloseOrder] user-requested close of Cryptomus order without gateway confirmation",
+				logger.Field("orderNo", orderInfo.OrderNo),
+				logger.Field("queryError", err.Error()),
+			)
+			return false, nil
+		}
+		return false, fmt.Errorf("cannot safely expire Cryptomus order %s: %v: %w", orderInfo.OrderNo, err, ErrGatewayUnconfirmed)
+	}
+	if invoice.Paid() {
+		amount, err := cryptomus.ParseMoney(invoice.Amount)
+		if err != nil || invoice.OrderNo != orderInfo.OrderNo || amount != orderInfo.PaymentAmount || !strings.EqualFold(invoice.Currency, orderInfo.PaymentCurrency) {
+			return false, fmt.Errorf("Cryptomus order %s query does not match payment expectation", orderInfo.OrderNo)
+		}
+		if err := s.settleVerifiedPayment(ctx, orderInfo, invoice.UUID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if invoice.IsFinal && invoice.Status != cryptomus.StatusWrongAmount {
+		return false, nil // invoice ended without payment; safe to close.
+	}
+	if userInitiated {
+		return false, nil // the owner explicitly forfeits the unconfirmed invoice.
+	}
+	return false, fmt.Errorf("cannot safely expire Cryptomus order %s with invoice status %q: %w", orderInfo.OrderNo, invoice.Status, ErrGatewayUnconfirmed)
 }
 
 // EPay-compatible gateways have no standard cancellation API. Once a payment

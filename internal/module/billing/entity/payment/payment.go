@@ -116,6 +116,26 @@ func (l *AlipayF2FConfig) Unmarshal(data []byte) error {
 	return json.Unmarshal(convertedData, (*Alias)(l))
 }
 
+type CryptomusConfig struct {
+	MerchantID string `json:"merchant_id"`
+	APIKey     string `json:"api_key"`
+}
+
+func (l *CryptomusConfig) Marshal() ([]byte, error) {
+	type Alias CryptomusConfig
+	return json.Marshal(&struct {
+		*Alias
+	}{
+		Alias: (*Alias)(l),
+	})
+}
+
+func (l *CryptomusConfig) Unmarshal(data []byte) error {
+	type Alias CryptomusConfig
+	aux := (*Alias)(l)
+	return json.Unmarshal(data, &aux)
+}
+
 type EPayConfig struct {
 	Pid  string `json:"pid"`
 	Url  string `json:"url"`
