@@ -112,13 +112,9 @@ func (l *ServerDataLogic) getRanking(ctx context.Context) (top10ServerToday, top
 		logger.Error("[ServerDataLogic] Get top users traffic by day failed", logger.Field("error", err.Error()))
 	} else {
 		for _, u := range userToday {
-			//userInfo, err := l.svc.Store.User().FindOne(ctx, u.UserId)
-			//if err != nil {
-			//	logx.Error("[ServerDataLogic] Find user failed", logx.Field("error", err.Error()))
-			//	continue
-			//}
 			top10UserToday = append(top10UserToday, dto.UserTrafficData{
-				SID:      u.UserId,
+				SID:      u.SubscribeId,
+				UID:      u.UserId,
 				Upload:   u.Upload,
 				Download: u.Download,
 			})
@@ -130,13 +126,9 @@ func (l *ServerDataLogic) getRanking(ctx context.Context) (top10ServerToday, top
 		logger.Error("[ServerDataLogic] Get top users traffic by day failed", logger.Field("error", err.Error()))
 	} else {
 		for _, u := range userYesterday {
-			//userInfo, err := l.svc.Store.User().FindOne(ctx, u.UserId)
-			//if err != nil {
-			//	logx.Error("[ServerDataLogic] Find user failed", logx.Field("error", err.Error()))
-			//	continue
-			//}
 			top10UserYesterday = append(top10UserYesterday, dto.UserTrafficData{
-				SID:      u.UserId,
+				SID:      u.SubscribeId,
+				UID:      u.UserId,
 				Upload:   u.Upload,
 				Download: u.Download,
 			})

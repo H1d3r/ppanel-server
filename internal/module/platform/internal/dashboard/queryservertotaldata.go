@@ -21,6 +21,26 @@ import (
 const consoleServerTotalDataCacheKey = "console:server_total_data"
 const consoleServerTotalDataCacheTTL = 60 * time.Second
 
+// The console resolves the subscription from SID and the account from UID, so
+// both mappings stay in one place to keep the two identifiers from drifting.
+func userTrafficDataFromRanking(item traffic.UserTrafficRanking) dto.UserTrafficData {
+	return dto.UserTrafficData{
+		SID:      item.SubscribeId,
+		UID:      item.UserId,
+		Upload:   item.Upload,
+		Download: item.Download,
+	}
+}
+
+func userTrafficDataFromRankLog(item log.UserTraffic) dto.UserTrafficData {
+	return dto.UserTrafficData{
+		SID:      item.SubscribeId,
+		UID:      item.UserId,
+		Upload:   item.Upload,
+		Download: item.Download,
+	}
+}
+
 type QueryServerTotalDataLogic struct {
 	logger.Logger
 	ctx  context.Context
@@ -105,11 +125,7 @@ func (l *QueryServerTotalDataLogic) QueryServerTotalData() (resp *dto.ServerTota
 	// Build today user traffic ranking
 	var userTodayTrafficRanking []dto.UserTrafficData
 	for _, item := range todayTop10User {
-		userTodayTrafficRanking = append(userTodayTrafficRanking, dto.UserTrafficData{
-			SID:      item.SubscribeId,
-			Upload:   item.Upload,
-			Download: item.Download,
-		})
+		userTodayTrafficRanking = append(userTodayTrafficRanking, userTrafficDataFromRanking(item))
 	}
 
 	// Query yesterday user traffic rank log
@@ -135,11 +151,7 @@ func (l *QueryServerTotalDataLogic) QueryServerTotalData() (resp *dto.ServerTota
 		}
 		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 		for _, k := range keys {
-			yesterdayUserRankData = append(yesterdayUserRankData, dto.UserTrafficData{
-				SID:      rank.Rank[k].SubscribeId,
-				Upload:   rank.Rank[k].Upload,
-				Download: rank.Rank[k].Download,
-			})
+			yesterdayUserRankData = append(yesterdayUserRankData, userTrafficDataFromRankLog(rank.Rank[k]))
 		}
 	}
 

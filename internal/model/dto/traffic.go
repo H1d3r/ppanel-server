@@ -143,7 +143,11 @@ type UserTraffic struct {
 }
 
 type UserTrafficData struct {
+	// SID identifies the user_subscribe row the traffic was billed to, UID the
+	// user owning it. UID is carried separately so the console can still name
+	// the user after the subscription row is gone.
 	SID      int64 `json:"sid"`
+	UID      int64 `json:"uid"`
 	Upload   int64 `json:"upload"`
 	Download int64 `json:"download"`
 }
