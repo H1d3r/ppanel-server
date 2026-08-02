@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
@@ -25,6 +25,10 @@ type fakeTelegramMessenger struct {
 func (m *fakeTelegramMessenger) Send(chatID int64, message string) error {
 	m.messages = append(m.messages, sentTelegramMessage{chatID: chatID, message: message})
 	return nil
+}
+
+func (m *fakeTelegramMessenger) SendMarkdown(chatID int64, message string) error {
+	return m.Send(chatID, message)
 }
 
 type fakeTelegramActions struct {
@@ -90,12 +94,12 @@ func (r *fakeTelegramAdminAuth) FindUserAuthMethodByOpenID(_ context.Context, _,
 	return &copy, nil
 }
 
-func telegramCommand(chatID int64, command string) *tgbotapi.Message {
-	return &tgbotapi.Message{
-		Chat: &tgbotapi.Chat{ID: chatID},
+func telegramCommand(chatID int64, command string) *models.Message {
+	return &models.Message{
+		Chat: models.Chat{ID: chatID},
 		Text: command,
-		Entities: []tgbotapi.MessageEntity{{
-			Type:   "bot_command",
+		Entities: []models.MessageEntity{{
+			Type:   models.MessageEntityTypeBotCommand,
 			Offset: 0,
 			Length: len(command),
 		}},

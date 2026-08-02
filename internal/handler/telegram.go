@@ -5,11 +5,10 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/result"
-	"github.com/perfect-panel/server/pkg/tool"
+	"github.com/perfect-panel/server/pkg/telegramsecret"
 )
 
 func RegisterTelegramHandlers(router *server.Hertz, serverCtx *svc.ServiceContext) {
@@ -28,20 +27,23 @@ func RegisterTelegramHandlers(router *server.Hertz, serverCtx *svc.ServiceContex
 // @Router /v1/telegram/webhook [post]
 func TelegramHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
-		// auth secret
-		secret := ctx.Query("secret")
-		if secret != tool.Md5Encode(svcCtx.Config.Telegram.BotToken, false) {
-			logger.WithContext(c).Error("[TelegramHandler] Secret is wrong", logger.Field("request secret", secret), logger.Field("config secret", tool.Md5Encode(svcCtx.Config.Telegram.BotToken, false)), logger.Field("token", svcCtx.Config.Telegram.BotToken))
+		// Telegram echoes back the secret registered with setWebhook. The
+		// comparison is constant-time and the log line reveals neither the
+		// expected secret nor the bot token.
+		token := svcCtx.Config.Telegram.BotToken
+		secret := string(ctx.GetHeader("X-Telegram-Bot-Api-Secret-Token"))
+		if token == "" || !telegramsecret.Equal(secret, telegramsecret.Derive(token)) {
+			logger.WithContext(c).Error("[TelegramHandler] webhook secret mismatch")
 			ctx.Abort()
 			result.HttpResult(ctx, nil, nil)
 			return
 		}
-		var request tgbotapi.Update
-		if err := ctx.BindJSON(&request); err != nil {
-			logger.WithContext(c).Error("[TelegramHandler] Failed to bind request", logger.Field("error", err.Error()))
-			ctx.Abort()
-			result.HttpResult(ctx, nil, err)
+		// A payload Telegram signed correctly but this side cannot process is
+		// logged and acknowledged: returning an error would only make
+		// Telegram redeliver the same payload.
+		if err := svcCtx.Notification.HandleTelegramWebhook(c, ctx.Request.Body()); err != nil {
+			logger.WithContext(c).Error("[TelegramHandler] handle update failed", logger.Field("error", err.Error()))
 		}
-		svcCtx.Notification.HandleTelegramUpdate(c, &request)
+		result.HttpResult(ctx, nil, nil)
 	}
 }

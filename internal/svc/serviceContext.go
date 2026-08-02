@@ -21,7 +21,7 @@ import (
 	"github.com/perfect-panel/server/pkg/nodeMultiplier"
 	"github.com/perfect-panel/server/pkg/orm"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbot "github.com/go-telegram/bot"
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 )
@@ -52,7 +52,7 @@ type ServiceContext struct {
 	// configuration changed; assigned by the transport server alongside
 	// Restart (the initialize package cannot be imported here).
 	ReinitSubsystem       func(subsystem string)
-	TelegramBot           *tgbotapi.BotAPI
+	TelegramBot           *tgbot.Bot
 	NodeMultiplierManager *nodeMultiplier.Manager
 	AuthLimiter           *limit.PeriodLimit
 	DeviceManager         *device.DeviceManager

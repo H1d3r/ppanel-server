@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbot "github.com/go-telegram/bot"
 	"strconv"
 	"time"
 
@@ -287,7 +287,7 @@ func (n lifecycleNotifier) NotifySubscriptionExpiring(ctx context.Context, userI
 	if planName == "" {
 		planName = "订阅"
 	}
-	text, err := tool.RenderTemplateToString(notification.SubscribeExpireNotify, map[string]string{
+	text, err := notification.RenderTelegramMarkdown(notification.SubscribeExpireNotify, map[string]string{
 		"SubscribeName": planName,
 		"ExpiredAt":     expireAt.Format("2006-01-02 15:04:05"),
 		"RenewalAmount": fmt.Sprintf("%.2f", float64(renewalAmount)/100),
@@ -485,7 +485,7 @@ func newEventBus(store repository.Store, srv *ServiceContext) *eventbus.Bus {
 // call.
 func newNotificationModule(store repository.Store, srv *ServiceContext) notification.Service {
 	return notification.New(notification.Deps{
-		Bot:           func() *tgbotapi.BotAPI { return srv.TelegramBot },
+		Bot:           func() *tgbot.Bot { return srv.TelegramBot },
 		Redis:         srv.Redis,
 		Users:         store.User(),
 		UserAuth:      store.UserAuth(),

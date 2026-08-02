@@ -15,7 +15,6 @@ require (
 	github.com/go-playground/validator/v10 v10.24.0
 	github.com/go-resty/resty/v2 v2.15.3
 	github.com/go-sql-driver/mysql v1.8.1
-	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/gofrs/uuid/v5 v5.3.0
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
@@ -56,6 +55,7 @@ require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/cloudwego/hertz v0.10.4
 	github.com/fatih/color v1.18.0
+	github.com/go-telegram/bot v1.22.0
 	github.com/goccy/go-json v0.10.4
 	github.com/golang-migrate/migrate/v4 v4.18.2
 	github.com/lib/pq v1.10.9

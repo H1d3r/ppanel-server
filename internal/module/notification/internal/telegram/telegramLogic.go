@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/perfect-panel/server/pkg/tool"
 	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -31,12 +31,12 @@ func NewTelegramLogic(ctx context.Context, deps TelegramLogicDependencies) *Tele
 	}
 }
 
-func (l *TelegramLogic) TelegramLogic(req *tgbotapi.Update) {
+func (l *TelegramLogic) TelegramLogic(req *models.Update) {
 	if req.Message == nil || req.Message.Text == "" {
 		l.Logger.Error("[TelegramLogic] Message is empty")
 		return
 	}
-	cmd := req.Message.Command()
+	cmd := messageCommand(req.Message)
 	if isAdminCommand(cmd) {
 		l.deps.Admin.Handle(req.Message)
 		return
@@ -44,15 +44,15 @@ func (l *TelegramLogic) TelegramLogic(req *tgbotapi.Update) {
 	switch cmd {
 	case "traffic":
 		if err := l.traffic(req.Message.Chat.ID); err != nil {
-			l.Logger.Error("[TelegramLogic] Traffic Error: ", logger.Field("error", err.Error()), logger.Field("command", req.Message.Command()), logger.Field("chat_id", req.Message.Chat.ID))
+			l.Logger.Error("[TelegramLogic] Traffic Error: ", logger.Field("error", err.Error()), logger.Field("command", cmd), logger.Field("chat_id", req.Message.Chat.ID))
 		}
 	case "bind":
-		if err := l.bind(req.Message.Chat.ID, req.Message.CommandArguments()); err != nil {
-			l.Logger.Error("[TelegramLogic] Bind Error: ", logger.Field("error", err.Error()), logger.Field("command", req.Message.Command()), logger.Field("chat_id", req.Message.Chat.ID))
+		if err := l.bind(req.Message.Chat.ID, commandArguments(req.Message)); err != nil {
+			l.Logger.Error("[TelegramLogic] Bind Error: ", logger.Field("error", err.Error()), logger.Field("command", cmd), logger.Field("chat_id", req.Message.Chat.ID))
 		}
 	case "start":
 		if err := l.start(req); err != nil {
-			l.Logger.Error("[TelegramLogic] Start Error: ", logger.Field("error", err.Error()), logger.Field("command", req.Message.Command()), logger.Field("chat_id", req.Message.Chat.ID), logger.Field("text", req.Message.Text))
+			l.Logger.Error("[TelegramLogic] Start Error: ", logger.Field("error", err.Error()), logger.Field("command", cmd), logger.Field("chat_id", req.Message.Chat.ID), logger.Field("text", req.Message.Text))
 		}
 	}
 }
@@ -73,14 +73,31 @@ func (l *TelegramLogic) sendMessage(message string, userID int64) error {
 	return l.deps.Messenger.Send(userID, message)
 }
 
-type telegramBotMessenger struct {
-	bot *tgbotapi.BotAPI
+func (l *TelegramLogic) sendMarkdown(message string, userID int64) error {
+	return l.deps.Messenger.SendMarkdown(userID, message)
 }
 
+type telegramBotMessenger struct {
+	bot *tgbot.Bot
+}
+
+// Send delivers plain text: command replies and administrator output carry
+// no formatting, and plain text cannot be broken by the data inside it.
 func (m telegramBotMessenger) Send(chatID int64, message string) error {
-	msg := tgbotapi.NewMessage(chatID, message)
-	msg.ParseMode = "Markdown"
-	_, err := m.bot.Send(msg)
+	_, err := m.bot.SendMessage(context.Background(), &tgbot.SendMessageParams{
+		ChatID: chatID,
+		Text:   message,
+	})
+	return err
+}
+
+// SendMarkdown delivers MarkdownV2 built by RenderMarkdownV2.
+func (m telegramBotMessenger) SendMarkdown(chatID int64, message string) error {
+	_, err := m.bot.SendMessage(context.Background(), &tgbot.SendMessageParams{
+		ChatID:    chatID,
+		Text:      message,
+		ParseMode: models.ParseModeMarkdown,
+	})
 	return err
 }
 
@@ -88,20 +105,19 @@ func (m telegramBotMessenger) Send(chatID int64, message string) error {
 // scope every user sees; otherwise the menu applies to that chat alone, which
 // is how administrator commands stay hidden from ordinary users.
 func (m telegramBotMessenger) SetCommands(chatID int64, commands []Command) error {
-	botCommands := make([]tgbotapi.BotCommand, 0, len(commands))
+	botCommands := make([]models.BotCommand, 0, len(commands))
 	for _, command := range commands {
-		botCommands = append(botCommands, tgbotapi.BotCommand{
+		botCommands = append(botCommands, models.BotCommand{
 			Command:     command.Command,
 			Description: command.Description,
 		})
 	}
 
-	config := tgbotapi.NewSetMyCommands(botCommands...)
+	params := &tgbot.SetMyCommandsParams{Commands: botCommands}
 	if chatID != 0 {
-		config = tgbotapi.NewSetMyCommandsWithScope(
-			tgbotapi.NewBotCommandScopeChat(chatID), botCommands...)
+		params.Scope = &models.BotCommandScopeChat{ChatID: chatID}
 	}
-	_, err := m.bot.Request(config)
+	_, err := m.bot.SetMyCommands(context.Background(), params)
 	return err
 }
 
@@ -204,7 +220,7 @@ func (l *TelegramLogic) bind(userId int64, token string) error {
 		l.Errorw("TelegramLogic bind UpdateUserCache Error", logger.Field("error", err.Error()), logger.Field("bindUserId", bindUserId))
 	}
 
-	text, err := tool.RenderTemplateToString(BindNotify, map[string]string{
+	text, err := RenderMarkdownV2(BindNotify, map[string]string{
 		"Id":   strconv.FormatInt(bindUserId, 10),
 		"Time": timeutil.Now().Format("2006-01-02 15:04:05"),
 	})
@@ -212,15 +228,15 @@ func (l *TelegramLogic) bind(userId int64, token string) error {
 		l.Errorw("TelegramLogic bind RenderTemplate Error", logger.Field("error", err.Error()))
 		return l.sendMessage("Bound successfully!", userId)
 	}
-	return l.sendMessage(text, userId)
+	return l.sendMarkdown(text, userId)
 }
 
-func (l *TelegramLogic) start(req *tgbotapi.Update) error {
-	if req.Message.CommandArguments() == "" {
+func (l *TelegramLogic) start(req *models.Update) error {
+	bindToken := commandArguments(req.Message)
+	if bindToken == "" {
 		return l.sendMessage("Please bind account!", req.Message.Chat.ID)
 	}
 
-	bindToken := req.Message.CommandArguments()
 	chatIdStr := strconv.FormatInt(req.Message.Chat.ID, 10)
 
 	// Resolve the single-use binding token issued by the panel
@@ -300,7 +316,7 @@ func (l *TelegramLogic) start(req *tgbotapi.Update) error {
 		l.Errorw("TelegramLogic start UpdateUserCache Error", logger.Field("error", err.Error()), logger.Field("userId", userId))
 	}
 
-	text, err := tool.RenderTemplateToString(BindNotify, map[string]string{
+	text, err := RenderMarkdownV2(BindNotify, map[string]string{
 		"Id":   strconv.FormatInt(userId, 10),
 		"Time": timeutil.Now().Format("2006-01-02 15:04:05"),
 	})
@@ -308,5 +324,5 @@ func (l *TelegramLogic) start(req *tgbotapi.Update) error {
 		l.Errorw("TelegramLogic start RenderTemplate Error", logger.Field("error", err.Error()))
 		return l.sendMessage("Bound successfully!", req.Message.Chat.ID)
 	}
-	return l.sendMessage(text, req.Message.Chat.ID)
+	return l.sendMarkdown(text, req.Message.Chat.ID)
 }

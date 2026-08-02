@@ -6,14 +6,14 @@ import (
 	"strings"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/perfect-panel/server/pkg/tool"
 )
 
 // DailyOrderReportLogic pushes the previous day's settlement summary to the
@@ -39,7 +39,7 @@ func (l *DailyOrderReportLogic) ProcessTask(ctx context.Context, _ *asynq.Task) 
 		return err
 	}
 
-	text, err := tool.RenderTemplateToString(notification.AdminOrderDaily, map[string]string{
+	text, err := notification.RenderTelegramMarkdown(notification.AdminOrderDaily, map[string]string{
 		"Date":      report.Date.Format(time.DateOnly),
 		"Orders":    fmt.Sprintf("%d", report.Orders),
 		"Amount":    formatReportAmount(report.Amount),
@@ -68,9 +68,11 @@ func (l *DailyOrderReportLogic) ProcessTask(ctx context.Context, _ *asynq.Task) 
 		if !ok {
 			continue
 		}
-		msg := tgbotapi.NewMessage(chatID, text)
-		msg.ParseMode = "markdown"
-		if _, err := bot.Send(msg); err != nil {
+		if _, err := bot.SendMessage(ctx, &tgbot.SendMessageParams{
+			ChatID:    chatID,
+			Text:      text,
+			ParseMode: models.ParseModeMarkdown,
+		}); err != nil {
 			// One unreachable administrator must not stop the others.
 			log.Errorw("[DailyOrderReport] send failed",
 				logger.Field("error", err.Error()),

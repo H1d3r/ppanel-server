@@ -8,9 +8,13 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-// TelegramMessenger sends a response to a Telegram chat.
+// TelegramMessenger sends a response to a Telegram chat. Send delivers plain
+// text; SendMarkdown delivers MarkdownV2 produced by RenderMarkdownV2, and
+// must never receive unescaped dynamic data — Telegram rejects the whole
+// message over one stray reserved character.
 type TelegramMessenger interface {
 	Send(chatID int64, message string) error
+	SendMarkdown(chatID int64, message string) error
 }
 
 // TelegramAdminActionStore persists short-lived confirmations for destructive

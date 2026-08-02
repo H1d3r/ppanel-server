@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
@@ -32,9 +32,9 @@ type tgAction struct {
 }
 
 // Handle runs an administrator command.
-func (a *TelegramAdmin) Handle(msg *tgbotapi.Message) {
-	rawCmd := msg.Command()
-	arg := msg.CommandArguments()
+func (a *TelegramAdmin) Handle(msg *models.Message) {
+	rawCmd := messageCommand(msg)
+	arg := commandArguments(msg)
 
 	// Step 1: Admin check
 	adminUser, reject := a.authenticate(msg)
@@ -97,7 +97,7 @@ func (a *TelegramAdmin) Handle(msg *tgbotapi.Message) {
 	}
 }
 
-func (a *TelegramAdmin) adminHelp(msg *tgbotapi.Message) {
+func (a *TelegramAdmin) adminHelp(msg *models.Message) {
 	help := `🤖 Admin Commands
 
 📊 仪表盘
@@ -129,7 +129,7 @@ func (a *TelegramAdmin) adminHelp(msg *tgbotapi.Message) {
 // Dashboard
 // ─────────────────────────────────────
 
-func (a *TelegramAdmin) dashboard(msg *tgbotapi.Message, adminUser *user.User) {
+func (a *TelegramAdmin) dashboard(msg *models.Message, adminUser *user.User) {
 	ctx := a.ctx
 	now := timeutil.Now()
 
@@ -167,7 +167,7 @@ func (a *TelegramAdmin) dashboard(msg *tgbotapi.Message, adminUser *user.User) {
 
 func ticketStatusPtr(s uint8) *uint8 { return &s }
 
-func (a *TelegramAdmin) listTickets(msg *tgbotapi.Message, adminUser *user.User, page int, status *uint8) {
+func (a *TelegramAdmin) listTickets(msg *models.Message, adminUser *user.User, page int, status *uint8) {
 	pageSize := 10
 	total, list, err := a.deps.Tickets.QueryTicketList(a.ctx, page, pageSize, 0, status, "")
 	if err != nil {
@@ -201,7 +201,7 @@ func (a *TelegramAdmin) listTickets(msg *tgbotapi.Message, adminUser *user.User,
 	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) ticketDetail(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) ticketDetail(msg *models.Message, adminUser *user.User, idStr string) {
 	if idStr == "" {
 		_ = a.sendMessage("用法：/tk <工单ID>", msg.Chat.ID)
 		return
@@ -246,7 +246,7 @@ func (a *TelegramAdmin) ticketDetail(msg *tgbotapi.Message, adminUser *user.User
 	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) replyTicket(msg *tgbotapi.Message, adminUser *user.User, args string) {
+func (a *TelegramAdmin) replyTicket(msg *models.Message, adminUser *user.User, args string) {
 	parts := strings.SplitN(args, " ", 2)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		_ = a.sendMessage("用法：/rp <工单ID> <回复内容>", msg.Chat.ID)
@@ -279,7 +279,7 @@ func (a *TelegramAdmin) replyTicket(msg *tgbotapi.Message, adminUser *user.User,
 	_ = a.sendMessage(fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(tk.Status)), msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) confirmCloseTicket(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) confirmCloseTicket(msg *models.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
@@ -299,7 +299,7 @@ func (a *TelegramAdmin) confirmCloseTicket(msg *tgbotapi.Message, adminUser *use
 		msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) reopenTicket(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) reopenTicket(msg *models.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		_ = a.sendMessage("ID格式错误。", msg.Chat.ID)
@@ -317,7 +317,7 @@ func (a *TelegramAdmin) reopenTicket(msg *tgbotapi.Message, adminUser *user.User
 // User
 // ─────────────────────────────────────
 
-func (a *TelegramAdmin) lookupUser(msg *tgbotapi.Message, input string) (*user.User, bool) {
+func (a *TelegramAdmin) lookupUser(msg *models.Message, input string) (*user.User, bool) {
 	if input == "" {
 		_ = a.sendMessage("用法：/user <邮箱|ID>", msg.Chat.ID)
 		return nil, false
@@ -339,7 +339,7 @@ func (a *TelegramAdmin) lookupUser(msg *tgbotapi.Message, input string) (*user.U
 	return nil, false
 }
 
-func (a *TelegramAdmin) authenticate(msg *tgbotapi.Message) (admin *user.User, rejectMsg string) {
+func (a *TelegramAdmin) authenticate(msg *models.Message) (admin *user.User, rejectMsg string) {
 	chatID := strconv.FormatInt(msg.Chat.ID, 10)
 
 	auth, err := a.deps.UserAuth.FindUserAuthMethodByOpenID(a.ctx, "telegram", chatID)
@@ -380,7 +380,7 @@ func (a *TelegramAdmin) userEmail(userId int64) (string, error) {
 	return fmt.Sprintf("ID:%d", userId), nil
 }
 
-func (a *TelegramAdmin) userDetail(msg *tgbotapi.Message, adminUser *user.User, input string) {
+func (a *TelegramAdmin) userDetail(msg *models.Message, adminUser *user.User, input string) {
 	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
@@ -455,7 +455,7 @@ func (a *TelegramAdmin) userDetail(msg *tgbotapi.Message, adminUser *user.User, 
 	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) userSubs(msg *tgbotapi.Message, adminUser *user.User, input string) {
+func (a *TelegramAdmin) userSubs(msg *models.Message, adminUser *user.User, input string) {
 	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
@@ -482,7 +482,7 @@ func (a *TelegramAdmin) userSubs(msg *tgbotapi.Message, adminUser *user.User, in
 	_ = a.sendMessage(sb.String(), msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) userLogs(msg *tgbotapi.Message, adminUser *user.User, input string) {
+func (a *TelegramAdmin) userLogs(msg *models.Message, adminUser *user.User, input string) {
 	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
@@ -526,7 +526,7 @@ func (a *TelegramAdmin) userLogs(msg *tgbotapi.Message, adminUser *user.User, in
 // Mutations (with confirm)
 // ─────────────────────────────────────
 
-func (a *TelegramAdmin) confirmResetTraffic(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) confirmResetTraffic(msg *models.Message, adminUser *user.User, idStr string) {
 	subID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		_ = a.sendMessage("订阅ID格式错误。", msg.Chat.ID)
@@ -544,7 +544,7 @@ func (a *TelegramAdmin) confirmResetTraffic(msg *tgbotapi.Message, adminUser *us
 		msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) confirmToggleSub(msg *tgbotapi.Message, adminUser *user.User, idStr string) {
+func (a *TelegramAdmin) confirmToggleSub(msg *models.Message, adminUser *user.User, idStr string) {
 	subID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		_ = a.sendMessage("订阅ID格式错误。", msg.Chat.ID)
@@ -565,7 +565,7 @@ func (a *TelegramAdmin) confirmToggleSub(msg *tgbotapi.Message, adminUser *user.
 		msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) confirmBanUser(msg *tgbotapi.Message, adminUser *user.User, input string) {
+func (a *TelegramAdmin) confirmBanUser(msg *models.Message, adminUser *user.User, input string) {
 	u, ok := a.lookupUser(msg, input)
 	if !ok {
 		return
@@ -585,7 +585,7 @@ func (a *TelegramAdmin) confirmBanUser(msg *tgbotapi.Message, adminUser *user.Us
 		msg.Chat.ID)
 }
 
-func (a *TelegramAdmin) confirmAction(msg *tgbotapi.Message, adminUser *user.User, actionID string) {
+func (a *TelegramAdmin) confirmAction(msg *models.Message, adminUser *user.User, actionID string) {
 	act, ok := a.loadAction(actionID, adminUser.Id)
 	if !ok {
 		_ = a.sendMessage("操作已过期或无效。", msg.Chat.ID)

@@ -6,13 +6,22 @@ import (
 )
 
 type recordingTelegramMessenger struct {
-	chatID  int64
-	message string
+	chatID   int64
+	message  string
+	markdown bool
 }
 
 func (m *recordingTelegramMessenger) Send(chatID int64, message string) error {
 	m.chatID = chatID
 	m.message = message
+	m.markdown = false
+	return nil
+}
+
+func (m *recordingTelegramMessenger) SendMarkdown(chatID int64, message string) error {
+	m.chatID = chatID
+	m.message = message
+	m.markdown = true
 	return nil
 }
 

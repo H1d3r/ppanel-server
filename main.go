@@ -15,8 +15,8 @@ import "github.com/perfect-panel/server/cmd"
 // @in query
 // @name secret_key
 // @securityDefinitions.apikey TelegramSecret
-// @in query
-// @name secret
+// @in header
+// @name X-Telegram-Bot-Api-Secret-Token
 func main() {
 	cmd.Execute()
 }

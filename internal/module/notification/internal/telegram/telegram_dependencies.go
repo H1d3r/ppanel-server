@@ -4,7 +4,8 @@ import (
 	"context"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 )
@@ -26,7 +27,7 @@ type TelegramRedisStore interface {
 
 // TelegramAdminHandler handles administrator Telegram commands.
 type TelegramAdminHandler interface {
-	Handle(msg *tgbotapi.Message)
+	Handle(msg *models.Message)
 }
 
 // TelegramLogicDependencies explicitly declares the collaborators used by
@@ -41,13 +42,13 @@ type TelegramLogicDependencies struct {
 
 // NewTelegramBotMessenger adapts a Telegram Bot API client to the command
 // messenger port.
-func NewTelegramBotMessenger(bot *tgbotapi.BotAPI) TelegramMessenger {
+func NewTelegramBotMessenger(bot *tgbot.Bot) TelegramMessenger {
 	return telegramBotMessenger{bot: bot}
 }
 
 // NewTelegramBotCommandRegistrar adapts a Telegram Bot API client to the
 // command-menu port.
-func NewTelegramBotCommandRegistrar(bot *tgbotapi.BotAPI) TelegramCommandRegistrar {
+func NewTelegramBotCommandRegistrar(bot *tgbot.Bot) TelegramCommandRegistrar {
 	return telegramBotMessenger{bot: bot}
 }
 
