@@ -126,6 +126,9 @@ type Deps struct {
 	QuotaTargets  SubscriptionSelector
 	Queue         MarketingQueue
 	EmailStopper  BatchEmailStopper
+	// TicketNotify mirrors ticket lifecycle into the Telegram admin group;
+	// nil disables the mirror. Best-effort by contract.
+	TicketNotify ticket.Notifier
 }
 
 // NewRepoBuilder exports the module-owned repository implementations for
@@ -147,7 +150,7 @@ func New(deps Deps) Service {
 		announcements: announcement.NewService(deps.Announcements),
 		ads:           ads.NewService(deps.Ads),
 		documents:     document.NewService(deps.Documents, deps.Subscriptions),
-		tickets:       ticket.NewService(deps.Tickets),
+		tickets:       ticket.NewService(deps.Tickets, deps.TicketNotify),
 		marketing:     marketing.NewService(deps.Tasks, deps.Recipients, deps.QuotaTargets, deps.Queue, deps.EmailStopper),
 	}
 }

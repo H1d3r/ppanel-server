@@ -95,10 +95,12 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		ExchangeRate: rate,
 		GeoIP:        geoIP,
 		Store:        store,
-		Support:      newSupportModule(store, queue),
 		//NodeCache:   cache.NewNodeCacheClient(rds),
 		AuthLimiter: authLimiter,
 	}
+	// Support takes srv for the ticket→Telegram mirror; the adapter reads
+	// srv.Notification lazily, so constructing it before Notification is safe.
+	srv.Support = newSupportModule(store, queue, srv)
 	srv.Billing = newBillingModule(c, store, queue, rds, rate, srv)
 	srv.Platform = newPlatformModule(store, srv)
 	srv.DeviceManager = NewDeviceManager(srv)

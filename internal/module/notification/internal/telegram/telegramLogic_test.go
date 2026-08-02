@@ -7,19 +7,22 @@ import (
 
 type recordingTelegramMessenger struct {
 	chatID   int64
+	threadID int64
 	message  string
 	markdown bool
 }
 
-func (m *recordingTelegramMessenger) Send(chatID int64, message string) error {
+func (m *recordingTelegramMessenger) Send(chatID, threadID int64, message string) error {
 	m.chatID = chatID
+	m.threadID = threadID
 	m.message = message
 	m.markdown = false
 	return nil
 }
 
-func (m *recordingTelegramMessenger) SendMarkdown(chatID int64, message string) error {
+func (m *recordingTelegramMessenger) SendMarkdown(chatID, threadID int64, message string) error {
 	m.chatID = chatID
+	m.threadID = threadID
 	m.message = message
 	m.markdown = true
 	return nil

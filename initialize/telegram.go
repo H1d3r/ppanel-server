@@ -3,6 +3,8 @@ package initialize
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -100,6 +102,18 @@ func Telegram(svc *svc.ServiceContext) {
 		return
 	}
 
+	// The group id is parsed leniently: a malformed value logs and behaves
+	// like "no group configured" instead of failing the whole bot.
+	var groupChatID int64
+	if raw := strings.TrimSpace(tgConfig.GroupChatID); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			logger.Errorf("[Init Telegram Config] Group chat id %q is not a number", raw)
+		} else {
+			groupChatID = id
+		}
+	}
+
 	newConfig := config.Telegram{
 		Enable:        method.Enabled != nil && *method.Enabled,
 		BotID:         user.ID,
@@ -107,6 +121,7 @@ func Telegram(svc *svc.ServiceContext) {
 		BotToken:      tgConfig.BotToken,
 		EnableNotify:  tgConfig.EnableNotify,
 		WebHookDomain: tgConfig.WebHookDomain,
+		GroupChatID:   groupChatID,
 	}
 
 	// Pick mode: prefer webhook, fall back to long-polling when no domain or in debug.
@@ -154,6 +169,21 @@ func Telegram(svc *svc.ServiceContext) {
 	// without a menu.
 	if err := svc.Notification.PublishTelegramCommands(); err != nil {
 		logger.Error("[Init Telegram Config] Publish Commands Error: ", logger.Field("error", err.Error()))
+	}
+
+	// The administrators' group hosts the notification topic, the support
+	// and ticket topics, and the admin commands. When it is unusable, group
+	// features switch off rather than degrade: the group is their only
+	// channel by design.
+	if groupChatID != 0 {
+		if err := svc.Notification.SetupTelegramGroup(context.Background()); err != nil {
+			logger.Error("[Init Telegram Config] Admin group unusable, group features disabled",
+				logger.Field("group_chat_id", groupChatID),
+				logger.Field("error", err.Error()))
+			svc.Config.Telegram.GroupChatID = 0
+		} else {
+			logger.Info("[Init Telegram Config] Admin group ready", logger.Field("group_chat_id", groupChatID))
+		}
 	}
 
 	logger.Info("[Init Telegram Config] Telegram init success")

@@ -30,6 +30,9 @@ type Store interface {
 	Subscribe() SubscribeRepo
 	System() SystemRepo
 	Task() TaskRepo
+	// TelegramTopic maps forum topics in the admin Telegram group to the
+	// conversation each carries.
+	TelegramTopic() TelegramTopicRepo
 	Ticket() TicketRepo
 	TrafficLog() TrafficRepo
 	User() UserRepo
@@ -71,6 +74,7 @@ type GormStore struct {
 	identity     IdentityRepos
 	network      NetworkRepos
 	support      SupportRepos
+	notification NotificationRepos
 }
 
 // NewGormStoreWithBuilders assembles the store from the given per-module
@@ -98,6 +102,7 @@ func newGormStore(db *gorm.DB, rds *redis.Client, invalidations *cache.Invalidat
 		OrderStats:        s.billing.OrderStats,
 	})
 	s.support = builders.Support(conn)
+	s.notification = builders.Notification(conn)
 	return s
 }
 
@@ -124,6 +129,7 @@ func (s *GormStore) Payment() PaymentRepo                         { return s.bil
 func (s *GormStore) Subscribe() SubscribeRepo                     { return s.subscription.Plans }
 func (s *GormStore) System() SystemRepo                           { return s.platform.System }
 func (s *GormStore) Task() TaskRepo                               { return s.platform.Tasks }
+func (s *GormStore) TelegramTopic() TelegramTopicRepo             { return s.notification.TelegramTopics }
 func (s *GormStore) Ticket() TicketRepo                           { return s.support.Tickets }
 func (s *GormStore) TrafficLog() TrafficRepo                      { return s.network.Traffic }
 func (s *GormStore) User() UserRepo                               { return s.identity.Users }

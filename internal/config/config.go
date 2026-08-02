@@ -314,6 +314,10 @@ type Telegram struct {
 	BotToken      string `yaml:"BotToken" default:""`
 	EnableNotify  bool   `yaml:"EnableNotify" default:"false"`
 	WebHookDomain string `yaml:"WebHookDomain" default:""`
+	// GroupChatID is the validated administrators' group; zero when the
+	// group is unconfigured or failed validation, which disables every
+	// group-side feature (admin commands, topics, notifications).
+	GroupChatID int64 `yaml:"GroupChatID" default:"0"`
 }
 
 type TLS struct {

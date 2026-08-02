@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/notification"
@@ -16,9 +14,9 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
-// DailyOrderReportLogic pushes the previous day's settlement summary to the
-// administrators who bound Telegram. It reports yesterday because it runs
-// after midnight, when the day it summarises is complete.
+// DailyOrderReportLogic posts the previous day's settlement summary into
+// the admin group's notification topic. It reports yesterday because it
+// runs after midnight, when the day it summarises is complete.
 type DailyOrderReportLogic struct {
 	svc *svc.ServiceContext
 }
@@ -51,41 +49,15 @@ func (l *DailyOrderReportLogic) ProcessTask(ctx context.Context, _ *asynq.Task) 
 		return err
 	}
 
-	admins, err := l.svc.Store.User().QueryAdminUsers(ctx)
-	if err != nil {
-		log.Errorw("[DailyOrderReport] query admin users failed", logger.Field("error", err.Error()))
-		return err
-	}
-	bot := l.svc.TelegramBot
-	if bot == nil {
-		log.Info("[DailyOrderReport] telegram bot is not configured")
+	// The admin group's notification topic is the only administrator
+	// channel; without a usable group the report is skipped, not retried.
+	if err := l.svc.Notification.NotifyAdminsTelegram(ctx, text); err != nil {
+		log.Infow("[DailyOrderReport] report skipped", logger.Field("reason", err.Error()))
 		return nil
-	}
-
-	sent := 0
-	for _, admin := range admins {
-		chatID, ok := findTelegram(admin)
-		if !ok {
-			continue
-		}
-		if _, err := bot.SendMessage(ctx, &tgbot.SendMessageParams{
-			ChatID:    chatID,
-			Text:      text,
-			ParseMode: models.ParseModeMarkdown,
-		}); err != nil {
-			// One unreachable administrator must not stop the others.
-			log.Errorw("[DailyOrderReport] send failed",
-				logger.Field("error", err.Error()),
-				logger.Field("user_id", admin.Id),
-			)
-			continue
-		}
-		sent++
 	}
 	log.Infow("[DailyOrderReport] report delivered",
 		logger.Field("date", report.Date.Format(time.DateOnly)),
 		logger.Field("orders", report.Orders),
-		logger.Field("recipients", sent),
 	)
 	return nil
 }

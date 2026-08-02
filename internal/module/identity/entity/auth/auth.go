@@ -106,6 +106,10 @@ type TelegramAuthConfig struct {
 	BotToken      string `json:"bot_token"`
 	EnableNotify  bool   `json:"enable_notify"`
 	WebHookDomain string `json:"webhook_domain"`
+	// GroupChatID is the administrators' forum-enabled supergroup (e.g.
+	// "-1001234567890"). It is a string because the admin panel round-trips
+	// this config as JSON text. Empty disables every group feature.
+	GroupChatID string `json:"group_chat_id"`
 }
 
 func (l *TelegramAuthConfig) Marshal() string {

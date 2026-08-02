@@ -98,12 +98,13 @@ func TestStartRejectsSessionIdAsToken(t *testing.T) {
 		fmt.Sprintf("%v:%v", config.SessionIdKey, token): "7",
 	})
 
-	update := &models.Update{Message: &models.Message{
+	msg := &models.Message{
 		Text:     "/start " + token,
-		Chat:     models.Chat{ID: 1001},
+		Chat:     models.Chat{ID: 1001, Type: models.ChatTypePrivate},
+		From:     &models.User{ID: 1001},
 		Entities: []models.MessageEntity{{Type: models.MessageEntityTypeBotCommand, Offset: 0, Length: 6}},
-	}}
-	if err := logic.start(update); err != nil {
+	}
+	if err := logic.start(msg); err != nil {
 		t.Fatalf("start error = %v", err)
 	}
 	if len(auths.inserted) != 0 {

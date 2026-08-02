@@ -16,12 +16,25 @@ import (
 	"github.com/pkg/errors"
 )
 
-type Service struct {
-	repo repository.TicketRepo
+// Notifier mirrors ticket lifecycle into other channels — today the forum
+// topic in the Telegram admin group. Implementations are best-effort by
+// contract: they never fail the ticket operation, so the methods return
+// nothing and do their own logging.
+type Notifier interface {
+	TicketCreated(ctx context.Context, t *entity.Ticket)
+	TicketReplied(ctx context.Context, ticketID int64, from, content string)
+	TicketStatusChanged(ctx context.Context, ticketID int64, status uint8)
 }
 
-func NewService(repo repository.TicketRepo) *Service {
-	return &Service{repo: repo}
+type Service struct {
+	repo   repository.TicketRepo
+	notify Notifier
+}
+
+// NewService builds the ticket service; notify may be nil when no mirror
+// channel is wired.
+func NewService(repo repository.TicketRepo, notify Notifier) *Service {
+	return &Service{repo: repo, notify: notify}
 }
 
 func currentUser(ctx context.Context) (*user.User, error) {
@@ -51,6 +64,9 @@ func (s *Service) CreateFollow(ctx context.Context, req *dto.CreateTicketFollowR
 	if err := s.repo.UpdateTicketStatus(ctx, req.TicketId, 0, entity.Waiting); err != nil {
 		logger.WithContext(ctx).Errorw("[CreateTicketFollow] Database update error", logger.Field("error", err.Error()), logger.Field("status", entity.Waiting))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket status failed: %v", err.Error())
+	}
+	if s.notify != nil {
+		s.notify.TicketReplied(ctx, req.TicketId, req.From, req.Content)
 	}
 	return nil
 }
@@ -85,6 +101,9 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateTicketStatusR
 		logger.WithContext(ctx).Errorw("[UpdateTicketStatus] Update Database Error: ", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket error: %v", err.Error())
 	}
+	if s.notify != nil {
+		s.notify.TicketStatusChanged(ctx, req.Id, *req.Status)
+	}
 	return nil
 }
 
@@ -93,13 +112,18 @@ func (s *Service) CreateUserTicket(ctx context.Context, req *dto.CreateUserTicke
 	if err != nil {
 		return err
 	}
-	if err := s.repo.Insert(ctx, &entity.Ticket{
+	// Insert backfills the id, which the mirror channel needs for its topic.
+	t := &entity.Ticket{
 		Title:       req.Title,
 		Description: req.Description,
 		UserId:      u.Id,
 		Status:      entity.Pending,
-	}); err != nil {
+	}
+	if err := s.repo.Insert(ctx, t); err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert ticket error: %v", err.Error())
+	}
+	if s.notify != nil {
+		s.notify.TicketCreated(ctx, t)
 	}
 	return nil
 }
@@ -132,6 +156,9 @@ func (s *Service) CreateUserFollow(ctx context.Context, req *dto.CreateUserTicke
 	if err := s.repo.UpdateTicketStatus(ctx, req.TicketId, u.Id, entity.Pending); err != nil {
 		logger.WithContext(ctx).Errorw("[CreateUserTicketFollow] Database update error", logger.Field("error", err.Error()), logger.Field("status", entity.Pending))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket status failed: %v", err.Error())
+	}
+	if s.notify != nil {
+		s.notify.TicketReplied(ctx, req.TicketId, req.From, req.Content)
 	}
 	return nil
 }
@@ -181,6 +208,9 @@ func (s *Service) UpdateUserStatus(ctx context.Context, req *dto.UpdateUserTicke
 	if err := s.repo.UpdateTicketStatus(ctx, req.Id, u.Id, *req.Status); err != nil {
 		logger.WithContext(ctx).Errorw("[UpdateUserTicketStatusLogic] Database Error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket error: %v", err.Error())
+	}
+	if s.notify != nil {
+		s.notify.TicketStatusChanged(ctx, req.Id, *req.Status)
 	}
 	return nil
 }

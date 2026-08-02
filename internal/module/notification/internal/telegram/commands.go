@@ -1,11 +1,5 @@
 package telegram
 
-import (
-	"sync"
-
-	"github.com/perfect-panel/server/pkg/logger"
-)
-
 // Command describes one entry of the bot's command menu. It mirrors
 // Telegram's BotCommand without binding this package to the bot library.
 type Command struct {
@@ -16,8 +10,11 @@ type Command struct {
 // TelegramCommandRegistrar publishes the command menu Telegram shows in the
 // message composer. A zero chatID addresses the default scope, which every
 // user sees; a non-zero chatID scopes the menu to that chat.
+// SetGroupAdminCommands scopes the menu to a group's administrators, which
+// is how the administrator commands stay invisible to ordinary members.
 type TelegramCommandRegistrar interface {
 	SetCommands(chatID int64, commands []Command) error
+	SetGroupAdminCommands(chatID int64, commands []Command) error
 }
 
 // PublicCommands is the menu every user gets: account binding, plus the help
@@ -32,9 +29,11 @@ func PublicCommands() []Command {
 	}
 }
 
-// AdminCommands is the menu registered for an administrator's own chat. It
-// deliberately excludes /confirm_* and /cancel_* because those carry a
-// generated action id and are only ever offered inline.
+// AdminCommands is the menu published to the administrators of the admin
+// group (chat_administrators scope), where the administrator commands are
+// the only place they work. It deliberately excludes /confirm_* and
+// /cancel_* because those carry a generated action id and are only ever
+// offered inline.
 func AdminCommands() []Command {
 	return append(PublicCommands(),
 		Command{Command: "dash", Description: "数据看板"},
@@ -51,27 +50,4 @@ func AdminCommands() []Command {
 		Command{Command: "toggle", Description: "启停订阅：/toggle <订阅ID>"},
 		Command{Command: "ban", Description: "封禁用户：/ban <邮箱或ID>"},
 	)
-}
-
-// adminMenuChats remembers the chats whose menu already carries the
-// administrator commands, so a menu update costs one API call per chat per
-// process rather than one per command.
-var adminMenuChats sync.Map
-
-// ensureAdminMenu publishes the administrator menu for a chat the first time
-// that chat is seen holding administrator rights. Failures are logged and
-// ignored: the menu is a convenience, and the commands work without it.
-func (a *TelegramAdmin) ensureAdminMenu(chatID int64) {
-	if a.deps.Commands == nil {
-		return
-	}
-	if _, done := adminMenuChats.LoadOrStore(chatID, struct{}{}); done {
-		return
-	}
-	if err := a.deps.Commands.SetCommands(chatID, AdminCommands()); err != nil {
-		adminMenuChats.Delete(chatID)
-		a.Errorw("failed to publish the telegram administrator menu",
-			logger.Field("error", err.Error()),
-		)
-	}
 }

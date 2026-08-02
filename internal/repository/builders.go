@@ -158,6 +158,13 @@ type SupportRepos struct {
 
 type SupportBuilder func(conn ModuleConn) SupportRepos
 
+// NotificationRepos is the notification domain bundle.
+type NotificationRepos struct {
+	TelegramTopics TelegramTopicRepo
+}
+
+type NotificationBuilder func(conn ModuleConn) NotificationRepos
+
 // Builders carries every module's repo builder for store assembly.
 type Builders struct {
 	Platform     PlatformBuilder
@@ -166,4 +173,5 @@ type Builders struct {
 	Identity     IdentityBuilder
 	Network      NetworkBuilder
 	Support      SupportBuilder
+	Notification NotificationBuilder
 }

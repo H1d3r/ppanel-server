@@ -4,6 +4,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/network"
+	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -24,5 +25,6 @@ func NewStore(db *gorm.DB, rds *redis.Client) *repository.GormStore {
 		Identity:     identity.NewRepoBuilder(),
 		Network:      network.NewRepoBuilder(rds),
 		Support:      support.NewRepoBuilder(),
+		Notification: notification.NewRepoBuilder(),
 	})
 }

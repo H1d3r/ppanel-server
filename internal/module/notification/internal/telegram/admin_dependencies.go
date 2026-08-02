@@ -4,17 +4,20 @@ import (
 	"context"
 	"time"
 
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-// TelegramMessenger sends a response to a Telegram chat. Send delivers plain
-// text; SendMarkdown delivers MarkdownV2 produced by RenderMarkdownV2, and
-// must never receive unescaped dynamic data — Telegram rejects the whole
-// message over one stray reserved character.
+// TelegramMessenger sends a response to a Telegram chat. A non-zero
+// threadID addresses one forum topic inside a group; zero addresses the
+// chat itself (private chats, or a group's General topic). Send delivers
+// plain text; SendMarkdown delivers MarkdownV2 produced by RenderMarkdownV2,
+// and must never receive unescaped dynamic data — Telegram rejects the
+// whole message over one stray reserved character.
 type TelegramMessenger interface {
-	Send(chatID int64, message string) error
-	SendMarkdown(chatID int64, message string) error
+	Send(chatID, threadID int64, message string) error
+	SendMarkdown(chatID, threadID int64, message string) error
 }
 
 // TelegramAdminActionStore persists short-lived confirmations for destructive
@@ -29,18 +32,21 @@ type TelegramAdminActionStore interface {
 // administrator commands. It intentionally does not accept ServiceContext.
 type TelegramAdminDependencies struct {
 	Messenger TelegramMessenger
-	// Commands publishes the administrator command menu; optional so tests
-	// and deployments without a live bot still work.
-	Commands      TelegramCommandRegistrar
-	Actions       TelegramAdminActionStore
-	Tickets       repository.TicketRepo
-	Orders        repository.OrderRepo
-	Users         repository.UserRepo
-	UserAuth      repository.UserAuthRepo
-	Subscriptions repository.UserSubscriptionRepo
-	UserCache     repository.UserCacheRepo
-	Plans         repository.SubscribeRepo
-	Logs          repository.LogRepo
+	Actions   TelegramAdminActionStore
+	// MirrorTicketStatus and MirrorTicketReply keep the ticket's forum
+	// topic in step with ticket mutations done through bot commands
+	// (/close, /reopen, /rp), which bypass the support module's notifier.
+	// Optional and best-effort.
+	MirrorTicketStatus func(ticketID int64, status uint8)
+	MirrorTicketReply  func(ticketID int64, content string)
+	Tickets            repository.TicketRepo
+	Orders             repository.OrderRepo
+	Users              repository.UserRepo
+	UserAuth           repository.UserAuthRepo
+	Subscriptions      repository.UserSubscriptionRepo
+	UserCache          repository.UserCacheRepo
+	Plans              repository.SubscribeRepo
+	Logs               repository.LogRepo
 	// Wallet is the billing-domain read port for balance display.
 	Wallet repository.WalletRepo
 }
@@ -61,6 +67,8 @@ func NewTelegramAdmin(ctx context.Context, deps TelegramAdminDependencies) *Tele
 	}
 }
 
-func (a *TelegramAdmin) sendMessage(message string, chatID int64) error {
-	return a.deps.Messenger.Send(chatID, message)
+// reply answers in the chat — and, inside the admin group, the same forum
+// topic — the command came from.
+func (a *TelegramAdmin) reply(msg *models.Message, message string) error {
+	return a.deps.Messenger.Send(msg.Chat.ID, int64(msg.MessageThreadID), message)
 }

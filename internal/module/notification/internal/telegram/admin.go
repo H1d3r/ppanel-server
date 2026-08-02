@@ -39,7 +39,7 @@ func (a *TelegramAdmin) Handle(msg *models.Message) {
 	// Step 1: Admin check
 	adminUser, reject := a.authenticate(msg)
 	if reject != "" {
-		_ = a.sendMessage(reject, msg.Chat.ID)
+		_ = a.reply(msg, reject)
 		return
 	}
 
@@ -53,7 +53,7 @@ func (a *TelegramAdmin) Handle(msg *models.Message) {
 		if err := a.deps.Actions.Delete(a.ctx, tgActionPrefix+actionID); err != nil {
 			a.Errorw("admin cancel action: redis del failed", logger.Field("error", err.Error()))
 		}
-		_ = a.sendMessage("❌ 操作已取消。", msg.Chat.ID)
+		_ = a.reply(msg, "❌ 操作已取消。")
 		return
 	}
 
@@ -93,7 +93,7 @@ func (a *TelegramAdmin) Handle(msg *models.Message) {
 	case "help", "h":
 		a.adminHelp(msg)
 	default:
-		_ = a.sendMessage("未知命令。/help 查看可用命令。", msg.Chat.ID)
+		_ = a.reply(msg, "未知命令。/help 查看可用命令。")
 	}
 }
 
@@ -122,7 +122,7 @@ func (a *TelegramAdmin) adminHelp(msg *models.Message) {
   /ban <邮箱|ID>       封/解封用户
 
 /h  或  /help      帮助`
-	_ = a.sendMessage(help, msg.Chat.ID)
+	_ = a.reply(msg, help)
 }
 
 // ─────────────────────────────────────
@@ -158,7 +158,7 @@ func (a *TelegramAdmin) dashboard(msg *models.Message, adminUser *user.User) {
 	if recentBlock.Len() > 0 {
 		text += "\n最近待处理工单：\n" + recentBlock.String()
 	}
-	_ = a.sendMessage(text, msg.Chat.ID)
+	_ = a.reply(msg, text)
 }
 
 // ─────────────────────────────────────
@@ -172,11 +172,11 @@ func (a *TelegramAdmin) listTickets(msg *models.Message, adminUser *user.User, p
 	total, list, err := a.deps.Tickets.QueryTicketList(a.ctx, page, pageSize, 0, status, "")
 	if err != nil {
 		a.Errorw("list tickets failed", logger.Field("error", err.Error()))
-		_ = a.sendMessage("查询工单列表失败。", msg.Chat.ID)
+		_ = a.reply(msg, "查询工单列表失败。")
 		return
 	}
 	if len(list) == 0 {
-		_ = a.sendMessage("暂无工单。", msg.Chat.ID)
+		_ = a.reply(msg, "暂无工单。")
 		return
 	}
 
@@ -198,23 +198,23 @@ func (a *TelegramAdmin) listTickets(msg *models.Message, adminUser *user.User, p
 	if page < totalPages {
 		sb.WriteString(fmt.Sprintf("📖 下一页：/tickets_%d", page+1))
 	}
-	_ = a.sendMessage(sb.String(), msg.Chat.ID)
+	_ = a.reply(msg, sb.String())
 }
 
 func (a *TelegramAdmin) ticketDetail(msg *models.Message, adminUser *user.User, idStr string) {
 	if idStr == "" {
-		_ = a.sendMessage("用法：/tk <工单ID>", msg.Chat.ID)
+		_ = a.reply(msg, "用法：/tk <工单ID>")
 		return
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
+		_ = a.reply(msg, "工单ID格式错误。")
 		return
 	}
 	tk, err := a.deps.Tickets.QueryTicketDetail(a.ctx, id)
 	if err != nil {
 		a.Errorw("ticket detail failed", logger.Field("error", err.Error()), logger.Field("id", id))
-		_ = a.sendMessage("工单不存在或查询失败。", msg.Chat.ID)
+		_ = a.reply(msg, "工单不存在或查询失败。")
 		return
 	}
 	email, _ := a.userEmail(tk.UserId)
@@ -243,23 +243,23 @@ func (a *TelegramAdmin) ticketDetail(msg *models.Message, adminUser *user.User, 
 		}
 	}
 	sb.WriteString(fmt.Sprintf("\n👉 /rp_%d <回复>   /close_%d 关闭", tk.Id, tk.Id))
-	_ = a.sendMessage(sb.String(), msg.Chat.ID)
+	_ = a.reply(msg, sb.String())
 }
 
 func (a *TelegramAdmin) replyTicket(msg *models.Message, adminUser *user.User, args string) {
 	parts := strings.SplitN(args, " ", 2)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		_ = a.sendMessage("用法：/rp <工单ID> <回复内容>", msg.Chat.ID)
+		_ = a.reply(msg, "用法：/rp <工单ID> <回复内容>")
 		return
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
+		_ = a.reply(msg, "工单ID格式错误。")
 		return
 	}
 	tk, err := a.deps.Tickets.FindOne(a.ctx, id)
 	if err != nil {
-		_ = a.sendMessage("工单不存在。", msg.Chat.ID)
+		_ = a.reply(msg, "工单不存在。")
 		return
 	}
 	follow := &ticket.Follow{
@@ -270,47 +270,52 @@ func (a *TelegramAdmin) replyTicket(msg *models.Message, adminUser *user.User, a
 	}
 	if err := a.deps.Tickets.InsertTicketFollow(a.ctx, follow); err != nil {
 		a.Errorw("ticket follow insert failed", logger.Field("error", err.Error()))
-		_ = a.sendMessage("回复失败，请稍后再试。", msg.Chat.ID)
+		_ = a.reply(msg, "回复失败，请稍后再试。")
 		return
 	}
 	if err := a.deps.Tickets.UpdateTicketStatus(a.ctx, id, 0, ticket.Waiting); err != nil {
 		a.Errorw("ticket status update failed", logger.Field("error", err.Error()))
 	}
-	_ = a.sendMessage(fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(tk.Status)), msg.Chat.ID)
+	if a.deps.MirrorTicketReply != nil {
+		a.deps.MirrorTicketReply(id, parts[1])
+	}
+	_ = a.reply(msg, fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(tk.Status)))
 }
 
 func (a *TelegramAdmin) confirmCloseTicket(msg *models.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = a.sendMessage("工单ID格式错误。", msg.Chat.ID)
+		_ = a.reply(msg, "工单ID格式错误。")
 		return
 	}
 	if _, err := a.deps.Tickets.FindOne(a.ctx, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			_ = a.sendMessage("工单不存在。", msg.Chat.ID)
+			_ = a.reply(msg, "工单不存在。")
 			return
 		}
 		a.Errorw("close ticket precondition failed", logger.Field("error", err.Error()))
-		_ = a.sendMessage("查询工单失败。", msg.Chat.ID)
+		_ = a.reply(msg, "查询工单失败。")
 		return
 	}
 	actionID := a.saveAction("close", adminUser.Id, strconv.FormatInt(id, 10), "")
-	_ = a.sendMessage(fmt.Sprintf("确认关闭工单 #%d ？\n/confirm_%s 确认\n/cancel_%s 取消", id, actionID, actionID),
-		msg.Chat.ID)
+	_ = a.reply(msg, fmt.Sprintf("确认关闭工单 #%d ？\n/confirm_%s 确认\n/cancel_%s 取消", id, actionID, actionID))
 }
 
 func (a *TelegramAdmin) reopenTicket(msg *models.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = a.sendMessage("ID格式错误。", msg.Chat.ID)
+		_ = a.reply(msg, "ID格式错误。")
 		return
 	}
 	if err := a.deps.Tickets.UpdateTicketStatus(a.ctx, id, 0, ticket.Pending); err != nil {
 		a.Errorw("reopen ticket failed", logger.Field("error", err.Error()))
-		_ = a.sendMessage("操作失败。", msg.Chat.ID)
+		_ = a.reply(msg, "操作失败。")
 		return
 	}
-	_ = a.sendMessage(fmt.Sprintf("✅ 工单 #%d 已重新打开", id), msg.Chat.ID)
+	if a.deps.MirrorTicketStatus != nil {
+		a.deps.MirrorTicketStatus(id, ticket.Pending)
+	}
+	_ = a.reply(msg, fmt.Sprintf("✅ 工单 #%d 已重新打开", id))
 }
 
 // ─────────────────────────────────────
@@ -319,7 +324,7 @@ func (a *TelegramAdmin) reopenTicket(msg *models.Message, adminUser *user.User, 
 
 func (a *TelegramAdmin) lookupUser(msg *models.Message, input string) (*user.User, bool) {
 	if input == "" {
-		_ = a.sendMessage("用法：/user <邮箱|ID>", msg.Chat.ID)
+		_ = a.reply(msg, "用法：/user <邮箱|ID>")
 		return nil, false
 	}
 	if id, e := strconv.ParseInt(input, 10, 64); e == nil {
@@ -335,17 +340,23 @@ func (a *TelegramAdmin) lookupUser(msg *models.Message, input string) (*user.Use
 			return u, true
 		}
 	}
-	_ = a.sendMessage("找不到用户。", msg.Chat.ID)
+	_ = a.reply(msg, "找不到用户。")
 	return nil, false
 }
 
+// authenticate resolves the command sender. Inside the admin group the chat
+// id is the group, so identity always comes from the From field: the sender
+// must have their own Telegram bound to a panel administrator account.
 func (a *TelegramAdmin) authenticate(msg *models.Message) (admin *user.User, rejectMsg string) {
-	chatID := strconv.FormatInt(msg.Chat.ID, 10)
+	if msg.From == nil || msg.From.IsBot {
+		return nil, "无法识别命令发送者。"
+	}
+	senderID := strconv.FormatInt(msg.From.ID, 10)
 
-	auth, err := a.deps.UserAuth.FindUserAuthMethodByOpenID(a.ctx, "telegram", chatID)
+	auth, err := a.deps.UserAuth.FindUserAuthMethodByOpenID(a.ctx, "telegram", senderID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			a.Infow("admin auth: Telegram not bound", logger.Field("chat_id", msg.Chat.ID))
+			a.Infow("admin auth: Telegram not bound", logger.Field("sender_id", msg.From.ID))
 			return nil, "您的 Telegram 尚未绑定账号。\n请登录 Web 后台 → 个人设置 → 绑定 Telegram。"
 		}
 		a.Errorw("admin auth: query auth method failed", logger.Field("error", err.Error()))
@@ -361,9 +372,6 @@ func (a *TelegramAdmin) authenticate(msg *models.Message) (admin *user.User, rej
 		a.Infow("admin auth: user is not admin", logger.Field("user_id", u.Id))
 		return nil, "您没有管理权限。"
 	}
-	// This chat is proven to belong to an administrator, so give it the
-	// administrator command menu; ordinary users never see those entries.
-	a.ensureAdminMenu(msg.Chat.ID)
 	return u, ""
 }
 
@@ -452,7 +460,7 @@ func (a *TelegramAdmin) userDetail(msg *models.Message, adminUser *user.User, in
 		u.Id, u.Id, u.Id, banOp,
 	))
 
-	_ = a.sendMessage(sb.String(), msg.Chat.ID)
+	_ = a.reply(msg, sb.String())
 }
 
 func (a *TelegramAdmin) userSubs(msg *models.Message, adminUser *user.User, input string) {
@@ -462,7 +470,7 @@ func (a *TelegramAdmin) userSubs(msg *models.Message, adminUser *user.User, inpu
 	}
 	subs, _ := a.deps.Subscriptions.QueryUserSubscribe(a.ctx, u.Id)
 	if len(subs) == 0 {
-		_ = a.sendMessage("用户无订阅。", msg.Chat.ID)
+		_ = a.reply(msg, "用户无订阅。")
 		return
 	}
 	var sb strings.Builder
@@ -479,7 +487,7 @@ func (a *TelegramAdmin) userSubs(msg *models.Message, adminUser *user.User, inpu
 			s.ExpireTime.Format("2006-01-02 15:04"),
 		))
 	}
-	_ = a.sendMessage(sb.String(), msg.Chat.ID)
+	_ = a.reply(msg, sb.String())
 }
 
 func (a *TelegramAdmin) userLogs(msg *models.Message, adminUser *user.User, input string) {
@@ -496,11 +504,11 @@ func (a *TelegramAdmin) userLogs(msg *models.Message, adminUser *user.User, inpu
 	})
 	if err != nil {
 		a.Errorw("user logs failed", logger.Field("error", err.Error()))
-		_ = a.sendMessage("查询日志失败。", msg.Chat.ID)
+		_ = a.reply(msg, "查询日志失败。")
 		return
 	}
 	if len(logs) == 0 {
-		_ = a.sendMessage(fmt.Sprintf("📜 %s 无登录日志。", email), msg.Chat.ID)
+		_ = a.reply(msg, fmt.Sprintf("📜 %s 无登录日志。", email))
 		return
 	}
 	var sb strings.Builder
@@ -519,7 +527,7 @@ func (a *TelegramAdmin) userLogs(msg *models.Message, adminUser *user.User, inpu
 			entryLog.LoginIP, entryLog.Method,
 		))
 	}
-	_ = a.sendMessage(sb.String(), msg.Chat.ID)
+	_ = a.reply(msg, sb.String())
 }
 
 // ─────────────────────────────────────
@@ -529,30 +537,29 @@ func (a *TelegramAdmin) userLogs(msg *models.Message, adminUser *user.User, inpu
 func (a *TelegramAdmin) confirmResetTraffic(msg *models.Message, adminUser *user.User, idStr string) {
 	subID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = a.sendMessage("订阅ID格式错误。", msg.Chat.ID)
+		_ = a.reply(msg, "订阅ID格式错误。")
 		return
 	}
 	sub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, subID)
 	if err != nil {
-		_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
+		_ = a.reply(msg, "订阅不存在。")
 		return
 	}
 	actionID := a.saveAction("reset", adminUser.Id, strconv.FormatInt(subID, 10), sub.Token)
 	usedStr := trafficGB(sub.Download + sub.Upload)
-	_ = a.sendMessage(fmt.Sprintf("确认重置 订阅(ID:%d)流量？\n  已用：%s\n\n/confirm_%s 确认\n/cancel_%s 取消",
-		subID, usedStr, actionID, actionID),
-		msg.Chat.ID)
+	_ = a.reply(msg, fmt.Sprintf("确认重置 订阅(ID:%d)流量？\n  已用：%s\n\n/confirm_%s 确认\n/cancel_%s 取消",
+		subID, usedStr, actionID, actionID))
 }
 
 func (a *TelegramAdmin) confirmToggleSub(msg *models.Message, adminUser *user.User, idStr string) {
 	subID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		_ = a.sendMessage("订阅ID格式错误。", msg.Chat.ID)
+		_ = a.reply(msg, "订阅ID格式错误。")
 		return
 	}
 	userSub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, subID)
 	if err != nil {
-		_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
+		_ = a.reply(msg, "订阅不存在。")
 		return
 	}
 	opLabel := "暂停"
@@ -560,9 +567,8 @@ func (a *TelegramAdmin) confirmToggleSub(msg *models.Message, adminUser *user.Us
 		opLabel = "启用"
 	}
 	actionID := a.saveAction("toggle", adminUser.Id, strconv.FormatInt(subID, 10), "")
-	_ = a.sendMessage(fmt.Sprintf("确认%s订阅 (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
-		opLabel, subID, actionID, actionID),
-		msg.Chat.ID)
+	_ = a.reply(msg, fmt.Sprintf("确认%s订阅 (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
+		opLabel, subID, actionID, actionID))
 }
 
 func (a *TelegramAdmin) confirmBanUser(msg *models.Message, adminUser *user.User, input string) {
@@ -571,7 +577,7 @@ func (a *TelegramAdmin) confirmBanUser(msg *models.Message, adminUser *user.User
 		return
 	}
 	if u.Id == adminUser.Id {
-		_ = a.sendMessage("无法对自己的账号执行此操作。", msg.Chat.ID)
+		_ = a.reply(msg, "无法对自己的账号执行此操作。")
 		return
 	}
 	opLabel := "禁用"
@@ -580,15 +586,14 @@ func (a *TelegramAdmin) confirmBanUser(msg *models.Message, adminUser *user.User
 	}
 	actionID := a.saveAction("ban", adminUser.Id, strconv.FormatInt(u.Id, 10), "")
 	email, _ := a.userEmail(u.Id)
-	_ = a.sendMessage(fmt.Sprintf("确认%s用户 %s (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
-		opLabel, email, u.Id, actionID, actionID),
-		msg.Chat.ID)
+	_ = a.reply(msg, fmt.Sprintf("确认%s用户 %s (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
+		opLabel, email, u.Id, actionID, actionID))
 }
 
 func (a *TelegramAdmin) confirmAction(msg *models.Message, adminUser *user.User, actionID string) {
 	act, ok := a.loadAction(actionID, adminUser.Id)
 	if !ok {
-		_ = a.sendMessage("操作已过期或无效。", msg.Chat.ID)
+		_ = a.reply(msg, "操作已过期或无效。")
 		return
 	}
 	switch act.Cmd {
@@ -596,32 +601,35 @@ func (a *TelegramAdmin) confirmAction(msg *models.Message, adminUser *user.User,
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
 		if err := a.deps.Tickets.UpdateTicketStatus(a.ctx, id, 0, ticket.Closed); err != nil {
 			a.Errorw("close ticket failed", logger.Field("error", err.Error()))
-			_ = a.sendMessage("关闭工单失败。", msg.Chat.ID)
+			_ = a.reply(msg, "关闭工单失败。")
 			return
 		}
-		_ = a.sendMessage(fmt.Sprintf("✅ 工单 #%d 已关闭", id), msg.Chat.ID)
+		if a.deps.MirrorTicketStatus != nil {
+			a.deps.MirrorTicketStatus(id, ticket.Closed)
+		}
+		_ = a.reply(msg, fmt.Sprintf("✅ 工单 #%d 已关闭", id))
 	case "reset":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
 		userSub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, id)
 		if err != nil {
-			_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
+			_ = a.reply(msg, "订阅不存在。")
 			return
 		}
 		userSub.Download = 0
 		userSub.Upload = 0
 		if err := a.deps.Subscriptions.UpdateSubscribe(a.ctx, userSub); err != nil {
 			a.Errorw("reset traffic failed", logger.Field("error", err.Error()))
-			_ = a.sendMessage("重置流量失败。", msg.Chat.ID)
+			_ = a.reply(msg, "重置流量失败。")
 			return
 		}
 		_ = a.deps.UserCache.ClearSubscribeCache(a.ctx, userSub)
 		_ = a.deps.Plans.ClearCache(a.ctx, userSub.SubscribeId)
-		_ = a.sendMessage(fmt.Sprintf("✅ 订阅 ID:%d 流量已重置", id), msg.Chat.ID)
+		_ = a.reply(msg, fmt.Sprintf("✅ 订阅 ID:%d 流量已重置", id))
 	case "toggle":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
 		userSub, err := a.deps.Subscriptions.FindOneSubscribe(a.ctx, id)
 		if err != nil {
-			_ = a.sendMessage("订阅不存在。", msg.Chat.ID)
+			_ = a.reply(msg, "订阅不存在。")
 			return
 		}
 		var newStatus uint8 = 1
@@ -633,17 +641,17 @@ func (a *TelegramAdmin) confirmAction(msg *models.Message, adminUser *user.User,
 		userSub.Status = newStatus
 		if err := a.deps.Subscriptions.UpdateSubscribe(a.ctx, userSub); err != nil {
 			a.Errorw("toggle sub failed", logger.Field("error", err.Error()))
-			_ = a.sendMessage("操作失败。", msg.Chat.ID)
+			_ = a.reply(msg, "操作失败。")
 			return
 		}
 		_ = a.deps.UserCache.ClearSubscribeCache(a.ctx, userSub)
 		_ = a.deps.Plans.ClearCache(a.ctx, userSub.SubscribeId)
-		_ = a.sendMessage(fmt.Sprintf("✅ 订阅 ID:%d %s", id, opLabel), msg.Chat.ID)
+		_ = a.reply(msg, fmt.Sprintf("✅ 订阅 ID:%d %s", id, opLabel))
 	case "ban":
 		id, _ := strconv.ParseInt(act.Target, 10, 64)
 		u, err := a.deps.Users.FindOne(a.ctx, id)
 		if err != nil {
-			_ = a.sendMessage("用户不存在。", msg.Chat.ID)
+			_ = a.reply(msg, "用户不存在。")
 			return
 		}
 		enable := false
@@ -655,12 +663,12 @@ func (a *TelegramAdmin) confirmAction(msg *models.Message, adminUser *user.User,
 		u.Enable = &enable
 		if err := a.deps.Users.Update(a.ctx, u); err != nil {
 			a.Errorw("ban user failed", logger.Field("error", err.Error()))
-			_ = a.sendMessage("操作失败。", msg.Chat.ID)
+			_ = a.reply(msg, "操作失败。")
 			return
 		}
-		_ = a.sendMessage(fmt.Sprintf("✅ 用户 (ID:%d) %s", u.Id, opLabel), msg.Chat.ID)
+		_ = a.reply(msg, fmt.Sprintf("✅ 用户 (ID:%d) %s", u.Id, opLabel))
 	default:
-		_ = a.sendMessage("未知操作。", msg.Chat.ID)
+		_ = a.reply(msg, "未知操作。")
 	}
 	_ = a.deps.Actions.Delete(a.ctx, tgActionPrefix+actionID)
 }
