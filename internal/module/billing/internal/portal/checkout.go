@@ -370,6 +370,7 @@ func (l *PurchaseCheckoutLogic) alipayF2fPayment(pay *payment.Payment, info *ord
 		InvoiceName: f2FConfig.InvoiceName,
 		NotifyURL:   notifyUrl,
 		Sandbox:     f2FConfig.Sandbox,
+		Gateway:     f2FConfig.Gateway,
 	})
 	if client == nil {
 		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "initialize Alipay client failed")

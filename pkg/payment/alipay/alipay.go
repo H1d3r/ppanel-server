@@ -18,6 +18,10 @@ type Config struct {
 	InvoiceName string
 	NotifyURL   string
 	Sandbox     bool
+	// Gateway overrides the sandbox gateway URL; Alipay has retired sandbox
+	// hosts before, and tests point it at a local fake gateway. Ignored in
+	// production, where only the official gateway may receive credentials.
+	Gateway string
 }
 
 type Notification struct {
@@ -38,6 +42,28 @@ const (
 	Error    Status = "TRADE_ERROR"
 )
 
+// Paid reports whether the status proves the buyer's money was collected;
+// TRADE_FINISHED is the terminal paid state after the refund window closes.
+func (s Status) Paid() bool {
+	return s == Success || s == Finished
+}
+
+// ErrTradeNotExist reports that the gateway holds no trade for the order.
+// A face-to-face trade is created only when the buyer scans the QR code, so
+// a missing trade proves no money was collected for the order.
+var ErrTradeNotExist = errors.New("alipay trade does not exist")
+
+const tradeNotExistSubCode = "ACQ.TRADE_NOT_EXIST"
+
+// Trade is the gateway's authoritative view of an order as returned by the
+// alipay.trade.query endpoint. Amount is populated only for paid trades.
+type Trade struct {
+	OrderNo string
+	TradeNo string
+	Amount  int64
+	Status  Status
+}
+
 type Client struct {
 	Config
 	client *alipay.Client
@@ -48,7 +74,11 @@ type Order struct {
 }
 
 func NewClient(c Config) *Client {
-	client, err := alipay.New(c.AppId, c.PrivateKey, !c.Sandbox)
+	var opts []alipay.OptionFunc
+	if c.Gateway != "" {
+		opts = append(opts, alipay.WithSandboxGateway(c.Gateway))
+	}
+	client, err := alipay.New(c.AppId, c.PrivateKey, !c.Sandbox, opts...)
 	if err != nil {
 		logger.Error("[Alipay] NewClient failed: ", logger.Field("errors", err), logger.Field("appId", c.AppId), logger.Field("sandbox", c.Sandbox))
 		return nil
@@ -87,25 +117,74 @@ func (c *Client) PreCreateTrade(ctx context.Context, order Order) (string, error
 	return trade.QRCode, nil
 }
 
-func (c *Client) QueryTrade(ctx context.Context, orderNo string) (Status, error) {
-	trade, err := c.client.TradeQuery(ctx, alipay.TradeQuery{
+func (c *Client) QueryTrade(ctx context.Context, orderNo string) (*Trade, error) {
+	rsp, err := c.client.TradeQuery(ctx, alipay.TradeQuery{
 		OutTradeNo: orderNo,
 	})
 	if err != nil {
-		return Error, err
+		return nil, asTradeNotExist(err)
 	}
-	switch trade.TradeStatus {
+	if rsp.Code != alipay.CodeSuccess {
+		if rsp.SubCode == tradeNotExistSubCode {
+			return nil, ErrTradeNotExist
+		}
+		return nil, errors.New("QueryTrade failed: " + rsp.Msg + " " + rsp.SubMsg)
+	}
+	trade := &Trade{
+		OrderNo: rsp.OutTradeNo,
+		TradeNo: rsp.TradeNo,
+	}
+	switch rsp.TradeStatus {
 	case alipay.TradeStatusSuccess:
-		return Success, nil
+		trade.Status = Success
 	case alipay.TradeStatusWaitBuyerPay:
-		return Pending, nil
+		trade.Status = Pending
 	case alipay.TradeStatusClosed:
-		return Closed, nil
+		trade.Status = Closed
 	case alipay.TradeStatusFinished:
-		return Finished, nil
+		trade.Status = Finished
 	default:
-		return Error, errors.New("QueryTrade failed: " + trade.Msg)
+		return nil, errors.New("QueryTrade failed: unexpected trade status " + string(rsp.TradeStatus))
 	}
+	if trade.Status.Paid() {
+		amount, err := paymentUtil.ParseAmount(rsp.TotalAmount)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid trade amount")
+		}
+		trade.Amount = amount
+	}
+	return trade, nil
+}
+
+// CloseTrade voids an unpaid trade at the gateway so its QR code can no
+// longer collect money. Closing a trade the gateway never created reports
+// ErrTradeNotExist, and the gateway rejects closing a trade that was already
+// paid, so a success here proves no payment can arrive afterwards.
+func (c *Client) CloseTrade(ctx context.Context, orderNo string) error {
+	rsp, err := c.client.TradeClose(ctx, alipay.TradeClose{
+		OutTradeNo: orderNo,
+	})
+	if err != nil {
+		return asTradeNotExist(err)
+	}
+	if rsp.Code != alipay.CodeSuccess {
+		if rsp.SubCode == tradeNotExistSubCode {
+			return ErrTradeNotExist
+		}
+		return errors.New("CloseTrade failed: " + rsp.Msg + " " + rsp.SubMsg)
+	}
+	return nil
+}
+
+// asTradeNotExist maps the SDK's business failure for a missing trade — which
+// the SDK surfaces as an error when the gateway response carries no signature
+// — onto ErrTradeNotExist and passes every other error through unchanged.
+func asTradeNotExist(err error) error {
+	var gatewayErr *alipay.Error
+	if errors.As(err, &gatewayErr) && gatewayErr.SubCode == tradeNotExistSubCode {
+		return ErrTradeNotExist
+	}
+	return err
 }
 
 func (c *Client) DecodeNotification(form url.Values) (*Notification, error) {

@@ -18,6 +18,7 @@ import (
 	"github.com/perfect-panel/server/pkg/constant"
 	"github.com/perfect-panel/server/pkg/logger"
 	paymentPlatform "github.com/perfect-panel/server/pkg/payment"
+	"github.com/perfect-panel/server/pkg/payment/alipay"
 	"github.com/perfect-panel/server/pkg/payment/cryptomus"
 	"github.com/perfect-panel/server/pkg/payment/epay"
 	"github.com/perfect-panel/server/pkg/payment/stripe"
@@ -196,6 +197,8 @@ func (s *Service) settleOrCancelGatewayOrder(ctx context.Context, orderInfo *ord
 		return s.settleOrCancelStripeOrder(ctx, orderInfo)
 	case paymentPlatform.EPay:
 		return s.settleEPayOrder(ctx, orderInfo, userInitiated)
+	case paymentPlatform.AlipayF2F:
+		return s.settleAlipayOrder(ctx, orderInfo, userInitiated)
 	case paymentPlatform.Cryptomus:
 		return s.settleCryptomusOrder(ctx, orderInfo, userInitiated)
 	default:
@@ -313,6 +316,87 @@ func (s *Service) settleCryptomusOrder(ctx context.Context, orderInfo *order.Ord
 		return false, nil // the owner explicitly forfeits the unconfirmed invoice.
 	}
 	return false, fmt.Errorf("cannot safely expire Cryptomus order %s with invoice status %q: %w", orderInfo.OrderNo, invoice.State(), ErrGatewayUnconfirmed)
+}
+
+// The gateway creates an Alipay face-to-face trade only when the buyer scans
+// the QR code, so a missing trade proves no money was collected and the close
+// may proceed. Any existing trade must be reconciled before the local close
+// releases stock and coupons: a paid trade is settled instead of cancelled —
+// a lost payment notification would otherwise void an order the customer
+// already paid for — and a scanned-but-unpaid trade is closed at the gateway
+// first so its QR code cannot collect money afterwards.
+func (s *Service) settleAlipayOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
+	if orderInfo.PaymentCurrency == "" {
+		return false, nil // checkout was never started; safe to close.
+	}
+	paymentConfig, err := s.deps.Payments.FindOne(ctx, orderInfo.PaymentId)
+	if err != nil {
+		return false, err
+	}
+	config := payment.AlipayF2FConfig{}
+	if err := config.Unmarshal([]byte(paymentConfig.Config)); err != nil {
+		return false, err
+	}
+	client := alipay.NewClient(alipay.Config{
+		AppId:      config.AppId,
+		PrivateKey: config.PrivateKey,
+		PublicKey:  config.PublicKey,
+		Sandbox:    config.Sandbox,
+		Gateway:    config.Gateway,
+	})
+	if client == nil {
+		return false, stderrors.New("initialize Alipay client failed")
+	}
+	trade, err := client.QueryTrade(ctx, orderInfo.OrderNo)
+	if stderrors.Is(err, alipay.ErrTradeNotExist) {
+		return false, nil // the QR code was never scanned; no money was collected.
+	}
+	if err != nil {
+		if userInitiated {
+			logger.WithContext(ctx).Infow("[CloseOrder] user-requested close of Alipay order without gateway confirmation",
+				logger.Field("orderNo", orderInfo.OrderNo),
+				logger.Field("queryError", err.Error()),
+			)
+			return false, nil
+		}
+		return false, fmt.Errorf("cannot safely expire Alipay order %s: %v: %w", orderInfo.OrderNo, err, ErrGatewayUnconfirmed)
+	}
+	if trade.Status.Paid() {
+		return s.settleQueriedAlipayTrade(ctx, orderInfo, trade)
+	}
+	if trade.Status == alipay.Closed {
+		return false, nil // the gateway already voided the trade without payment.
+	}
+	// WAIT_BUYER_PAY: the buyer scanned but has not paid. Void the trade so
+	// the QR code cannot collect money after the local close releases stock
+	// and coupons; the gateway rejects the close once the trade is paid.
+	closeErr := client.CloseTrade(ctx, orderInfo.OrderNo)
+	if closeErr == nil || stderrors.Is(closeErr, alipay.ErrTradeNotExist) {
+		return false, nil
+	}
+	// A payment can finish between the query and the close attempt. Recheck
+	// once so that case is settled rather than closed locally.
+	trade, err = client.QueryTrade(ctx, orderInfo.OrderNo)
+	if err == nil && trade.Status.Paid() {
+		return s.settleQueriedAlipayTrade(ctx, orderInfo, trade)
+	}
+	if userInitiated {
+		return false, nil // the owner explicitly forfeits the unconfirmed trade.
+	}
+	return false, fmt.Errorf("cannot safely expire Alipay order %s: gateway close failed: %v: %w", orderInfo.OrderNo, closeErr, ErrGatewayUnconfirmed)
+}
+
+// settleQueriedAlipayTrade settles an order whose trade the gateway reports
+// as paid, after checking the signed query response against the payment
+// expectation persisted at checkout time.
+func (s *Service) settleQueriedAlipayTrade(ctx context.Context, orderInfo *order.Order, trade *alipay.Trade) (bool, error) {
+	if trade.OrderNo != orderInfo.OrderNo || trade.Amount != orderInfo.PaymentAmount || trade.TradeNo == "" {
+		return false, fmt.Errorf("Alipay order %s query does not match payment expectation", orderInfo.OrderNo)
+	}
+	if err := s.settleVerifiedPayment(ctx, orderInfo, trade.TradeNo); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // EPay-compatible gateways have no standard cancellation API. Once a payment

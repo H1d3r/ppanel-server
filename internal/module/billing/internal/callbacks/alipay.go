@@ -36,6 +36,7 @@ func (s *Service) AlipayNotify(ctx context.Context, form url.Values) error {
 		InvoiceName: config.InvoiceName,
 		NotifyURL:   data.Domain + "/v1/payment/alipay/notify",
 		Sandbox:     config.Sandbox,
+		Gateway:     config.Gateway,
 	})
 	if client == nil {
 		return errors.New("initialize Alipay client failed")
@@ -57,11 +58,11 @@ func (s *Service) AlipayNotify(ctx context.Context, form url.Values) error {
 		} else if finished {
 			return nil
 		}
-		status, err := client.QueryTrade(ctx, notify.OrderNo)
+		trade, err := client.QueryTrade(ctx, notify.OrderNo)
 		if err != nil {
 			return err
 		}
-		if status != alipay.Success && status != alipay.Finished {
+		if !trade.Status.Paid() {
 			return errors.New("Alipay trade is not paid")
 		}
 		if err := s.settle(ctx, orderInfo, notify.TradeNo); err != nil {

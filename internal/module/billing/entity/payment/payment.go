@@ -79,6 +79,9 @@ type AlipayF2FConfig struct {
 	PublicKey   string `json:"public_key"`
 	InvoiceName string `json:"invoice_name"`
 	Sandbox     bool   `json:"sandbox"`
+	// Gateway optionally overrides the sandbox gateway URL (Alipay has
+	// retired sandbox hosts before); production traffic ignores it.
+	Gateway string `json:"gateway,omitempty"`
 }
 
 func (l *AlipayF2FConfig) Marshal() ([]byte, error) {
