@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/pkg/authmethod"
 	"github.com/perfect-panel/server/pkg/constant"
+	emailpkg "github.com/perfect-panel/server/pkg/email"
 	"github.com/perfect-panel/server/pkg/limit"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/pkg/errors"
@@ -105,7 +106,7 @@ func (l *SendEmailCodeLogic) SendEmailCode(req *dto.SendCodeRequest) (resp *dto.
 	}
 	taskPayload.Type = queue.EmailTypeVerify
 	taskPayload.Email = email
-	taskPayload.Subject = "Verification code"
+	taskPayload.Subject = emailpkg.DefaultEmailVerifySubject
 	taskPayload.Content = map[string]interface{}{
 		"Type":     req.Type,
 		"SiteLogo": l.deps.Config.SiteLogo,

@@ -3,8 +3,39 @@ package auth
 import (
 	"testing"
 
+	"github.com/perfect-panel/server/pkg/email"
 	"github.com/stretchr/testify/assert"
 )
+
+// A fresh config marshals with every template and subject defaulted; the
+// maintenance template used to stay empty because its default was guarded by
+// a copy-pasted check of the expiration template.
+func TestEmailAuthConfigMarshalFillsAllDefaults(t *testing.T) {
+	cfg := new(EmailAuthConfig)
+	roundTripped := new(EmailAuthConfig)
+	roundTripped.Unmarshal(cfg.Marshal())
+
+	assert.Equal(t, email.DefaultEmailVerifyTemplate, roundTripped.VerifyEmailTemplate)
+	assert.Equal(t, email.DefaultExpirationEmailTemplate, roundTripped.ExpirationEmailTemplate)
+	assert.Equal(t, email.DefaultMaintenanceEmailTemplate, roundTripped.MaintenanceEmailTemplate)
+	assert.Equal(t, email.DefaultTrafficExceedEmailTemplate, roundTripped.TrafficExceedEmailTemplate)
+	assert.Equal(t, email.DefaultEmailVerifySubject, roundTripped.VerifyEmailSubject)
+	assert.Equal(t, email.DefaultExpirationEmailSubject, roundTripped.ExpirationEmailSubject)
+	assert.Equal(t, email.DefaultMaintenanceEmailSubject, roundTripped.MaintenanceEmailSubject)
+	assert.Equal(t, email.DefaultTrafficExceedEmailSubject, roundTripped.TrafficExceedEmailSubject)
+}
+
+func TestEmailAuthConfigMarshalKeepsCustomizedValues(t *testing.T) {
+	cfg := &EmailAuthConfig{
+		MaintenanceEmailTemplate: "<p>自定义维护正文</p>",
+		ExpirationEmailSubject:   "【{{.SiteName}}】订阅已到期",
+	}
+	roundTripped := new(EmailAuthConfig)
+	roundTripped.Unmarshal(cfg.Marshal())
+
+	assert.Equal(t, "<p>自定义维护正文</p>", roundTripped.MaintenanceEmailTemplate)
+	assert.Equal(t, "【{{.SiteName}}】订阅已到期", roundTripped.ExpirationEmailSubject)
+}
 
 func TestAlibabaCloudConfig_Marshal(t *testing.T) {
 	v := new(AlibabaCloudConfig)

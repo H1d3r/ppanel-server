@@ -135,13 +135,20 @@ type EmailAuthConfig struct {
 	ExpirationEmailTemplate    string      `json:"expiration_email_template"`
 	MaintenanceEmailTemplate   string      `json:"maintenance_email_template"`
 	TrafficExceedEmailTemplate string      `json:"traffic_exceed_email_template"`
+	// Subjects pair with the templates above; an empty subject falls back to
+	// the delivery-time default, so pre-existing configs keep sending the
+	// original English subjects.
+	VerifyEmailSubject        string `json:"verify_email_subject"`
+	ExpirationEmailSubject    string `json:"expiration_email_subject"`
+	MaintenanceEmailSubject   string `json:"maintenance_email_subject"`
+	TrafficExceedEmailSubject string `json:"traffic_exceed_email_subject"`
 }
 
 func (l *EmailAuthConfig) Marshal() string {
 	if l.ExpirationEmailTemplate == "" {
 		l.ExpirationEmailTemplate = email.DefaultExpirationEmailTemplate
 	}
-	if l.ExpirationEmailTemplate == "" {
+	if l.MaintenanceEmailTemplate == "" {
 		l.MaintenanceEmailTemplate = email.DefaultMaintenanceEmailTemplate
 	}
 	if l.TrafficExceedEmailTemplate == "" {
@@ -149,6 +156,18 @@ func (l *EmailAuthConfig) Marshal() string {
 	}
 	if l.VerifyEmailTemplate == "" {
 		l.VerifyEmailTemplate = email.DefaultEmailVerifyTemplate
+	}
+	if l.VerifyEmailSubject == "" {
+		l.VerifyEmailSubject = email.DefaultEmailVerifySubject
+	}
+	if l.ExpirationEmailSubject == "" {
+		l.ExpirationEmailSubject = email.DefaultExpirationEmailSubject
+	}
+	if l.MaintenanceEmailSubject == "" {
+		l.MaintenanceEmailSubject = email.DefaultMaintenanceEmailSubject
+	}
+	if l.TrafficExceedEmailSubject == "" {
+		l.TrafficExceedEmailSubject = email.DefaultTrafficExceedEmailSubject
 	}
 	bytes, err := json.Marshal(l)
 	if err != nil {
@@ -163,6 +182,10 @@ func (l *EmailAuthConfig) Marshal() string {
 			ExpirationEmailTemplate:    email.DefaultExpirationEmailTemplate,
 			MaintenanceEmailTemplate:   email.DefaultMaintenanceEmailTemplate,
 			TrafficExceedEmailTemplate: email.DefaultTrafficExceedEmailTemplate,
+			VerifyEmailSubject:         email.DefaultEmailVerifySubject,
+			ExpirationEmailSubject:     email.DefaultExpirationEmailSubject,
+			MaintenanceEmailSubject:    email.DefaultMaintenanceEmailSubject,
+			TrafficExceedEmailSubject:  email.DefaultTrafficExceedEmailSubject,
 		}
 
 		bytes, _ = json.Marshal(config)
@@ -184,6 +207,10 @@ func (l *EmailAuthConfig) Unmarshal(data string) {
 			ExpirationEmailTemplate:    email.DefaultExpirationEmailTemplate,
 			MaintenanceEmailTemplate:   email.DefaultMaintenanceEmailTemplate,
 			TrafficExceedEmailTemplate: email.DefaultTrafficExceedEmailTemplate,
+			VerifyEmailSubject:         email.DefaultEmailVerifySubject,
+			ExpirationEmailSubject:     email.DefaultExpirationEmailSubject,
+			MaintenanceEmailSubject:    email.DefaultMaintenanceEmailSubject,
+			TrafficExceedEmailSubject:  email.DefaultTrafficExceedEmailSubject,
 		}
 		_ = json.Unmarshal([]byte(config.Marshal()), &l)
 	}

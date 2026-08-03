@@ -1,10 +1,48 @@
 package emailLogic
 
 import (
+	"context"
 	"testing"
 
 	"github.com/perfect-panel/server/queue/types"
 )
+
+// The queued literal is only the fallback: an operator-configured subject
+// wins and renders against the same data as the body.
+func TestResolveSubjectPrefersConfiguredTemplate(t *testing.T) {
+	data := map[string]interface{}{"SiteName": "示例站"}
+
+	got := resolveSubject(context.Background(), "【{{.SiteName}}】订阅已到期", "Subscription Expired", data)
+	if got != "【示例站】订阅已到期" {
+		t.Fatalf("subject = %q, want the rendered configured template", got)
+	}
+}
+
+func TestResolveSubjectFallsBackWhenUnconfigured(t *testing.T) {
+	got := resolveSubject(context.Background(), "", "Subscription Expired", nil)
+	if got != "Subscription Expired" {
+		t.Fatalf("subject = %q, want the queued fallback", got)
+	}
+}
+
+// A subject with a template typo is still sent as the operator wrote it; the
+// localized text beats silently reverting to English.
+func TestResolveSubjectKeepsRawTextOnBadTemplate(t *testing.T) {
+	got := resolveSubject(context.Background(), "订阅已到期 {{.SiteName", "Subscription Expired", nil)
+	if got != "订阅已到期 {{.SiteName" {
+		t.Fatalf("subject = %q, want the raw configured text", got)
+	}
+}
+
+func TestRenderEmailTemplateReportsParseErrors(t *testing.T) {
+	if _, err := renderEmailTemplate("body", "{{.Broken", nil); err == nil {
+		t.Fatal("parse error was swallowed")
+	}
+	rendered, err := renderEmailTemplate("body", "Hello {{.Name}}", map[string]interface{}{"Name": "User"})
+	if err != nil || rendered != "Hello User" {
+		t.Fatalf("rendered = %q, err = %v", rendered, err)
+	}
+}
 
 func TestEmailLogContentRedactsVerificationCode(t *testing.T) {
 	content := map[string]interface{}{"Code": "123456", "SiteName": "Example"}

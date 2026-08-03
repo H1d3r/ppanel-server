@@ -115,6 +115,13 @@ type EmailConfig struct {
 	ExpirationEmailTemplate    string `yaml:"expiration_email_template"`
 	MaintenanceEmailTemplate   string `yaml:"maintenance_email_template"`
 	TrafficExceedEmailTemplate string `yaml:"traffic_exceed_email_template"`
+	// Subjects pair with the templates above and hydrate from the email auth
+	// config by field name (tool.DeepCopy); empty means the queued fallback
+	// subject is used.
+	VerifyEmailSubject        string `yaml:"verify_email_subject"`
+	ExpirationEmailSubject    string `yaml:"expiration_email_subject"`
+	MaintenanceEmailSubject   string `yaml:"maintenance_email_subject"`
+	TrafficExceedEmailSubject string `yaml:"traffic_exceed_email_subject"`
 }
 
 type MobileConfig struct {

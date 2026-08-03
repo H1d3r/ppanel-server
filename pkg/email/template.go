@@ -1,5 +1,15 @@
 package email
 
+// Default subjects of the operator-configurable notification emails. Queue
+// producers fall back to them when the admin config leaves the matching
+// subject empty, which keeps existing deployments unchanged.
+const (
+	DefaultEmailVerifySubject        = "Verification code"
+	DefaultExpirationEmailSubject    = "Subscription Expired"
+	DefaultMaintenanceEmailSubject   = "系统维护通知 / System Maintenance Notice"
+	DefaultTrafficExceedEmailSubject = "Subscription Traffic Exceed"
+)
+
 const (
 	DefaultEmailVerifyTemplate = `<!doctype html>
 <html>

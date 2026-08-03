@@ -27,6 +27,7 @@ import (
 	emailworker "github.com/perfect-panel/server/internal/worker/email"
 	"github.com/perfect-panel/server/pkg/asynqx"
 	"github.com/perfect-panel/server/pkg/device"
+	emailpkg "github.com/perfect-panel/server/pkg/email"
 	"github.com/perfect-panel/server/pkg/exchangeRate"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/tool"
@@ -256,7 +257,7 @@ func (n lifecycleNotifier) NotifySubscriptionExpired(ctx context.Context, email 
 	n.enqueue(ctx, queuetypes.SendEmailPayload{
 		Type:    queuetypes.EmailTypeExpiration,
 		Email:   email,
-		Subject: "Subscription Expired",
+		Subject: emailpkg.DefaultExpirationEmailSubject,
 		Content: map[string]interface{}{
 			"SiteLogo":   n.srv.Config.Site.SiteLogo,
 			"SiteName":   n.srv.Config.Site.SiteName,
@@ -269,7 +270,7 @@ func (n lifecycleNotifier) NotifyTrafficExceeded(ctx context.Context, email stri
 	n.enqueue(ctx, queuetypes.SendEmailPayload{
 		Type:    queuetypes.EmailTypeTrafficExceed,
 		Email:   email,
-		Subject: "Subscription Traffic Exceed",
+		Subject: emailpkg.DefaultTrafficExceedEmailSubject,
 		Content: map[string]interface{}{
 			"SiteLogo": n.srv.Config.Site.SiteLogo,
 			"SiteName": n.srv.Config.Site.SiteName,
