@@ -189,18 +189,11 @@ func TestReconcilePaidOrdersArchivedTypeMismatch(t *testing.T) {
 		t.Fatalf("ArchiveTask: %v", err)
 	}
 
-	err = logic.ProcessTask(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected ProcessTask error for type mismatch")
+	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+		t.Fatalf("ProcessTask must repair a type-mismatched task, got: %v", err)
 	}
 
-	taskInfo, err := svcCtx.Inspector.GetTaskInfo("default", taskID)
-	if err != nil {
-		t.Fatalf("GetTaskInfo: %v", err)
-	}
-	if taskInfo.State != asynq.TaskStateArchived {
-		t.Fatalf("expected task to remain archived after type mismatch, got %v", taskInfo.State)
-	}
+	assertRepairedActivationTask(t, svcCtx, taskID, orderNo)
 }
 
 func TestReconcilePaidOrdersArchivedPayloadOrderNoMismatch(t *testing.T) {
@@ -224,17 +217,59 @@ func TestReconcilePaidOrdersArchivedPayloadOrderNoMismatch(t *testing.T) {
 		t.Fatalf("ArchiveTask: %v", err)
 	}
 
-	err = logic.ProcessTask(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected ProcessTask error for OrderNo mismatch")
+	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+		t.Fatalf("ProcessTask must repair an OrderNo-mismatched task, got: %v", err)
 	}
 
+	assertRepairedActivationTask(t, svcCtx, taskID, orderNo)
+}
+
+// The 2026-08-05 production incident: an archived activation task whose
+// payload carries no order_no ("{}") made every reconcile run error out and
+// retry forever. The run must repair the task and finish cleanly.
+func TestReconcilePaidOrdersArchivedEmptyPayloadRepaired(t *testing.T) {
+	orderNo := "empty-payload-1"
+	svcCtx, _ := newReconcileTestContext(t, []*orderEntity.Order{
+		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
+	})
+	logic := NewReconcilePaidOrdersLogic(svcCtx)
+	taskID := types.ActivationTaskID(orderNo)
+
+	task := asynq.NewTask(types.ForthwithActivateOrder, []byte("{}"), asynq.MaxRetry(5))
+	if _, err := svcCtx.Queue.EnqueueContext(context.Background(), task, asynq.TaskID(taskID)); err != nil {
+		t.Fatalf("EnqueueContext: %v", err)
+	}
+	if err := svcCtx.Inspector.ArchiveTask("default", taskID); err != nil {
+		t.Fatalf("ArchiveTask: %v", err)
+	}
+
+	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+		t.Fatalf("ProcessTask must repair an empty-payload task, got: %v", err)
+	}
+
+	assertRepairedActivationTask(t, svcCtx, taskID, orderNo)
+}
+
+// assertRepairedActivationTask verifies the corrupt task was replaced by a
+// pending activation task carrying the canonical payload.
+func assertRepairedActivationTask(t *testing.T, svcCtx *svc.ServiceContext, taskID, orderNo string) {
+	t.Helper()
 	taskInfo, err := svcCtx.Inspector.GetTaskInfo("default", taskID)
 	if err != nil {
 		t.Fatalf("GetTaskInfo: %v", err)
 	}
-	if taskInfo.State != asynq.TaskStateArchived {
-		t.Fatalf("expected task to remain archived after OrderNo mismatch, got %v", taskInfo.State)
+	if taskInfo.State != asynq.TaskStatePending {
+		t.Fatalf("expected repaired task to be pending, got %v", taskInfo.State)
+	}
+	if taskInfo.Type != types.ForthwithActivateOrder {
+		t.Fatalf("expected task type %s, got %s", types.ForthwithActivateOrder, taskInfo.Type)
+	}
+	var payload types.ForthwithActivateOrderPayload
+	if err := json.Unmarshal(taskInfo.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal repaired payload: %v", err)
+	}
+	if payload.OrderNo != orderNo {
+		t.Fatalf("expected repaired payload order_no %s, got %q", orderNo, payload.OrderNo)
 	}
 }
 

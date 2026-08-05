@@ -28,6 +28,7 @@ const (
 	conflictKept      conflictAction = iota // task exists in acceptable state
 	conflictNotFound                        // task vanished, re-enqueued
 	conflictRecovered                       // archived task recovered via RunTask
+	conflictRepaired                        // corrupt conflicting task discarded and replaced
 )
 
 // ReconcilePaidOrdersLogic treats the durable Paid state as an activation
@@ -53,8 +54,10 @@ func (l *ReconcilePaidOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Tas
 		keptRetry        int
 		totalNotFound    int
 		totalArchived    int
+		totalRepaired    int
 		totalCompleted   int
 		totalAggregating int
+		conflictFailed   int
 		totalStale       int
 		oldestAge        time.Duration
 	)
@@ -95,12 +98,17 @@ func (l *ReconcilePaidOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Tas
 			totalConflict++
 			action, state, conflictErr := l.handleConflict(ctx, orderInfo.OrderNo, taskID)
 			if conflictErr != nil {
+				// One order's broken task must not abort the whole run: the
+				// remaining orders still get reconciled and the next cycle
+				// retries this one.
 				logger.WithContext(ctx).Error("[ReconcilePaidOrders] handleConflict failed",
 					logger.Field("orderNo", orderInfo.OrderNo),
 					logger.Field("taskID", taskID),
 					logger.Field("error", conflictErr.Error()),
 				)
-				return conflictErr
+				conflictFailed++
+				afterID = orderInfo.Id
+				continue
 			}
 			switch action {
 			case conflictKept:
@@ -122,6 +130,8 @@ func (l *ReconcilePaidOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Tas
 				totalNotFound++
 			case conflictRecovered:
 				totalArchived++
+			case conflictRepaired:
+				totalRepaired++
 			}
 			afterID = orderInfo.Id
 		}
@@ -140,6 +150,8 @@ func (l *ReconcilePaidOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Tas
 		logger.Field("conflictRetry", keptRetry),
 		logger.Field("notFound", totalNotFound),
 		logger.Field("archivedRecovered", totalArchived),
+		logger.Field("repaired", totalRepaired),
+		logger.Field("conflictFailed", conflictFailed),
 		logger.Field("completedWhilePaid", totalCompleted),
 		logger.Field("aggregating", totalAggregating),
 		logger.Field("stalePaid", totalStale),
@@ -159,12 +171,7 @@ func (l *ReconcilePaidOrdersLogic) handleConflict(ctx context.Context, orderNo, 
 	info, err := l.svc.Inspector.GetTaskInfo("default", taskID)
 	if err != nil {
 		if errors.Is(err, asynq.ErrTaskNotFound) {
-			payload, enqErr := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: orderNo})
-			if enqErr != nil {
-				return conflictKept, 0, fmt.Errorf("marshal for re-enqueue: %w", enqErr)
-			}
-			task := asynq.NewTask(types.ForthwithActivateOrder, payload)
-			if _, enqErr = l.svc.Queue.EnqueueContext(ctx, task, asynq.MaxRetry(5), asynq.TaskID(taskID)); enqErr != nil {
+			if enqErr := l.enqueueActivation(ctx, orderNo, taskID); enqErr != nil {
 				return conflictKept, 0, fmt.Errorf("re-enqueue after not found: %w", enqErr)
 			}
 			return conflictNotFound, 0, nil
@@ -178,27 +185,58 @@ func (l *ReconcilePaidOrdersLogic) handleConflict(ctx context.Context, orderNo, 
 	case asynq.TaskStateArchived:
 		return l.handleArchived(ctx, orderNo, taskID, info)
 	case asynq.TaskStateCompleted:
+		// Deterministic per-task anomalies stay loud in the log but must not
+		// error out: an error here aborts every remaining order's reconcile
+		// and repeats each cycle.
 		logger.WithContext(ctx).Error("[ReconcilePaidOrders] CompletedWhilePaid",
 			logger.Field("orderNo", orderNo),
 			logger.Field("taskID", taskID),
 			logger.Field("state", "completed"),
 		)
-		return conflictKept, asynq.TaskStateCompleted, fmt.Errorf("task completed while order still paid")
+		return conflictKept, asynq.TaskStateCompleted, nil
 	case asynq.TaskStateAggregating:
 		logger.WithContext(ctx).Error("[ReconcilePaidOrders] UnexpectedAggregating",
 			logger.Field("orderNo", orderNo),
 			logger.Field("taskID", taskID),
 			logger.Field("state", "aggregating"),
 		)
-		return conflictKept, asynq.TaskStateAggregating, fmt.Errorf("task aggregating while order still paid")
+		return conflictKept, asynq.TaskStateAggregating, nil
 	default:
 		logger.WithContext(ctx).Error("[ReconcilePaidOrders] UnexpectedTaskState",
 			logger.Field("orderNo", orderNo),
 			logger.Field("taskID", taskID),
 			logger.Field("state", info.State),
 		)
-		return conflictKept, info.State, fmt.Errorf("unexpected task state: %v", info.State)
+		return conflictKept, info.State, nil
 	}
+}
+
+// enqueueActivation inserts a fresh activation task carrying the canonical
+// payload for the order.
+func (l *ReconcilePaidOrdersLogic) enqueueActivation(ctx context.Context, orderNo, taskID string) error {
+	payload, err := json.Marshal(types.ForthwithActivateOrderPayload{OrderNo: orderNo})
+	if err != nil {
+		return fmt.Errorf("marshal activation payload: %w", err)
+	}
+	task := asynq.NewTask(types.ForthwithActivateOrder, payload)
+	if _, err = l.svc.Queue.EnqueueContext(ctx, task, asynq.MaxRetry(5), asynq.TaskID(taskID)); err != nil {
+		return fmt.Errorf("enqueue activation: %w", err)
+	}
+	return nil
+}
+
+// discardAndReplace drops a corrupt conflicting task (wrong type, unreadable
+// or mismatched payload — e.g. residue from an older deployment sharing the
+// task id) and replaces it with a fresh activation task. Production showed
+// that failing on these loops the whole reconcile run forever.
+func (l *ReconcilePaidOrdersLogic) discardAndReplace(ctx context.Context, orderNo, taskID string) (conflictAction, asynq.TaskState, error) {
+	if err := l.svc.Inspector.DeleteTask("default", taskID); err != nil {
+		return conflictKept, asynq.TaskStateArchived, fmt.Errorf("delete corrupt task: %w", err)
+	}
+	if err := l.enqueueActivation(ctx, orderNo, taskID); err != nil {
+		return conflictKept, asynq.TaskStateArchived, err
+	}
+	return conflictRepaired, 0, nil
 }
 
 func (l *ReconcilePaidOrdersLogic) handleArchived(ctx context.Context, orderNo, taskID string, info *asynq.TaskInfo) (conflictAction, asynq.TaskState, error) {
@@ -209,7 +247,7 @@ func (l *ReconcilePaidOrdersLogic) handleArchived(ctx context.Context, orderNo, 
 			logger.Field("expectedType", types.ForthwithActivateOrder),
 			logger.Field("actualType", info.Type),
 		)
-		return conflictKept, asynq.TaskStateArchived, fmt.Errorf("archived type mismatch: expected %s, got %s", types.ForthwithActivateOrder, info.Type)
+		return l.discardAndReplace(ctx, orderNo, taskID)
 	}
 	var payload types.ForthwithActivateOrderPayload
 	if err := json.Unmarshal(info.Payload, &payload); err != nil {
@@ -218,7 +256,7 @@ func (l *ReconcilePaidOrdersLogic) handleArchived(ctx context.Context, orderNo, 
 			logger.Field("taskID", taskID),
 			logger.Field("error", err.Error()),
 		)
-		return conflictKept, asynq.TaskStateArchived, fmt.Errorf("archived payload unmarshal: %w", err)
+		return l.discardAndReplace(ctx, orderNo, taskID)
 	}
 	if payload.OrderNo != orderNo {
 		logger.WithContext(ctx).Error("[ReconcilePaidOrders] ArchivedOrderNoMismatch",
@@ -226,7 +264,7 @@ func (l *ReconcilePaidOrdersLogic) handleArchived(ctx context.Context, orderNo, 
 			logger.Field("taskID", taskID),
 			logger.Field("payloadOrderNo", payload.OrderNo),
 		)
-		return conflictKept, asynq.TaskStateArchived, fmt.Errorf("archived order_no mismatch: expected %s, got %s", orderNo, payload.OrderNo)
+		return l.discardAndReplace(ctx, orderNo, taskID)
 	}
 
 	if err := l.svc.Inspector.RunTask("default", taskID); err != nil {
