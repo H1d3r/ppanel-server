@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
@@ -26,6 +27,22 @@ func NewBindDeviceLogic(ctx context.Context, deps BindDeviceDependencies) *BindD
 	}
 }
 
+// maxUserAgentLength matches the user_device.user_agent column (02149).
+const maxUserAgentLength = 512
+
+// truncateUserAgent caps the raw User-Agent header so it always fits the
+// column, cutting back to a rune boundary.
+func truncateUserAgent(ua string) string {
+	if len(ua) <= maxUserAgentLength {
+		return ua
+	}
+	cut := ua[:maxUserAgentLength]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut
+}
+
 // BindDeviceToUser binds a device to a user
 // If the device is already bound to another user, it will disable that user and bind the device to the current user
 func (l *BindDeviceLogic) BindDeviceToUser(identifier, ip, userAgent string, currentUserId int64) error {
@@ -33,6 +50,7 @@ func (l *BindDeviceLogic) BindDeviceToUser(identifier, ip, userAgent string, cur
 		// No device identifier provided, skip binding
 		return nil
 	}
+	userAgent = truncateUserAgent(userAgent)
 
 	l.Infow("binding device to user",
 		logger.Field("identifier", identifier),
