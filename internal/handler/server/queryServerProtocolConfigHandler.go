@@ -39,7 +39,7 @@ func QueryServerProtocolConfigHandler(svcCtx *svc.ServiceContext) app.HandlerFun
 			SecretKey: ctx.Query("secret_key"),
 			Protocols: queryValues(ctx, "protocols", "protocols[]"),
 		}
-		if svcCtx.Config.Node.NodeSecret != req.SecretKey {
+		if !nodeSecretMatches(svcCtx, req.SecretKey) {
 			writeServerText(ctx, consts.StatusUnauthorized, "Unauthorized")
 			ctx.Abort()
 			return

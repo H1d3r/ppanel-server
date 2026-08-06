@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"mime"
 	"strconv"
 	"strings"
@@ -25,11 +26,21 @@ const protobufContentType = "application/protobuf"
 // the certificate is loaded.
 const certificateSHA256Header = "X-Node-Certificate-SHA256"
 
+// nodeSecretMatches reports whether key authenticates as the node secret. An
+// unprovisioned (empty) secret never authenticates: comparing it directly would
+// let a bare `?secret_key=` through.
+func nodeSecretMatches(svcCtx *svc.ServiceContext, key string) bool {
+	secret := svcCtx.Config.Node.NodeSecret
+	if secret == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(secret)) == 1
+}
+
 func ServerMiddleware(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		ctx.Header("Vary", "Accept")
-		key, ok := ctx.GetQuery("secret_key")
-		if ok && key == svcCtx.Config.Node.NodeSecret {
+		if nodeSecretMatches(svcCtx, ctx.Query("secret_key")) {
 			ctx.Next(c)
 			return
 		}

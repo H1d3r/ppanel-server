@@ -7,6 +7,7 @@ import (
 func StartInitSystemConfig(svc *svc.ServiceContext) {
 	Migrate(svc)
 	Site(svc)
+	NodeSecret(svc)
 	Node(svc)
 	Email(svc)
 	Device(svc)

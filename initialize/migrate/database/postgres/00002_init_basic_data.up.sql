@@ -67,7 +67,7 @@ VALUES (1, 'site', 'SiteLogo', '/favicon.svg', 'string', 'Site Logo', '2025-04-2
         '2025-04-22 14:25:16.639'),
        (18, 'verify', 'EnableResetPasswordVerify', 'false', 'bool', 'is enable reset password verify',
         '2025-04-22 14:25:16.639', '2025-04-22 14:25:16.639'),
-       (19, 'server', 'NodeSecret', '12345678', 'string', 'node secret', '2025-04-22 14:25:16.640',
+       (19, 'server', 'NodeSecret', '', 'string', 'node secret', '2025-04-22 14:25:16.640',
         '2025-04-22 14:25:16.640'),
        (20, 'server', 'NodePullInterval', '10', 'int', 'node pull interval', '2025-04-22 14:25:16.640',
         '2025-04-22 14:25:16.640'),

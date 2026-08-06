@@ -45,6 +45,32 @@ func TestQueryServerProtocolConfigRejectsInvalidSecret(t *testing.T) {
 	}
 }
 
+// An installation whose node secret has not been provisioned yet must not
+// authenticate anyone; a bare `?secret_key=` used to compare equal to it.
+func TestServerSecretMiddlewareRejectsUnprovisionedSecret(t *testing.T) {
+	app := newTestServer("")
+
+	status, body := performNativeRequest(app, http.MethodPost, "/v1/server/online?secret_key=")
+	if status != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, status)
+	}
+	if body != "Forbidden" {
+		t.Fatalf("expected forbidden body, got %q", body)
+	}
+}
+
+func TestQueryServerProtocolConfigRejectsUnprovisionedSecret(t *testing.T) {
+	app := newTestServer("")
+
+	status, body := performNativeRequest(app, http.MethodGet, "/v2/server/1?secret_key=")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, status)
+	}
+	if body != "Unauthorized" {
+		t.Fatalf("expected unauthorized body, got %q", body)
+	}
+}
+
 func TestCorsPreflightBypassesServerSecretMiddleware(t *testing.T) {
 	app := newTestServer("secret")
 
