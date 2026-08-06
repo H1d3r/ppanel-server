@@ -88,7 +88,7 @@ func TestWriteServerReportResult_Protobuf(t *testing.T) {
 		t.Fatalf("proto.Unmarshal() error = %v", err)
 	}
 	if result.Code != 200 || result.Message != "success" {
-		t.Fatalf("result = %+v, want successful protobuf result", result)
+		t.Fatalf("result = %+v, want successful protobuf result", &result)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestWriteServerReportResult_ProtobufError(t *testing.T) {
 		t.Fatalf("proto.Unmarshal() error = %v", err)
 	}
 	if response.Code != 500 || response.Message != "Internal Server Error" {
-		t.Fatalf("response = %+v, want internal-error protobuf envelope", response)
+		t.Fatalf("response = %+v, want internal-error protobuf envelope", &response)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestWriteServerProtobufWithETag(t *testing.T) {
 	}
 	etag := string(ctx.Response.Header.Peek("ETag"))
 	if etag == "" || string(ctx.Response.Header.ContentType()) != protobufContentType {
-		t.Fatalf("response headers = %+v, want Protobuf content type and ETag", ctx.Response.Header)
+		t.Fatalf("response headers = %+v, want Protobuf content type and ETag", &ctx.Response.Header)
 	}
 
 	ctx = app.NewContext(0)
