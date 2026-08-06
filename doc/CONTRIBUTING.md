@@ -29,7 +29,7 @@ To ensure the quality of the codebase and maintainability of the project, please
     - Fix bugs based on `fix/*` branches.
     - Ensure the target branch of the PR aligns with the project's branching strategy.
 
-- **Sync with Base Branch**: Before submitting the PR, ensure your branch is up-to-date with the target branch (e.g., `main` or `develop`).
+- **Sync with Base Branch**: Before submitting the PR, ensure your branch is up-to-date with the target branch (`master` or `dev`).
 
 ## 4. Review Process
 
