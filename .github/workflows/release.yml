@@ -34,7 +34,13 @@ jobs:
 
       - name: Extract version from git tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          # 1.16.0 -> 1.16, so operators can follow a minor series. Only the
+          # stable step uses it: on a prerelease tag this would yield a value
+          # like 1.16.0-beta, which is why the beta step leaves it out.
+          echo "MAJOR_MINOR=${VERSION%.*}" >> $GITHUB_ENV
 
       - name: Get short SHA
         id: sha
@@ -57,6 +63,8 @@ jobs:
             CHANNEL=stable
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.MAJOR_MINOR }}
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}-${{ env.GIT_SHA }}
 
       - name: Build and push Docker image for beta release
@@ -72,6 +80,7 @@ jobs:
             CHANNEL=beta
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:beta
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}-${{ env.GIT_SHA }}
 
   # Creates the GitHub release the other two jobs publish into.
