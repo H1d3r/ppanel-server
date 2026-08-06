@@ -50,6 +50,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ env.VERSION }}
+            CHANNEL=stable
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}-${{ env.GIT_SHA }}
@@ -64,6 +65,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ env.VERSION }}
+            CHANNEL=beta
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:beta
             ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}-${{ env.GIT_SHA }}
@@ -117,6 +119,14 @@ jobs:
       - name: Set BUILD_TIME env
         run: echo BUILD_TIME=$(date --iso-8601=seconds) >> ${GITHUB_ENV}
 
+      - name: Resolve release channel
+        run: |
+          if [[ "${{ github.ref_name }}" == *beta* ]]; then
+            echo "CHANNEL=beta" >> $GITHUB_ENV
+          else
+            echo "CHANNEL=stable" >> $GITHUB_ENV
+          fi
+
       - uses: actions/checkout@v4
       - uses: wangyoucao577/go-release-action@v1
         with:
@@ -128,4 +138,4 @@ jobs:
           project_path: "."
           binary_name: "ppanel-server"
           extra_files: LICENSE etc
-          ldflags: -s -w -buildid= -X "github.com/perfect-panel/server/pkg/constant.Version=${{env.VERSION}}" -X "github.com/perfect-panel/server/pkg/constant.BuildTime=${{env.BUILD_TIME}}"
+          ldflags: -s -w -buildid= -X "github.com/perfect-panel/server/pkg/constant.Version=${{env.VERSION}}" -X "github.com/perfect-panel/server/pkg/constant.BuildTime=${{env.BUILD_TIME}}" -X "github.com/perfect-panel/server/pkg/constant.Channel=${{env.CHANNEL}}"

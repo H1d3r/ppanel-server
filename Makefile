@@ -1,9 +1,16 @@
 NAME="ppanel-server"
 BINDIR=bin
-VERSION=$(shell git describe --tags || echo "unknown version")
+# Keep the injected version free of the tag's leading "v"; the release pipelines
+# strip it too, and cmd/run.go prints its own "v" prefix.
+VERSION=$(shell git describe --tags 2>/dev/null | sed 's/^v//')
+ifeq ($(strip $(VERSION)),)
+VERSION=unknown version
+endif
+CHANNEL?=dev
 BUILDTIME=$(shell date -u)
 GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '-X "github.com/perfect-panel/server/pkg/constant.Version=$(VERSION)" \
 		-X "github.com/perfect-panel/server/pkg/constant.BuildTime=$(BUILDTIME)" \
+		-X "github.com/perfect-panel/server/pkg/constant.Channel=$(CHANNEL)" \
 		-w -s -buildid='
 
 PLATFORM_LIST = \

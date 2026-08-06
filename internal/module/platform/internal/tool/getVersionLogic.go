@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/model/dto"
 	"github.com/perfect-panel/server/pkg/constant"
@@ -25,26 +24,7 @@ func newGetVersionLogic(ctx context.Context, deps Deps) *GetVersionLogic {
 }
 
 func (l *GetVersionLogic) GetVersion() (resp *dto.VersionResponse, err error) {
-	version := constant.Version
-	buildTime := constant.BuildTime
-
-	// Normalize unknown values
-	if version == "unknown version" {
-		version = "unknown"
-	}
-	if buildTime == "unknown time" {
-		buildTime = "unknown"
-	}
-
-	// Format version based on whether it starts with 'v'
-	var formattedVersion string
-	if len(version) > 0 && version[0] == 'v' {
-		formattedVersion = fmt.Sprintf("%s(%s)", version[1:], buildTime)
-	} else {
-		formattedVersion = fmt.Sprintf("%s(%s) Develop", version, buildTime)
-	}
-
 	return &dto.VersionResponse{
-		Version: formattedVersion,
+		Version: constant.Display(),
 	}, nil
 }

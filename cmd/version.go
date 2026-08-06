@@ -12,6 +12,6 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "PPanel version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("[PPanel version] " + constant.Version + " (" + constant.BuildTime + ")")
+		fmt.Println("[PPanel version] " + constant.Display())
 	},
 }

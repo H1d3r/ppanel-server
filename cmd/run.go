@@ -41,7 +41,7 @@ var startCmd = &cobra.Command{
 	Use:   "run",
 	Short: "start PPanel",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("[PPanel version] v" + fmt.Sprintf("%s(%s)", constant.Version, constant.BuildTime))
+		fmt.Println("[PPanel version] " + constant.Display())
 		run()
 	},
 }
