@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, dev]
+    # Pushes to dev are covered by nightly.yml, which gates publishing on the
+    # same checks; running them here too would double every dev push.
+    branches: [master]
   pull_request:
     branches: [master, dev]
 
