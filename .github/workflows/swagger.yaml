@@ -2,7 +2,7 @@ name: Generate and sync Swagger
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, dev]
     paths:
       - "**/*.go"
       - "api/**/*.proto"
@@ -12,7 +12,7 @@ on:
       - "script/generate-swagger.sh"
       - ".github/workflows/swagger.yaml"
   push:
-    branches: [master]
+    branches: [master, dev]
     paths:
       - "**/*.go"
       - "api/**/*.proto"
