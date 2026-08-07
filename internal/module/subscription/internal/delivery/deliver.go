@@ -108,6 +108,16 @@ func (l *SubscribeLogic) Handler(req *dto.SubscribeRequest) (resp *dto.Subscribe
 	if err != nil {
 		return nil, err
 	}
+	defaultParams, err := targetApp.DefaultParamValues()
+	if err != nil {
+		// A malformed default must not cost the user their subscription; fall back
+		// to whatever the request carried.
+		l.Errorw("[SubscribeLogic] Ignoring malformed default params",
+			logger.Field("application", targetApp.Name),
+			logger.Field("defaultParams", targetApp.DefaultParams),
+			logger.Field("error", err.Error()))
+	}
+
 	a := adapter.NewAdapter(
 		targetApp.SubscribeTemplate,
 		adapter.WithServers(servers),
@@ -123,7 +133,7 @@ func (l *SubscribeLogic) Handler(req *dto.SubscribeRequest) (resp *dto.Subscribe
 			Traffic:      userSubscribe.Traffic,
 			SubscribeURL: l.getSubscribeV2URL(),
 		}),
-		adapter.WithParams(req.Params),
+		adapter.WithParams(mergeParams(defaultParams, req.Params)),
 	)
 
 	logger.Debugf("[SubscribeLogic] Building client config for user %d with URI %s", userSubscribe.UserId, l.getSubscribeV2URL())
