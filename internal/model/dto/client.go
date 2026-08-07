@@ -39,15 +39,19 @@ type ApplicationVersion struct {
 }
 
 type CreateSubscribeApplicationRequest struct {
-	Name              string       `json:"name"`
-	Description       string       `json:"description,omitempty"`
-	Icon              string       `json:"icon,omitempty"`
-	Scheme            string       `json:"scheme,omitempty"`
-	UserAgent         string       `json:"user_agent"`
-	IsDefault         bool         `json:"is_default"`
-	SubscribeTemplate string       `json:"template"`
-	OutputFormat      string       `json:"output_format"`
-	DownloadLink      DownloadLink `json:"download_link"`
+	Name              string `json:"name"`
+	Description       string `json:"description,omitempty"`
+	Icon              string `json:"icon,omitempty"`
+	Scheme            string `json:"scheme,omitempty"`
+	UserAgent         string `json:"user_agent"`
+	IsDefault         bool   `json:"is_default"`
+	SubscribeTemplate string `json:"template"`
+	OutputFormat      string `json:"output_format"`
+	// DefaultParams holds the template params this client should receive when the
+	// subscription URL does not carry them, in query-string form such as
+	// "mode=rule&emoji=1".
+	DefaultParams string       `json:"default_params,omitempty"`
+	DownloadLink  DownloadLink `json:"download_link"`
 }
 
 type DeleteSubscribeApplicationRequest struct {
@@ -96,6 +100,7 @@ type SubscribeApplication struct {
 	IsDefault         bool         `json:"is_default"`
 	SubscribeTemplate string       `json:"template"`
 	OutputFormat      string       `json:"output_format"`
+	DefaultParams     string       `json:"default_params,omitempty"`
 	DownloadLink      DownloadLink `json:"download_link,omitempty"`
 	CreatedAt         int64        `json:"created_at"`
 	UpdatedAt         int64        `json:"updated_at"`
@@ -121,5 +126,6 @@ type UpdateSubscribeApplicationRequest struct {
 	IsDefault         bool         `json:"is_default"`
 	SubscribeTemplate string       `json:"template"`
 	OutputFormat      string       `json:"output_format"`
+	DefaultParams     string       `json:"default_params,omitempty"`
 	DownloadLink      DownloadLink `json:"download_link,omitempty"`
 }

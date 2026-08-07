@@ -43,6 +43,7 @@ func (l *CreateSubscribeApplicationLogic) CreateSubscribeApplication(req *dto.Cr
 		IsDefault:         req.IsDefault,
 		SubscribeTemplate: req.SubscribeTemplate,
 		OutputFormat:      req.OutputFormat,
+		DefaultParams:     req.DefaultParams,
 		DownloadLink:      string(linkData),
 	}
 

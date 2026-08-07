@@ -48,6 +48,7 @@ func (l *UpdateSubscribeApplicationLogic) UpdateSubscribeApplication(req *dto.Up
 	data.IsDefault = req.IsDefault
 	data.SubscribeTemplate = req.SubscribeTemplate
 	data.OutputFormat = req.OutputFormat
+	data.DefaultParams = req.DefaultParams
 	data.DownloadLink = string(linkData)
 	err = l.deps.Clients.Update(l.ctx, data)
 	if err != nil {

@@ -46,7 +46,15 @@ func (l *PreviewSubscribeTemplateLogic) PreviewSubscribeTemplate(req *dto.Previe
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneClient error: %v", err.Error())
 	}
 
+	// Preview renders with the application's own defaults so it matches what a
+	// client receives when its subscription URL carries no params of its own.
+	defaultParams, err := data.DefaultParamValues()
+	if err != nil {
+		l.Errorf("[PreviewSubscribeTemplateLogic] Ignoring malformed default params %q: %v", data.DefaultParams, err)
+	}
+
 	sub := adapter.NewAdapter(data.SubscribeTemplate, adapter.WithServers(servers),
+		adapter.WithParams(defaultParams),
 		adapter.WithSiteName("PerfectPanel"),
 		adapter.WithSubscribeName("Test Subscribe"),
 		adapter.WithOutputFormat(data.OutputFormat),
