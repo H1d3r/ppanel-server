@@ -3,10 +3,11 @@ package repo
 import (
 	"bytes"
 	"context"
-	"github.com/perfect-panel/server/internal/repository"
 	"log"
 	"strings"
 	"testing"
+
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"

@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/perfect-panel/server/internal/repository"
 	"time"
+
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	"github.com/perfect-panel/server/pkg/orm"

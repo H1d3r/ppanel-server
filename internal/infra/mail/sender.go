@@ -3,6 +3,7 @@ package mail
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/perfect-panel/server/pkg/logger"
 )
 

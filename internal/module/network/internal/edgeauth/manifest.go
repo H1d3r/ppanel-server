@@ -14,9 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"uuid"
+
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/redis/go-redis/v9"
-	"uuid"
 )
 
 const (

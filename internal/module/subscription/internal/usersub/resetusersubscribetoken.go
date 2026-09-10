@@ -3,14 +3,16 @@ package usersub
 import (
 	"context"
 	"fmt"
+
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
+
+	"uuid"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
-	"uuid"
 )
 
 type ResetUserSubscribeTokenLogic struct {

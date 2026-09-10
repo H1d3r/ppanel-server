@@ -3,8 +3,9 @@ package repo
 import (
 	"context"
 	"errors"
-	"github.com/perfect-panel/server/internal/repository"
 	"time"
+
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"gorm.io/gorm"

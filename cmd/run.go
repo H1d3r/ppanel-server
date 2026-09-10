@@ -19,7 +19,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/network"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/transport/http/routes"
-	"github.com/perfect-panel/server/internal/transport/http/server"
+	httpserver "github.com/perfect-panel/server/internal/transport/http/server"
 	"github.com/perfect-panel/server/internal/transport/http/setup"
 	"github.com/perfect-panel/server/internal/transport/task"
 	"github.com/perfect-panel/server/internal/transport/task/email"

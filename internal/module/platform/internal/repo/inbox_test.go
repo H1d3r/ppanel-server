@@ -2,8 +2,9 @@ package repo
 
 import (
 	"context"
-	"github.com/perfect-panel/server/internal/repository"
 	"testing"
+
+	"github.com/perfect-panel/server/internal/repository"
 
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"gorm.io/driver/sqlite"

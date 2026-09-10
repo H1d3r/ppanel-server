@@ -2,14 +2,15 @@ package deviceauth
 
 import (
 	"context"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestEnvelopeAuthenticatesOperationAndTimestamp(t *testing.T) {

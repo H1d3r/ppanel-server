@@ -8,10 +8,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/redis/go-redis/v9"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 const (
