@@ -1,5 +1,5 @@
 // Package arch enforces the modular-monolith architecture boundaries described
-// in docs/adr-001-modular-monolith.md.
+// in docs/design/adr-001-modular-monolith.md.
 //
 // Two complementary mechanisms guard module boundaries:
 //
@@ -27,7 +27,7 @@ const importPrefix = "github.com/perfect-panel/server/"
 
 // legacyLogicImports is the frozen baseline of cross-package imports inside
 // internal/logic, keyed by importer directory. Removing an edge here is always
-// welcome; adding one requires updating docs/adr-001-modular-monolith.md, as
+// welcome; adding one requires updating docs/design/adr-001-modular-monolith.md, as
 // each new edge makes the future module split harder.
 var legacyLogicImports = map[string][]string{}
 
@@ -204,7 +204,7 @@ func TestLogicImportFreeze(t *testing.T) {
 			if allowedLegacyEdge(f.dir, imp) {
 				continue
 			}
-			t.Errorf("%s: new cross-package logic import %q — move the shared code into the owning module (see docs/adr-001-modular-monolith.md) instead of coupling logic packages", f.path, imp)
+			t.Errorf("%s: new cross-package logic import %q — move the shared code into the owning module (see docs/design/adr-001-modular-monolith.md) instead of coupling logic packages", f.path, imp)
 		}
 	}
 }

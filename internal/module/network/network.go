@@ -1,6 +1,6 @@
 // Package network is the facade of the network module: admin-side server and
 // node management, the node-facing server API and the edge client manifest.
-// See docs/adr-001-modular-monolith.md.
+// See docs/design/adr-001-modular-monolith.md.
 package network
 
 import (

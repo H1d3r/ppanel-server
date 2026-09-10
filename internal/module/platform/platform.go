@@ -1,7 +1,7 @@
 // Package platform is the facade of the platform module (shared-kernel
 // concerns: audit/message logs and their retention settings; system
 // configuration joins as migration proceeds). See
-// docs/adr-001-modular-monolith.md.
+// docs/design/adr-001-modular-monolith.md.
 package platform
 
 import (

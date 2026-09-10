@@ -13,7 +13,7 @@ import (
 // DeviceLoginHandler documents Device Login.
 //
 // @Summary Device Login
-// @Description When device security is enabled, requests and response data use a signed data/time/sign envelope. Each request needs a fresh nonce; see docs/device-authentication.md. The User-Agent is read from the HTTP header.
+// @Description When device security is enabled, requests and response data use a signed data/time/sign envelope. Each request needs a fresh nonce; see docs/design/device-authentication.md. The User-Agent is read from the HTTP header.
 // @Tags common
 // @Accept json
 // @Produce json

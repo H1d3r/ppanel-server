@@ -2,7 +2,7 @@
 
 - 状态：已接受
 - 日期：2026-07-24
-- 相关：`docs/v2-order-checkout-design.md`（订单 outbox 与对账基础）、`internal/arch`（边界强制测试）
+- 相关：`docs/design/v2-order-checkout-design.md`（订单 outbox 与对账基础）、`internal/arch`（边界强制测试）
 
 ## 背景
 
@@ -78,7 +78,7 @@ internal/module/<name>/
 
 ## 迁移路径
 
-2026-09-05 的目录整理已完成：当前布局见 `docs/package-layout.md`。
+2026-09-05 的目录整理已完成：当前布局见 `docs/design/package-layout.md`。
 运行时初始化与热更新已归 `internal/app/bootstrap`，安装页面归 `internal/transport/http/setup`，
 迁移引擎和 SQL 归 `internal/app/migration/schema`；SQL 内容和编号保持不变。
 本轮依赖收窄后，模块生产代码已清除完整 Store 类型依赖；库存与流量入账改为注入的服务能力。

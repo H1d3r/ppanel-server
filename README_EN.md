@@ -2,15 +2,15 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/github/license/perfect-panel/server)](../LICENSE)
+[![License](https://img.shields.io/github/license/perfect-panel/server)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.27.1%2B-blue)](https://go.dev/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/perfect-panel/server)](https://goreportcard.com/report/github.com/perfect-panel/server)
-[![Docker](https://img.shields.io/badge/Docker-Available-blue)](../Dockerfile)
-[![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/server/release.yml)](../.github/workflows/release.yml)
+[![Docker](https://img.shields.io/badge/Docker-Available-blue)](Dockerfile)
+[![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/server/release.yml)](.github/workflows/release.yml)
 
 **PPanel is a pure, professional, and perfect open-source proxy panel tool, designed for learning and practical use.**
 
-[English](README_EN.md) | [中文](../README.md) | [Report Bug](https://github.com/perfect-panel/server/issues/new) | [Request Feature](https://github.com/perfect-panel/server/issues/new)
+[English](README_EN.md) | [中文](README.md) | [Report Bug](https://github.com/perfect-panel/server/issues/new) | [Request Feature](https://github.com/perfect-panel/server/issues/new)
 
 </div>
 
@@ -116,7 +116,7 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
 
 API documentation is generated from Swaggo annotations on the handlers and checked against the routes actually registered by Hertz. The root `ppanel.json` is the complete Swagger 2.0 document:
 
-[ppanel.json](../ppanel.json)
+[ppanel.json](ppanel.json)
 
 After changing a route, request DTO, or response DTO, run:
 
@@ -141,14 +141,14 @@ Visit [ppanel.dev](https://ppanel.dev/) for more details.
 
 ## 🏛 Architecture
 
-![Architecture Diagram](image/architecture-en.png)
+![Architecture Diagram](docs/image/architecture-en.png)
 
 ## 📁 Directory Structure
 
 ```
 .
 ├── cmd/              # Application entry point
-├── doc/              # Documentation
+├── docs/             # Documentation
 ├── etc/              # Configuration files (e.g., ppanel.yaml)
 ├── internal/         # Internal modules
 │   ├── app/          # Assembly, bootstrap, migrations and scheduling
@@ -187,7 +187,7 @@ Supported platforms include:
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please follow the [Contribution Guidelines](CONTRIBUTING.md) for bug fixes, features, or
+Contributions are welcome! Please follow the [Contribution Guidelines](docs/contributing/CONTRIBUTING.md) for bug fixes, features, or
 documentation improvements.
 
 ## ✨ Special Thanks
@@ -259,4 +259,4 @@ project's development! 🚀
 Please give these projects a ⭐ to support the open-source movement!
 ## 📄 License
 
-This project is licensed under the [GPL-3.0 License](../LICENSE).
+This project is licensed under the [GPL-3.0 License](LICENSE).

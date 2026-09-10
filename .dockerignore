@@ -14,7 +14,6 @@ cache/
 
 # Documentation. ppanel.json is the generated Swagger reference, read only by
 # internal/route's contract test, never by the build.
-doc/
 docs/
 *.md
 ppanel.json

@@ -1,6 +1,6 @@
 // Package subscription is the facade of the subscription module: plan and
 // group management plus the public storefront listings (subscription
-// delivery joins as migration proceeds). See docs/adr-001-modular-monolith.md.
+// delivery joins as migration proceeds). See docs/design/adr-001-modular-monolith.md.
 package subscription
 
 import (

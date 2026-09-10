@@ -32,7 +32,7 @@ type Application struct {
 	GeoIP        *geoip.IPLocation
 	Store        repository.Store
 
-	// Domain modules (see docs/adr-001-modular-monolith.md). Application is
+	// Domain modules (see docs/design/adr-001-modular-monolith.md). Application is
 	// their composition root; handlers call the module facades.
 	Support      support.Service
 	Billing      billing.Service

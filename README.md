@@ -10,7 +10,7 @@
 
 **PPanel 是一个纯净、专业、完美的开源代理面板工具，旨在成为您学习和实际使用的理想选择。**
 
-[中文](README.md) | [English](doc/README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
+[中文](README.md) | [English](README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
 
 </div>
 
@@ -140,14 +140,14 @@ go test ./internal/transport/http/routes -run '^TestSwagger' -count=1
 
 ## 🏛 系统架构
 
-![Architecture Diagram](./doc/image/architecture-zh.png)
+![Architecture Diagram](./docs/image/architecture-zh.png)
 
 ## 📁 目录结构
 
 ```
 .
 ├── cmd/              # 应用程序入口
-├── doc/              # 文档
+├── docs/             # 文档（使用指南、贡献指南、设计文档）
 ├── etc/              # 配置文件（如 ppanel.yaml）
 ├── internal/         # 内部模块
 │   ├── app/          # 应用组装、初始化、迁移与定时调度
@@ -186,7 +186,7 @@ make linux-arm64  # 构建特定平台
 
 ## 🤝 贡献
 
-欢迎各种贡献，包括功能开发、错误修复和文档改进。请查看[贡献指南](doc/CONTRIBUTING_ZH.md)了解详情。
+欢迎各种贡献，包括功能开发、错误修复和文档改进。请查看[贡献指南](docs/contributing/CONTRIBUTING_ZH.md)了解详情。
 
 ## ✨ 特别感谢
 

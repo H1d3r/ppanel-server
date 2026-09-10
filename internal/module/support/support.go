@@ -1,7 +1,7 @@
 // Package support is the facade of the support module (announcements and,
 // as migration proceeds, documents, tickets and ads). Admin and public
 // handlers call the same service; access-plane concerns such as auth and
-// field trimming stay in the handlers. See docs/adr-001-modular-monolith.md.
+// field trimming stay in the handlers. See docs/design/adr-001-modular-monolith.md.
 package support
 
 import (

@@ -1,6 +1,6 @@
 // Package identity is the facade of the identity module (accounts, auth
 // methods, devices; the authentication flows join as migration proceeds).
-// See docs/adr-001-modular-monolith.md.
+// See docs/design/adr-001-modular-monolith.md.
 package identity
 
 import (
