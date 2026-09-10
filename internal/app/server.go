@@ -11,7 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/app/lifecycle"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/internal/transport/http/server"
+	httpserver "github.com/perfect-panel/server/internal/transport/http/server"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/trace"
 )
@@ -44,8 +44,10 @@ func newTransportServer(deps httpserver.Dependencies, runtimeConfig config.Confi
 	if runtimeConfig.TLS.Enable {
 		cert, err := tls.LoadX509KeyPair(runtimeConfig.TLS.CertFile, runtimeConfig.TLS.KeyFile)
 		if err != nil {
+			// Fail fast: a process that keeps running without listening
+			// hides the outage from the orchestrator.
 			logger.Errorf("load tls certificate error: %s", err.Error())
-			return nil
+			panic(fmt.Sprintf("load tls certificate: %v", err))
 		}
 		tlsConfig = &tls.Config{
 			MinVersion:   tls.VersionTLS12,
@@ -67,9 +69,6 @@ func (m *Service) Start() {
 		panic(err.Error())
 	}
 	m.server = newTransportServer(m.deps.HTTP(), m.deps.Config(), serverAddr)
-	if m.server == nil {
-		return
-	}
 	traceConfig := runtimeConfig.Trace
 	if traceConfig.Name == "" {
 		traceConfig.Name = trace.TraceName
