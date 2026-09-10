@@ -1,7 +1,8 @@
 # The image is built by compiling main.go, so the context only needs the Go
-# sources, go.mod/go.sum, the embedded assets (initialize/templates,
-# initialize/migrate/database, internal/auth/ratelimit/*.lua) and etc/, which the final stage
-# copies. Everything below is excluded; .git alone is by far the largest entry.
+# sources, go.mod/go.sum, the embedded assets (internal/transport/http/setup
+# templates, internal/app/migration/schema/database SQL,
+# internal/auth/ratelimit/*.lua) and etc/, which the final stage copies.
+# Everything below is excluded; .git alone is by far the largest entry.
 .git
 .gitignore
 .github
@@ -13,7 +14,7 @@ logs/
 cache/
 
 # Documentation. ppanel.json is the generated Swagger reference, read only by
-# internal/route's contract test, never by the build.
+# internal/transport/http/routes' contract test, never by the build.
 docs/
 *.md
 ppanel.json
