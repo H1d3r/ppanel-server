@@ -27,6 +27,17 @@ type Device struct {
 	Conn         *websocket.Conn
 	CreatedAt    time.Time
 	LastPingTime time.Time
+
+	// writeMu serializes writes on Conn. gorilla/websocket panics on
+	// concurrent writes, and pushes (SendToDevice/Broadcast) race the
+	// heartbeat replies written by the read loop.
+	writeMu sync.Mutex
+}
+
+func (d *Device) write(message string) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	return d.Conn.WriteMessage(websocket.TextMessage, []byte(message))
 }
 
 // WebSocket upgrader
@@ -44,6 +55,9 @@ type DeviceManager struct {
 	heartbeatTimeout int      // heartbeat timeout (seconds)
 	checkInterval    int      // heartbeat check interval (seconds)
 
+	quit     chan struct{}
+	quitOnce sync.Once
+
 	// event callbacks
 	OnDeviceOnline  func(userID int64, deviceID, session string)
 	OnDeviceOffline func(userID int64, deviceID, session string, createAt time.Time)
@@ -57,10 +71,23 @@ func (dm *DeviceManager) getUserMutex(userID int64) *sync.Mutex {
 	return mu.(*sync.Mutex)
 }
 
+// snapshotDevices returns a copy of the user's device list. The slice is
+// mutated in place by removals, so readers must copy it under the user lock
+// before iterating.
+func (dm *DeviceManager) snapshotDevices(userID int64) []*Device {
+	mu := dm.getUserMutex(userID)
+	mu.Lock()
+	defer mu.Unlock()
+	if val, ok := dm.userDevices.Load(userID); ok {
+		return append([]*Device(nil), val.([]*Device)...)
+	}
+	return nil
+}
+
 // Listen to WebSocket data
 func (dm *DeviceManager) listenToDevice(userID int64, device *Device) {
 	defer func() {
-		dm.removeDevice(userID, device.DeviceID) // remove device when disconnected
+		dm.removeDevice(userID, device) // remove device when disconnected
 	}()
 
 	for {
@@ -94,7 +121,7 @@ func (dm *DeviceManager) UpdateHeartbeat(userID int64, deviceID string) {
 		for _, d := range devices {
 			if d.DeviceID == deviceID {
 				d.LastPingTime = time.Now()
-				if err := d.Conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+				if err := d.write("ping"); err != nil {
 					logger.Errorw("device heartbeat response failed", logger.Field("device_id", deviceID), logger.Field("user_id", userID), logger.Field("error", err))
 				}
 				break
@@ -112,9 +139,11 @@ func (dm *DeviceManager) AddDevice(w http.ResponseWriter, r *http.Request, sessi
 		return
 	}
 
-	mu := dm.getUserMutex(userID)
-	mu.Lock()
-	defer mu.Unlock()
+	// A non-positive limit means no explicit cap is configured; fall back to
+	// the historical default instead of allowing unlimited connections.
+	if maxDevices < 1 {
+		maxDevices = 99
+	}
 
 	newDevice := &Device{
 		Session:      session,
@@ -124,48 +153,46 @@ func (dm *DeviceManager) AddDevice(w http.ResponseWriter, r *http.Request, sessi
 		LastPingTime: time.Now(),
 	}
 
-	//不限制设备数量
-	if maxDevices < 1 {
-		maxDevices = 99
-	}
-
-	// Get user's device list
-	var restConnection bool
+	var kicked, replaced *Device
+	mu := dm.getUserMutex(userID)
+	mu.Lock()
 	var devices []*Device
 	if val, ok := dm.userDevices.Load(userID); ok {
-		devices = val.([]*Device)
-		var tempDevice []*Device
-		for _, d := range devices {
+		for _, d := range val.([]*Device) {
 			if d.DeviceID == deviceID {
-				restConnection = true
-			} else {
-				tempDevice = append(tempDevice, d)
+				replaced = d // a reconnect retires the previous socket
+				continue
 			}
+			devices = append(devices, d)
 		}
-		devices = tempDevice
 	}
 
 	// **If exceeding the limit, kick out the earliest device**
-	if !restConnection && len(devices) >= maxDevices {
-		oldestDevice := devices[0]
+	if replaced == nil && len(devices) >= maxDevices {
+		kicked = devices[0]
 		devices = devices[1:]
-
-		if dm.OnDeviceKicked != nil {
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				dm.OnDeviceKicked(userID, oldestDevice.DeviceID, oldestDevice.Session, MaxDevices)
-			}()
-			<-done // block and wait for callback to complete
-		}
-		oldestDevice.Conn.Close()
-		atomic.AddInt32(&dm.totalOnline, -1)
 	}
 
 	// Add new device
 	devices = append(devices, newDevice)
 	dm.userDevices.Store(userID, devices)
 	atomic.AddInt32(&dm.totalOnline, 1)
+	mu.Unlock()
+
+	// Side effects run outside the user lock: the kick callback calls back
+	// into SendToDevice, which takes the lock, so running it under the lock
+	// would deadlock. The kicked device stays registered until the callback
+	// returns so its notification is actually delivered.
+	if kicked != nil {
+		if dm.OnDeviceKicked != nil {
+			dm.OnDeviceKicked(userID, kicked.DeviceID, kicked.Session, MaxDevices)
+		}
+		dm.removeDevice(userID, kicked)
+	}
+	if replaced != nil {
+		replaced.Conn.Close()
+		atomic.AddInt32(&dm.totalOnline, -1)
+	}
 
 	// Trigger online event
 	if dm.OnDeviceOnline != nil {
@@ -176,8 +203,12 @@ func (dm *DeviceManager) AddDevice(w http.ResponseWriter, r *http.Request, sessi
 	go dm.listenToDevice(userID, newDevice)
 }
 
-// removeDevice removes a device
-func (dm *DeviceManager) removeDevice(userID int64, deviceID string) {
+// removeDevice removes a device, matching by connection identity: several
+// sockets may share a DeviceID during a reconnect, and each read loop must
+// retire only its own connection. Closing the connection, decrementing the
+// online counter and emitting OnDeviceOffline happen only when the device is
+// still registered, so retried removals are no-ops.
+func (dm *DeviceManager) removeDevice(userID int64, device *Device) {
 	mu := dm.getUserMutex(userID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -185,16 +216,17 @@ func (dm *DeviceManager) removeDevice(userID int64, deviceID string) {
 	if val, ok := dm.userDevices.Load(userID); ok {
 		devices := val.([]*Device)
 		for i, d := range devices {
-			if d.DeviceID == deviceID {
-				devices = append(devices[:i], devices[i+1:]...)
-				d.Conn.Close()
-				atomic.AddInt32(&dm.totalOnline, -1)
-
-				if dm.OnDeviceOffline != nil {
-					go dm.OnDeviceOffline(userID, deviceID, d.Session, d.CreatedAt)
-				}
-				break
+			if d != device {
+				continue
 			}
+			devices = append(devices[:i], devices[i+1:]...)
+			d.Conn.Close()
+			atomic.AddInt32(&dm.totalOnline, -1)
+
+			if dm.OnDeviceOffline != nil {
+				go dm.OnDeviceOffline(userID, d.DeviceID, d.Session, d.CreatedAt)
+			}
+			break
 		}
 
 		if len(devices) == 0 {
@@ -207,45 +239,28 @@ func (dm *DeviceManager) removeDevice(userID int64, deviceID string) {
 
 // KickDevice kicks a device (supports individual device or entire user)
 func (dm *DeviceManager) KickDevice(userID int64, deviceID string) {
-	mu := dm.getUserMutex(userID)
-	mu.Lock()
-	defer mu.Unlock()
+	devices := dm.snapshotDevices(userID)
 
-	// Get user's device list
-	val, ok := dm.userDevices.Load(userID)
-	if !ok {
+	var kicked []*Device
+	for _, d := range devices {
+		if deviceID == "" || d.DeviceID == deviceID {
+			kicked = append(kicked, d)
+		}
+	}
+	if len(kicked) == 0 {
 		logger.Infow("user has no online devices to kick", logger.Field("user_id", userID))
 		return
 	}
 
-	devices := val.([]*Device)
-	var activeDevices []*Device
-
-	for _, d := range devices {
-		if deviceID == "" || d.DeviceID == deviceID {
-			// Trigger kick event callback
-			if dm.OnDeviceKicked != nil {
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					dm.OnDeviceKicked(userID, d.DeviceID, d.Session, Admin)
-				}()
-				<-done // block and wait for callback to complete
-			}
-			// Close WebSocket connection
-			d.Conn.Close()
-			atomic.AddInt32(&dm.totalOnline, -1)
-			logger.Infow("device kicked", logger.Field("device_id", d.DeviceID), logger.Field("user_id", userID))
-		} else {
-			activeDevices = append(activeDevices, d)
+	// Callbacks run while the device is still registered so the notification
+	// can be delivered through SendToDevice; removeDevice then closes the
+	// socket and emits OnDeviceOffline.
+	for _, d := range kicked {
+		if dm.OnDeviceKicked != nil {
+			dm.OnDeviceKicked(userID, d.DeviceID, d.Session, Admin)
 		}
-	}
-
-	// Update user's device mapping
-	if len(activeDevices) == 0 {
-		dm.userDevices.Delete(userID)
-	} else {
-		dm.userDevices.Store(userID, activeDevices)
+		dm.removeDevice(userID, d)
+		logger.Infow("device kicked", logger.Field("device_id", d.DeviceID), logger.Field("user_id", userID))
 	}
 }
 
@@ -254,41 +269,50 @@ func (dm *DeviceManager) StartHeartbeatCheck() {
 	ticker := time.NewTicker(time.Duration(dm.checkInterval) * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		now := time.Now()
-
-		dm.userDevices.Range(func(userID, val interface{}) bool {
-			uid := userID.(int64)
-			devices := val.([]*Device)
-
-			mu := dm.getUserMutex(uid)
-			mu.Lock()
-			defer mu.Unlock()
-
-			var activeDevices []*Device
-			for _, d := range devices {
-				if now.Sub(d.LastPingTime) > time.Duration(dm.heartbeatTimeout)*time.Second {
-					logger.Infow("device heartbeat timed out", logger.Field("device_id", d.DeviceID), logger.Field("user_id", uid))
-					d.Conn.Close()
-					atomic.AddInt32(&dm.totalOnline, -1)
-
-					if dm.OnDeviceOffline != nil {
-						go dm.OnDeviceOffline(uid, d.DeviceID, d.Session, d.CreatedAt)
-					}
-				} else {
-					activeDevices = append(activeDevices, d)
-				}
-			}
-
-			if len(activeDevices) == 0 {
-				dm.userDevices.Delete(uid)
-			} else {
-				dm.userDevices.Store(uid, activeDevices)
-			}
-			return true
-		})
-		// Deliberately avoid logging every heartbeat sweep.
+	for {
+		select {
+		case <-dm.quit:
+			return
+		case <-ticker.C:
+			dm.checkHeartbeats()
+		}
 	}
+}
+
+func (dm *DeviceManager) checkHeartbeats() {
+	now := time.Now()
+
+	dm.userDevices.Range(func(userID, val interface{}) bool {
+		uid := userID.(int64)
+
+		mu := dm.getUserMutex(uid)
+		mu.Lock()
+		defer mu.Unlock()
+
+		devices := val.([]*Device)
+		var activeDevices []*Device
+		for _, d := range devices {
+			if now.Sub(d.LastPingTime) > time.Duration(dm.heartbeatTimeout)*time.Second {
+				logger.Infow("device heartbeat timed out", logger.Field("device_id", d.DeviceID), logger.Field("user_id", uid))
+				d.Conn.Close()
+				atomic.AddInt32(&dm.totalOnline, -1)
+
+				if dm.OnDeviceOffline != nil {
+					go dm.OnDeviceOffline(uid, d.DeviceID, d.Session, d.CreatedAt)
+				}
+			} else {
+				activeDevices = append(activeDevices, d)
+			}
+		}
+
+		if len(activeDevices) == 0 {
+			dm.userDevices.Delete(uid)
+		} else {
+			dm.userDevices.Store(uid, activeDevices)
+		}
+		return true
+	})
+	// Deliberately avoid logging every heartbeat sweep.
 }
 
 // NewDeviceManager creates a new device manager
@@ -296,31 +320,31 @@ func NewDeviceManager(heartbeatTimeout, checkInterval int) *DeviceManager {
 	dm := &DeviceManager{
 		heartbeatTimeout: heartbeatTimeout,
 		checkInterval:    checkInterval,
+		quit:             make(chan struct{}),
 	}
 	go dm.StartHeartbeatCheck()
 	return dm
 }
 
+// Stop terminates the heartbeat sweep. It is idempotent so lifecycle hooks
+// can call it unconditionally.
+func (dm *DeviceManager) Stop() {
+	dm.quitOnce.Do(func() { close(dm.quit) })
+}
+
 // SendToDevice sends a message to a specific device
 func (dm *DeviceManager) SendToDevice(userID int64, deviceID string, message string) error {
-	if val, ok := dm.userDevices.Load(userID); ok {
-		devices := val.([]*Device)
+	devices := dm.snapshotDevices(userID)
+	for _, d := range devices {
 		if deviceID == "" {
-			for _, d := range devices {
-				err := d.Conn.WriteMessage(websocket.TextMessage, []byte(message))
-				if err != nil {
-					return err
-				}
-				continue
+			if err := d.write(message); err != nil {
+				return err
 			}
-		} else {
-			for _, d := range devices {
-				if d.DeviceID == deviceID {
-					return d.Conn.WriteMessage(websocket.TextMessage, []byte(message))
-				}
-			}
+			continue
 		}
-
+		if d.DeviceID == deviceID {
+			return d.write(message)
+		}
 	}
 	return fmt.Errorf("device %s (User %d) is offline", deviceID, userID)
 }
@@ -328,10 +352,9 @@ func (dm *DeviceManager) SendToDevice(userID int64, deviceID string, message str
 // Broadcast sends a message to all devices
 func (dm *DeviceManager) Broadcast(message string) {
 	go func(message string) {
-		dm.userDevices.Range(func(_, val interface{}) bool {
-			devices := val.([]*Device)
-			for _, d := range devices {
-				_ = d.Conn.WriteMessage(websocket.TextMessage, []byte(message))
+		dm.userDevices.Range(func(userID, val interface{}) bool {
+			for _, d := range dm.snapshotDevices(userID.(int64)) {
+				_ = d.write(message)
 			}
 			return true
 		})
@@ -342,17 +365,14 @@ func (dm *DeviceManager) Broadcast(message string) {
 // Gracefully shut down all WebSocket connections
 func (dm *DeviceManager) Shutdown(ctx context.Context) {
 	<-ctx.Done()
+	dm.Stop()
 	logger.Info("shutting down all device websocket connections")
 
 	dm.userDevices.Range(func(userID, val interface{}) bool {
 		uid := userID.(int64)
-		devices := val.([]*Device)
-
-		for _, d := range devices {
-			d.Conn.Close()
-			logger.Infow("device websocket closed", logger.Field("device_id", d.DeviceID), logger.Field("user_id", uid))
+		for _, d := range dm.snapshotDevices(uid) {
+			dm.removeDevice(uid, d)
 		}
-		dm.userDevices.Delete(uid)
 		return true
 	})
 }
