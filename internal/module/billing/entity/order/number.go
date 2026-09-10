@@ -1,24 +1,25 @@
 package order
 
 import (
+	cryptorand "crypto/rand"
 	"fmt"
-	"math/rand"
-	"strconv"
-	"strings"
 	"time"
 )
 
+// GenerateTradeNo returns a fixed-width numeric trade number: a 14-digit
+// timestamp plus 8 digits from crypto/rand. Seeding from the clock alone
+// produced identical numbers for concurrent requests within the same
+// nanosecond; the database's unique trade-no index turns those collisions
+// into visible purchase failures. crypto/rand cannot fail in practice; the
+// panic matches how the password salt handles the same error.
 func GenerateTradeNo() string {
-	now := time.Now()
-	formattedTime := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())
-	numeric := [10]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	r := len(numeric)
-	source := rand.NewSource(time.Now().UnixNano())
-	random := rand.New(source)
-	var code strings.Builder
-	for i := 0; i < 4; i++ {
-		_, _ = fmt.Fprintf(&code, "%d", numeric[random.Intn(r)])
+	var buf [8]byte
+	if _, err := cryptorand.Read(buf[:]); err != nil {
+		panic(fmt.Errorf("generate trade number entropy: %w", err))
 	}
-	formattedTime += code.String()
-	return formattedTime
+	digits := make([]byte, len(buf))
+	for i, v := range buf {
+		digits[i] = '0' + v%10
+	}
+	return time.Now().Format("20060102150405") + string(digits)
 }
