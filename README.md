@@ -2,15 +2,15 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/github/license/perfect-panel/server)](LICENSE)
+[![License](https://img.shields.io/github/license/perfect-panel/backend)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.27.1%2B-blue)](https://go.dev/)
-[![Go Report Card](https://goreportcard.com/badge/github.com/perfect-panel/server)](https://goreportcard.com/report/github.com/perfect-panel/server)
+[![Go Report Card](https://goreportcard.com/badge/github.com/perfect-panel/backend)](https://goreportcard.com/report/github.com/perfect-panel/backend)
 [![Docker](https://img.shields.io/badge/Docker-Available-blue)](Dockerfile)
-[![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/server/release.yml)](.github/workflows/release.yml)
+[![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/backend/release.yml)](.github/workflows/release.yml)
 
 **PPanel 是一个纯净、专业、完美的开源代理面板工具，旨在成为您学习和实际使用的理想选择。**
 
-[中文](README.md) | [English](README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
+[中文](README.md) | [English](README_EN.md) | [报告问题](https://github.com/perfect-panel/backend/issues/new) | [功能请求](https://github.com/perfect-panel/backend/issues/new)
 
 </div>
 
@@ -48,7 +48,7 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
 
 ### 前提条件
 
-- **Go**：1.25 或更高版本
+- **Go**：1.27.1 或更高版本
 - **Docker**：可选，用于容器化部署
 - **Git**：用于克隆仓库
 
@@ -56,8 +56,8 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
 
 1. **克隆仓库**：
    ```bash
-   git clone https://github.com/perfect-panel/ppanel-server.git
-   cd ppanel-server
+   git clone https://github.com/perfect-panel/backend.git
+   cd backend
    ```
 
 2. **安装依赖**：

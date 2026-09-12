@@ -2,15 +2,15 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/github/license/perfect-panel/server)](LICENSE)
+[![License](https://img.shields.io/github/license/perfect-panel/backend)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.27.1%2B-blue)](https://go.dev/)
-[![Go Report Card](https://goreportcard.com/badge/github.com/perfect-panel/server)](https://goreportcard.com/report/github.com/perfect-panel/server)
+[![Go Report Card](https://goreportcard.com/badge/github.com/perfect-panel/backend)](https://goreportcard.com/report/github.com/perfect-panel/backend)
 [![Docker](https://img.shields.io/badge/Docker-Available-blue)](Dockerfile)
-[![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/server/release.yml)](.github/workflows/release.yml)
+[![CI/CD](https://img.shields.io/github/actions/workflow/status/perfect-panel/backend/release.yml)](.github/workflows/release.yml)
 
 **PPanel is a pure, professional, and perfect open-source proxy panel tool, designed for learning and practical use.**
 
-[English](README_EN.md) | [中文](README.md) | [Report Bug](https://github.com/perfect-panel/server/issues/new) | [Request Feature](https://github.com/perfect-panel/server/issues/new)
+[English](README_EN.md) | [中文](README.md) | [Report Bug](https://github.com/perfect-panel/backend/issues/new) | [Request Feature](https://github.com/perfect-panel/backend/issues/new)
 
 </div>
 
@@ -49,7 +49,7 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
 
 ### Prerequisites
 
-- **Go**: 1.25 or higher
+- **Go**: 1.27.1 or higher
 - **Docker**: Optional, for containerized deployment
 - **Git**: For cloning the repository
 
@@ -57,8 +57,8 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/perfect-panel/ppanel-server.git
-   cd ppanel-server
+   git clone https://github.com/perfect-panel/backend.git
+   cd backend
    ```
 
 2. **Install dependencies**:
@@ -257,6 +257,7 @@ project's development! 🚀
 
 🎉 **Salute to Open Source**: Thank you to the open-source community for making development simpler and more efficient!
 Please give these projects a ⭐ to support the open-source movement!
+
 ## 📄 License
 
 This project is licensed under the [GPL-3.0 License](LICENSE).
