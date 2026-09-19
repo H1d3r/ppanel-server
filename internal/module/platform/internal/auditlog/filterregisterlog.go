@@ -27,12 +27,14 @@ func newFilterRegisterLogLogic(ctx context.Context, deps Deps) *FilterRegisterLo
 
 func (l *FilterRegisterLogLogic) FilterRegisterLog(req *dto.FilterRegisterLogRequest) (resp *dto.FilterRegisterLogResponse, err error) {
 	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:     req.Page,
-		Size:     req.Size,
-		Type:     log.TypeRegister.Uint8(),
-		ObjectID: req.UserId,
-		Data:     req.Date,
-		Search:   req.Search,
+		Page:      req.Page,
+		Size:      req.Size,
+		Type:      log.TypeRegister.Uint8(),
+		ObjectID:  req.UserId,
+		Data:      req.Date,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		Search:    req.Search,
 	})
 
 	if err != nil {

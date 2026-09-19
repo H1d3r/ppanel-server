@@ -29,19 +29,33 @@ func newFilterTrafficLogDetailsLogic(ctx context.Context, deps Deps) *FilterTraf
 
 func (l *FilterTrafficLogDetailsLogic) FilterTrafficLogDetails(req *dto.FilterTrafficLogDetailsRequest) (resp *dto.FilterTrafficLogDetailsResponse, err error) {
 	var start, end time.Time
-	if req.Date != "" {
+	if req.StartDate != "" || req.EndDate != "" {
+		if req.StartDate != "" {
+			start, err = time.ParseInLocation(time.DateOnly, req.StartDate, timeutil.Location())
+			if err != nil {
+				return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "invalid start_date")
+			}
+		}
+		if req.EndDate != "" {
+			end, err = time.ParseInLocation(time.DateOnly, req.EndDate, timeutil.Location())
+			if err != nil {
+				return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "invalid end_date")
+			}
+			end = end.AddDate(0, 0, 1)
+		}
+	} else if req.Date != "" {
 		day, err := time.ParseInLocation("2006-01-02", req.Date, timeutil.Location())
 		if err != nil {
 			l.Errorw("[FilterTrafficLogDetails] Date Parse Error", logger.Field("error", err.Error()))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), " date parse error: %s", err.Error())
 		}
 		start = day
-		end = day.Add(24 * time.Hour)
+		end = day.AddDate(0, 0, 1)
 	} else {
 		// query today
 		now := timeutil.Now()
 		start = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		end = start.Add(24 * time.Hour)
+		end = start.AddDate(0, 0, 1)
 	}
 	data, total, err := l.deps.Traffic.QueryTrafficLogDetails(l.ctx, &traffic.TrafficLogDetailsFilter{
 		ServerId:    req.ServerId,

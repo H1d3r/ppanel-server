@@ -27,11 +27,13 @@ func newFilterCommissionLogLogic(ctx context.Context, deps Deps) *FilterCommissi
 
 func (l *FilterCommissionLogLogic) FilterCommissionLog(req *dto.FilterCommissionLogRequest) (resp *dto.FilterCommissionLogResponse, err error) {
 	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:     req.Page,
-		Size:     req.Size,
-		Data:     req.Date,
-		Type:     log.TypeCommission.Uint8(),
-		ObjectID: req.UserId,
+		Page:      req.Page,
+		Size:      req.Size,
+		Data:      req.Date,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		Type:      log.TypeCommission.Uint8(),
+		ObjectID:  req.UserId,
 	})
 	if err != nil {
 		l.Errorw("Query User Commission Log failed", logger.Field("error", err.Error()))

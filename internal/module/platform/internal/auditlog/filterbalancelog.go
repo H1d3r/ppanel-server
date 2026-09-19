@@ -27,11 +27,13 @@ func newFilterBalanceLogLogic(ctx context.Context, deps Deps) *FilterBalanceLogL
 
 func (l *FilterBalanceLogLogic) FilterBalanceLog(req *dto.FilterBalanceLogRequest) (resp *dto.FilterBalanceLogResponse, err error) {
 	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:     req.Page,
-		Size:     req.Size,
-		Type:     log.TypeBalance.Uint8(),
-		Data:     req.Date,
-		ObjectID: req.UserId,
+		Page:      req.Page,
+		Size:      req.Size,
+		Type:      log.TypeBalance.Uint8(),
+		Data:      req.Date,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		ObjectID:  req.UserId,
 	})
 
 	if err != nil {

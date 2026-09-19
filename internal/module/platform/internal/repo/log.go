@@ -153,7 +153,13 @@ func (m *logRepo) FilterSystemLog(ctx context.Context, filter *log.FilterParams)
 		tx = tx.Where("type = ?", filter.Type)
 	}
 
-	if filter.Data != "" {
+	if filter.StartDate != "" && filter.EndDate != "" {
+		tx = tx.Where("date BETWEEN ? AND ?", filter.StartDate, filter.EndDate)
+	} else if filter.StartDate != "" {
+		tx = tx.Where("date >= ?", filter.StartDate)
+	} else if filter.EndDate != "" {
+		tx = tx.Where("date <= ?", filter.EndDate)
+	} else if filter.Data != "" {
 		tx = tx.Where("date = ?", filter.Data)
 	}
 

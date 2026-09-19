@@ -27,12 +27,14 @@ func newFilterResetSubscribeLogLogic(ctx context.Context, deps Deps) *FilterRese
 
 func (l *FilterResetSubscribeLogLogic) FilterResetSubscribeLog(req *dto.FilterResetSubscribeLogRequest) (resp *dto.FilterResetSubscribeLogResponse, err error) {
 	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:     req.Page,
-		Size:     req.Size,
-		Type:     log.TypeResetSubscribe.Uint8(),
-		ObjectID: req.UserSubscribeId,
-		Data:     req.Date,
-		Search:   req.Search,
+		Page:      req.Page,
+		Size:      req.Size,
+		Type:      log.TypeResetSubscribe.Uint8(),
+		ObjectID:  req.UserSubscribeId,
+		Data:      req.Date,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		Search:    req.Search,
 	})
 
 	if err != nil {

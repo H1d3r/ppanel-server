@@ -71,10 +71,12 @@ type FilterGiftLogResponse struct {
 }
 
 type FilterLogParams struct {
-	Page   int    `form:"page" validate:"required,gt=0"`
-	Size   int    `form:"size" validate:"required,gt=0,lte=100"`
-	Date   string `form:"date,optional"`
-	Search string `form:"search,optional"`
+	Page      int    `form:"page" validate:"required,gt=0"`
+	Size      int    `form:"size" validate:"required,gt=0,lte=100"`
+	Date      string `form:"date,optional"`
+	StartDate string `form:"start_date,optional" validate:"omitempty,datetime=2006-01-02"`
+	EndDate   string `form:"end_date,optional" validate:"omitempty,datetime=2006-01-02"`
+	Search    string `form:"search,optional"`
 }
 
 type FilterLoginLogRequest struct {

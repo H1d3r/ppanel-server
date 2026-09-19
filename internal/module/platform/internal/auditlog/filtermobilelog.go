@@ -27,11 +27,13 @@ func newFilterMobileLogLogic(ctx context.Context, deps Deps) *FilterMobileLogLog
 
 func (l *FilterMobileLogLogic) FilterMobileLog(req *dto.FilterLogParams) (resp *dto.FilterMobileLogResponse, err error) {
 	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:   req.Page,
-		Size:   req.Size,
-		Type:   log.TypeMobileMessage.Uint8(),
-		Data:   req.Date,
-		Search: req.Search,
+		Page:      req.Page,
+		Size:      req.Size,
+		Type:      log.TypeMobileMessage.Uint8(),
+		Data:      req.Date,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		Search:    req.Search,
 	})
 
 	if err != nil {

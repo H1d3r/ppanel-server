@@ -27,12 +27,14 @@ func newFilterOrderLogLogic(ctx context.Context, deps Deps) *FilterOrderLogLogic
 // FilterOrderLog returns durable order-creation audit entries.
 func (l *FilterOrderLogLogic) FilterOrderLog(req *dto.FilterOrderLogRequest) (*dto.FilterOrderLogResponse, error) {
 	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:     req.Page,
-		Size:     req.Size,
-		Type:     log.TypeOrderCreated.Uint8(),
-		ObjectID: req.UserId,
-		Data:     req.Date,
-		Search:   req.Search,
+		Page:      req.Page,
+		Size:      req.Size,
+		Type:      log.TypeOrderCreated.Uint8(),
+		ObjectID:  req.UserId,
+		Data:      req.Date,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		Search:    req.Search,
 	})
 	if err != nil {
 		l.Errorf("[FilterOrderLog] failed to filter system log: %v", err)

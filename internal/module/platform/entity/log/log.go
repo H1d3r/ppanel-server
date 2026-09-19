@@ -89,6 +89,8 @@ type FilterParams struct {
 	Size      int
 	Type      uint8
 	Data      string
+	StartDate string
+	EndDate   string
 	Search    string
 	ObjectID  int64
 	SkipCount bool // when true, skip the COUNT(*) query (total will be 0)

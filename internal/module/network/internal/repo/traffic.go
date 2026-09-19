@@ -211,8 +211,11 @@ func (m *trafficRepo) QueryTrafficLogDetails(ctx context.Context, filter *traffi
 	if filter.ServerId != 0 {
 		query = query.Where("server_id = ?", filter.ServerId)
 	}
-	if !filter.Start.IsZero() && !filter.End.IsZero() {
-		query = query.Where(trafficTimeRangeCondition(m.Conn), filter.Start, filter.End)
+	if !filter.Start.IsZero() {
+		query = query.Where(trafficColumn(m.Conn, "timestamp")+" >= ?", filter.Start)
+	}
+	if !filter.End.IsZero() {
+		query = query.Where(trafficColumn(m.Conn, "timestamp")+" < ?", filter.End)
 	}
 	if filter.UserId != 0 {
 		query = query.Where("user_id = ?", filter.UserId)
