@@ -3,11 +3,14 @@
 package usersub
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 )
+
+var ErrProviderManaged = errors.New("subscription is managed by its payment provider")
 
 // Cache key prefixes for the user-subscription cache.
 const (
@@ -17,6 +20,10 @@ const (
 )
 
 type Subscribe struct {
+	// Empty means locally managed. Provider-managed expiry cannot be edited
+	// through ordinary renewal, refund or administration commands.
+	EntitlementSource string `gorm:"type:varchar(32);not null;default:''"`
+
 	Id          int64      `gorm:"primaryKey"`
 	UserId      int64      `gorm:"index:idx_user_id;not null;comment:User ID"`
 	OrderId     int64      `gorm:"index:idx_order_id;not null;comment:Order ID"`
@@ -69,6 +76,8 @@ func (s *Subscribe) GetCacheKeys() []string {
 // identity owner is composed at the module layer through the identity read
 // port, never through a cross-domain association (ADR-001 step 5).
 type SubscribeDetails struct {
+	EntitlementSource string
+
 	Id          int64                `gorm:"primarykey"`
 	UserId      int64                `gorm:"index:idx_user_id;not null;comment:User ID"`
 	OrderId     int64                `gorm:"index:idx_order_id;not null;comment:Order ID"`

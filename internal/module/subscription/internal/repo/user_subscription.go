@@ -462,7 +462,39 @@ func (m *UserSubscriptionRepo) UpdateSubscribe(ctx context.Context, data *usersu
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
+		if old.EntitlementSource != "" {
+			// Local controls may change traffic/credentials or an admin hold,
+			// but may never overwrite a concurrently reconciled entitlement.
+			if data.EntitlementSource != old.EntitlementSource || !data.ExpireTime.Equal(old.ExpireTime) || data.SubscribeId != old.SubscribeId || data.OrderId != old.OrderId || !data.StartTime.Equal(old.StartTime) {
+				return usersub.ErrProviderManaged
+			}
+			if data.Status == usersub.SubscribeStatusActive && (!old.ExpireTime.After(time.Now()) || old.StartTime.After(time.Now())) {
+				return usersub.ErrProviderManaged
+			}
+			result := conn.Model(&usersub.Subscribe{}).
+				Where("id = ? AND entitlement_source = ? AND expire_time = ? AND subscribe_id = ? AND status = ? AND upload = ? AND download = ?", data.Id, old.EntitlementSource, old.ExpireTime, old.SubscribeId, old.Status, old.Upload, old.Download).
+				Select("*").Omit("entitlement_source", "expire_time", "subscribe_id", "order_id", "start_time").Updates(data)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return fmt.Errorf("provider subscription changed; retry local operation")
+			}
+			return nil
+		}
+		if data.EntitlementSource != "" {
+			return usersub.ErrProviderManaged
+		}
 		return conn.Model(&usersub.Subscribe{}).Where("id = ?", data.Id).Save(data).Error
+	})
+}
+
+func (m *UserSubscriptionRepo) ApplyEntitlementProjection(ctx context.Context, data *usersub.Subscribe) error {
+	if data.EntitlementSource == "" {
+		return usersub.ErrProviderManaged
+	}
+	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
+		return conn.Model(&usersub.Subscribe{}).Where("id = ? AND entitlement_source = ?", data.Id, data.EntitlementSource).Select("*").Updates(data).Error
 	})
 }
 
@@ -577,6 +609,8 @@ func (m *UserSubscriptionRepo) FindExpiringSubscribes(ctx context.Context, from,
 	var list []*usersub.Subscribe
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
 		return activeLifecycleSubscribes(conn).
+			// Provider renewals need provider-specific messaging and prices.
+			Where("entitlement_source = ''").
 			Where("expire_time >= ? AND expire_time < ? AND expire_time != ?", from, to, time.UnixMilli(0)).
 			Find(&list).Error
 	})
@@ -591,7 +625,13 @@ func (m *UserSubscriptionRepo) MarkSubscribesFinished(ctx context.Context, ids [
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Model(&usersub.Subscribe{}).Where("id IN ?", ids).Updates(map[string]interface{}{
+		q := conn.Model(&usersub.Subscribe{}).Where("id IN ? AND status IN (0, 1)", ids)
+		if status == usersub.SubscribeStatusExpired {
+			q = q.Where("expire_time <= ? AND expire_time != ?", finishedAt, time.UnixMilli(0))
+		} else if status == usersub.SubscribeStatusFinished {
+			q = q.Where("traffic > 0 AND upload + download >= traffic")
+		}
+		return q.Updates(map[string]interface{}{
 			"status":      status,
 			"finished_at": finishedAt,
 		}).Error
@@ -641,7 +681,8 @@ func (m *UserSubscriptionRepo) ResetSubscribeTrafficByIds(ctx context.Context, i
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Model(&usersub.Subscribe{}).Where("id IN ?", ids).
+		return conn.Model(&usersub.Subscribe{}).Where("id IN ? AND status IN (1, 2)", ids).
+			Where("(expire_time IS NULL OR expire_time = ? OR expire_time > ?)", time.UnixMilli(0), time.Now()).
 			Updates(map[string]interface{}{
 				"upload":      0,
 				"download":    0,

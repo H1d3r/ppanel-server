@@ -28,6 +28,7 @@ type Store interface {
 	OrderEvent() OrderEventRepo
 	Payment() PaymentRepo
 	Subscribe() SubscribeRepo
+	Entitlement() EntitlementRepo
 	System() SystemRepo
 	Task() TaskRepo
 	// TelegramTopic maps forum topics in the admin Telegram group to the
@@ -127,6 +128,7 @@ func (s *GormStore) Order() OrderRepo                             { return s.bil
 func (s *GormStore) OrderEvent() OrderEventRepo                   { return s.billing.OrderEvents }
 func (s *GormStore) Payment() PaymentRepo                         { return s.billing.Payments }
 func (s *GormStore) Subscribe() SubscribeRepo                     { return s.subscription.Plans }
+func (s *GormStore) Entitlement() EntitlementRepo                 { return s.subscription.Entitlements }
 func (s *GormStore) System() SystemRepo                           { return s.platform.System }
 func (s *GormStore) Task() TaskRepo                               { return s.platform.Tasks }
 func (s *GormStore) TelegramTopic() TelegramTopicRepo             { return s.notification.TelegramTopics }

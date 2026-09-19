@@ -68,6 +68,10 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
 	}
 
+	if userSub.EntitlementSource != "" {
+		return usersub.ErrProviderManaged
+	}
+
 	cancelable := []uint8{usersub.SubscribeStatusPending, usersub.SubscribeStatusActive, usersub.SubscribeStatusFinished}
 	subKey := strconv.FormatInt(req.Id, 10)
 
@@ -97,6 +101,9 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 			}
 			if lockedSub.UserId != u.Id {
 				return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
+			}
+			if lockedSub.EntitlementSource != "" {
+				return usersub.ErrProviderManaged
 			}
 			if !slices.Contains(cancelable, lockedSub.Status) {
 				return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Subscription status invalid for cancellation")

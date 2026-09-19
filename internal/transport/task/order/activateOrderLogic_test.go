@@ -17,6 +17,7 @@ import (
 	inboxEntity "github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	subscribeEntity "github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
@@ -48,6 +49,7 @@ func newActivationDeps(store *activationStore, singleModel bool) Dependencies {
 }
 
 type activationStore struct {
+	periods activationPeriodRepo
 	repository.Store
 	wallet     *activationWalletRepo
 	orders     *activationOrderRepo
@@ -55,6 +57,26 @@ type activationStore struct {
 	subscribes *activationSubscribeRepo
 	logs       *activationLogRepo
 	inbox      *activationInboxRepo
+}
+
+type activationPeriodRepo struct {
+	repository.EntitlementRepo
+	rows map[string]*entitlement.Period
+}
+
+func (s *activationStore) Entitlement() repository.EntitlementRepo { return &s.periods }
+func (r *activationPeriodRepo) FindPeriod(_ context.Context, id string) (*entitlement.Period, error) {
+	return r.rows[id], nil
+}
+func (r *activationPeriodRepo) InsertPeriod(_ context.Context, p *entitlement.Period) error {
+	if r.rows == nil {
+		r.rows = make(map[string]*entitlement.Period)
+	}
+	if r.rows[p.ID] != nil {
+		return fmt.Errorf("duplicate period")
+	}
+	r.rows[p.ID] = p
+	return nil
 }
 
 func (s *activationStore) InTx(_ context.Context, fn func(repository.Store) error) error {

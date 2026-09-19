@@ -2,6 +2,7 @@ package selfsub
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -44,6 +45,9 @@ func (l *PreUnsubscribeLogic) PreUnsubscribe(req *dto.PreUnsubscribeRequest) (re
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
 	}
 
+	if userSub.EntitlementSource != "" {
+		return nil, usersub.ErrProviderManaged
+	}
 	remainingAmount, err := CalculateRemainingAmount(l.ctx, l.deps, req.Id)
 	if err != nil {
 		l.Errorw("[PreUnsubscribeLogic] Calculate Remaining Amount Error:", logger.Field("err", err.Error()))

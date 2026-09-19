@@ -2,6 +2,7 @@ package usersub
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -32,6 +33,9 @@ func (l *DeleteUserSubscribeLogic) DeleteUserSubscribe(req *dto.DeleteUserSubscr
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "failed to find user subscribe: %v", err.Error())
 	}
 
+	if userSubscribe.EntitlementSource != "" {
+		return usersub.ErrProviderManaged
+	}
 	err = l.deps.UserSubs.DeleteSubscribeById(l.ctx, req.UserSubscribeId)
 	if err != nil {
 		l.Errorw("failed to delete user subscribe", logger.Field("error", err.Error()), logger.Field("userSubscribeId", req.UserSubscribeId))

@@ -329,6 +329,8 @@ type SubscriptionUserDeviceSnapshot struct {
 } // @name dto.UserDevice
 
 type UserSubscribe struct {
+	EntitlementSource string `json:"entitlement_source,omitempty"`
+
 	Id          int64     `json:"id"`
 	UserId      int64     `json:"user_id"`
 	OrderId     int64     `json:"order_id"`
@@ -349,6 +351,8 @@ type UserSubscribe struct {
 }
 
 type UserSubscribeDetail struct {
+	EntitlementSource string `json:"entitlement_source,omitempty"`
+
 	Id          int64                    `json:"id"`
 	UserId      int64                    `json:"user_id"`
 	User        SubscriptionUserSnapshot `json:"user"`
@@ -368,6 +372,8 @@ type UserSubscribeDetail struct {
 }
 
 type UserSubscribeInfo struct {
+	EntitlementSource string `json:"entitlement_source,omitempty"`
+
 	Id          int64                    `json:"id"`
 	UserId      int64                    `json:"user_id"`
 	OrderId     int64                    `json:"order_id"`

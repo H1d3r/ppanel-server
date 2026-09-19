@@ -7,11 +7,13 @@ package fulfillment
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 	"uuid"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
@@ -52,10 +54,11 @@ type Outcome struct {
 // outcomeParts is the internal working set assembled inside the fulfillment
 // transaction (entities stay inside the module).
 type outcomeParts struct {
-	order      *order.Order
-	subscribe  *subscribe.Subscribe
-	userSub    *usersub.Subscribe
-	notifyType string
+	periodStart time.Time
+	order       *order.Order
+	subscribe   *subscribe.Subscribe
+	userSub     *usersub.Subscribe
+	notifyType  string
 }
 
 // Deps declares the subdomain's dependencies; the module facade forwards
@@ -92,12 +95,23 @@ func (s *Service) FulfillPaidOrder(ctx context.Context, orderNo string) (*Outcom
 	if err != nil {
 		return nil, err
 	}
+	if orderInfo.Method == "AppleIAP" {
+		return nil, usersub.ErrProviderManaged
+	}
 	mark, err := s.deps.Store.Inbox().Find(ctx, inboxFulfillment, orderNo)
 	if err != nil {
 		return nil, err
 	}
 	var parts *outcomeParts
-	if mark != nil {
+	alreadyFulfilled := mark != nil
+	if !alreadyFulfilled && orderInfo.Type != OrderTypeResetTraffic {
+		period, err := s.deps.Store.Entitlement().FindPeriod(ctx, entitlementKey("local", orderNo))
+		if err != nil {
+			return nil, err
+		}
+		alreadyFulfilled = period != nil
+	}
+	if alreadyFulfilled {
 		parts, err = s.loadOutcome(ctx, orderInfo)
 	} else {
 		err = s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
@@ -105,6 +119,16 @@ func (s *Service) FulfillPaidOrder(ctx context.Context, orderNo string) (*Outcom
 			parts, txErr = s.processOrderByTypeInTx(ctx, store, orderInfo)
 			if txErr != nil {
 				return txErr
+			}
+			if orderInfo.Type != OrderTypeResetTraffic {
+				if err := store.Entitlement().InsertPeriod(ctx, &entitlement.Period{
+					ID: entitlementKey("local", orderNo), EntitlementID: entitlementKey("local", strconv.FormatInt(parts.userSub.Id, 10)),
+					TransactionKey: orderNo, UserSubscribeID: parts.userSub.Id, OrderID: orderInfo.Id,
+					PlanID: orderInfo.SubscribeId, StartAt: parts.periodStart, EndAt: parts.userSub.ExpireTime,
+					TrafficLimit: parts.userSub.Traffic,
+				}); err != nil {
+					return err
+				}
 			}
 			// A duplicate key here means a concurrent delivery fulfilled
 			// first; this transaction rolls back and the retry takes the
@@ -208,7 +232,7 @@ func (s *Service) activateNewPurchaseTx(ctx context.Context, store repository.Su
 	if err != nil {
 		return nil, err
 	}
-	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyPurchase}, nil
+	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyPurchase, periodStart: userSub.StartTime}, nil
 }
 
 func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order, sub *subscribe.Subscribe) (*usersub.Subscribe, error) {
@@ -256,17 +280,24 @@ func (s *Service) activateRenewalTx(ctx context.Context, store repository.Subscr
 	if userSub.UserId != orderInfo.UserId {
 		return nil, fmt.Errorf("renewal subscription ownership mismatch")
 	}
+	if userSub.EntitlementSource != "" {
+		return nil, usersub.ErrProviderManaged
+	}
 	sub, err := store.Subscribe().FindOne(ctx, orderInfo.SubscribeId)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.updateSubscriptionForRenewalTx(ctx, store, userSub, sub, orderInfo); err != nil {
+	periodStart := userSub.ExpireTime
+	if now := timeutil.Now(); periodStart.Before(now) {
+		periodStart = now
+	}
+	if err := s.updateSubscriptionForRenewalTx(ctx, store, userSub, sub, orderInfo, periodStart); err != nil {
 		return nil, err
 	}
-	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyRenewal}, nil
+	return &outcomeParts{order: orderInfo, subscribe: sub, userSub: userSub, notifyType: NotifyRenewal, periodStart: periodStart}, nil
 }
 
-func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repository.SubscriptionStore, userSub *usersub.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order) error {
+func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repository.SubscriptionStore, userSub *usersub.Subscribe, sub *subscribe.Subscribe, orderInfo *order.Order, periodStart time.Time) error {
 	now := timeutil.Now()
 	if userSub.ExpireTime.Before(now) {
 		userSub.ExpireTime = now
@@ -284,7 +315,7 @@ func (s *Service) updateSubscriptionForRenewalTx(ctx context.Context, store repo
 		}
 		userSub.FinishedAt = nil
 	}
-	userSub.ExpireTime = timeutil.AddTime(sub.UnitTime, orderInfo.Quantity, userSub.ExpireTime)
+	userSub.ExpireTime = timeutil.AddTime(sub.UnitTime, orderInfo.Quantity, periodStart)
 	userSub.Status = 1
 	return store.UserSubscription().UpdateSubscribe(ctx, userSub)
 }
@@ -296,6 +327,9 @@ func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.S
 	}
 	if userSub.UserId != orderInfo.UserId {
 		return nil, fmt.Errorf("reset subscription ownership mismatch")
+	}
+	if userSub.EntitlementSource != "" {
+		return nil, usersub.ErrProviderManaged
 	}
 	userSub.Download = 0
 	userSub.Upload = 0
@@ -334,4 +368,5 @@ func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.S
 type Store interface {
 	repository.SubscriptionTransactor
 	Inbox() repository.InboxRepo
+	Entitlement() repository.EntitlementRepo
 }

@@ -51,6 +51,7 @@ type BillingStore interface {
 // SubscriptionStore is the subscription domain's transactional surface:
 // plans, user subscriptions and their traffic quota state.
 type SubscriptionStore interface {
+	Entitlement() EntitlementRepo
 	Subscribe() SubscribeRepo
 	UserSubscription() UserSubscriptionRepo
 	SubscriptionTraffic() SubscriptionTrafficRepo

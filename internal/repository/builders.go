@@ -114,9 +114,10 @@ type BillingBuilder func(conn ModuleConn) BillingRepos
 
 // SubscriptionRepos is the subscription domain bundle.
 type SubscriptionRepos struct {
-	Plans    SubscribeRepo
-	UserSubs UserSubscriptionRepo
-	Traffic  SubscriptionTrafficRepo
+	Entitlements EntitlementRepo
+	Plans        SubscribeRepo
+	UserSubs     UserSubscriptionRepo
+	Traffic      SubscriptionTrafficRepo
 	// CacheBridge feeds the identity bundle's cross-domain cache cascade.
 	CacheBridge SubscriptionCacheBridge
 	// ScopeBridge feeds the identity bundle's subscription-membership

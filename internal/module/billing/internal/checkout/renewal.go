@@ -52,6 +52,9 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 	if userSubscribe.UserId != u.Id {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "subscription does not belong to the current user")
 	}
+	if userSubscribe.EntitlementSource != "" {
+		return nil, usersub.ErrProviderManaged
+	}
 	if userSubscribe.Status == usersub.SubscribeStatusDeducted {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "deducted subscription cannot be renewed")
 	}

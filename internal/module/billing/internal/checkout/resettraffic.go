@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"time"
 
 	"github.com/perfect-panel/server/internal/infra/requestctx"
@@ -34,6 +35,9 @@ func (s *Service) ResetTraffic(ctx context.Context, req *dto.ResetTrafficOrderRe
 	}
 	if userSubscribe.UserId != u.Id {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "subscription does not belong to the current user")
+	}
+	if userSubscribe.EntitlementSource != "" {
+		return nil, usersub.ErrProviderManaged
 	}
 	// NoLimit subscriptions use the Unix epoch as their expiry sentinel. A paid
 	// traffic reset must not be created for a subscription whose finite term has

@@ -39,6 +39,7 @@ type Service interface {
 	// subscription, renewal or traffic reset) exactly once and returns the
 	// notification context.
 	FulfillPaidOrder(ctx context.Context, orderNo string) (*FulfillmentOutcome, error)
+	ReconcileEntitlement(ctx context.Context, cmd dto.ReconcileEntitlementCommand) (*dto.EntitlementResult, error)
 	// GrantTrial consumes the identity.user_registered event: applies the
 	// registration trial exactly once (a disabled policy still consumes the
 	// event).
@@ -160,11 +161,12 @@ func NewRepoBuilder() repository.SubscriptionBuilder {
 		conn := c.Conn()
 		subs := repo.NewUserSubscriptionRepo(conn)
 		return repository.SubscriptionRepos{
-			Plans:       repo.NewSubscribeRepo(conn, nodes),
-			UserSubs:    subs,
-			Traffic:     subs,
-			CacheBridge: subs,
-			ScopeBridge: subs,
+			Entitlements: repo.NewEntitlementRepo(c.DB),
+			Plans:        repo.NewSubscribeRepo(conn, nodes),
+			UserSubs:     subs,
+			Traffic:      subs,
+			CacheBridge:  subs,
+			ScopeBridge:  subs,
 		}
 	}
 }
@@ -452,6 +454,10 @@ const (
 
 func (s *service) FulfillPaidOrder(ctx context.Context, orderNo string) (*FulfillmentOutcome, error) {
 	return s.fulfil.FulfillPaidOrder(ctx, orderNo)
+}
+
+func (s *service) ReconcileEntitlement(ctx context.Context, cmd dto.ReconcileEntitlementCommand) (*dto.EntitlementResult, error) {
+	return s.fulfil.ReconcileEntitlement(ctx, cmd)
 }
 
 // TrialPolicy re-exports the trial subdomain's policy snapshot for the

@@ -276,6 +276,9 @@ func (l *QuotaTaskLogic) grantSubscription(ctx context.Context, taskID int64, su
 			return nil
 		}
 
+		if sub.EntitlementSource != "" {
+			return store.Inbox().Insert(ctx, inboxQuotaGrant, inboxKey(taskID, sub.Id), "skipped: provider-managed subscription")
+		}
 		updated := false
 
 		// 处理有限期延长，同时保留 NoLimit 的 epoch 哨兵值。

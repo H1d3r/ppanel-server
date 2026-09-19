@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -59,5 +60,17 @@ func TestResetTrafficRejectsExpiredSubscription(t *testing.T) {
 	_, err := svc.ResetTraffic(ownerContext(11), &dto.ResetTrafficOrderRequest{UserSubscribeID: 22})
 	if err == nil {
 		t.Fatal("reset traffic accepted an expired subscription")
+	}
+}
+
+func TestLocalCheckoutRejectsProviderManagedSubscription(t *testing.T) {
+	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 11, EntitlementSource: "apple"}}})
+	_, err := svc.Renewal(ownerContext(11), &dto.RenewalOrderRequest{UserSubscribeID: 22, Quantity: 1})
+	if !errors.Is(err, usersub.ErrProviderManaged) {
+		t.Fatalf("local renewal accepted: %v", err)
+	}
+	_, err = svc.ResetTraffic(ownerContext(11), &dto.ResetTrafficOrderRequest{UserSubscribeID: 22})
+	if !errors.Is(err, usersub.ErrProviderManaged) {
+		t.Fatalf("local reset checkout accepted: %v", err)
 	}
 }

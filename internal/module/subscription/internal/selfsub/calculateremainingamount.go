@@ -2,6 +2,7 @@ package selfsub
 
 import (
 	"context"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
 	"github.com/perfect-panel/server/pkg/logger"
 
@@ -16,6 +17,9 @@ func CalculateRemainingAmount(ctx context.Context, deps Deps, userSubscribeId in
 	if err != nil {
 		logger.WithContext(ctx).Error("[func CalculateRemainingAmount(ctx context.Context, deps Deps, userSubscribeId int64) (int64, error) {\n] FindOneUserSubscribe", logger.Field("err", err.Error()), logger.Field("id", userSubscribeId))
 		return 0, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneUserSubscribe failed, id: %d", userSubscribeId)
+	}
+	if userSubscribe.EntitlementSource != "" {
+		return 0, usersub.ErrProviderManaged
 	}
 	if userSubscribe.OrderId == 0 {
 		return 0, nil

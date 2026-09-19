@@ -71,6 +71,8 @@ type UserSubscriptionRepo interface {
 	FindOneSubscribeByToken(ctx context.Context, token string) (*usersub.Subscribe, error)
 	FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*usersub.Subscribe, error)
 	UpdateSubscribe(ctx context.Context, data *usersub.Subscribe, tx ...*gorm.DB) error
+	// ApplyEntitlementProjection is only called with a locked provider row.
+	ApplyEntitlementProjection(ctx context.Context, data *usersub.Subscribe) error
 	DeleteSubscribe(ctx context.Context, token string, tx ...*gorm.DB) error
 	DeleteSubscribeById(ctx context.Context, id int64, tx ...*gorm.DB) error
 	UpdateUserSubscribeWithTraffic(ctx context.Context, id, download, upload int64, tx ...*gorm.DB) error
