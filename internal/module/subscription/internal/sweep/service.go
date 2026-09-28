@@ -29,8 +29,15 @@ type Notifier interface {
 
 // OwnerEmailReader is the read-only identity port resolving a user's email
 // binding; the legacy user-auth repository satisfies it structurally.
+// Soft-deleted users resolve to no binding.
 type OwnerEmailReader interface {
 	FindUserAuthMethodsByUserIds(ctx context.Context, method string, userIds []int64) ([]*user.AuthMethods, error)
+}
+
+// OwnerStateReader is the read-only identity port reporting whether an owner
+// account still exists; the legacy user repository satisfies it structurally.
+type OwnerStateReader interface {
+	FindAccountState(ctx context.Context, id int64) (*user.AccountState, error)
 }
 
 // Deps declares the subdomain's dependencies; the module facade forwards
@@ -41,6 +48,7 @@ type Deps struct {
 	Cache    repository.UserCacheRepo
 	Store    Store
 	Emails   OwnerEmailReader
+	Owners   OwnerStateReader
 	Notify   Notifier
 }
 

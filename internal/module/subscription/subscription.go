@@ -196,6 +196,7 @@ func New(deps Deps) Service {
 			Cache:    deps.Cache,
 			Store:    deps.Operations,
 			Emails:   deps.UserAuths,
+			Owners:   deps.Users,
 			Notify:   deps.LifecycleNotify,
 		}),
 		apps: application.NewService(application.Deps{

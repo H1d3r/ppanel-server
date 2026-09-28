@@ -5,11 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/timeutil"
+	"gorm.io/gorm"
 )
 
 type expiringReminder struct {
@@ -79,13 +81,30 @@ type expiringStore struct {
 
 func (s *expiringStore) Inbox() repository.InboxRepo { return s.inbox }
 
-func newExpiringService(subs []*usersub.Subscribe) (*Service, *recordingNotifier, *expiringSubsRepo) {
+type expiringOwners struct {
+	deleted map[int64]bool
+}
+
+func (o *expiringOwners) FindAccountState(_ context.Context, id int64) (*user.AccountState, error) {
+	state := &user.AccountState{Id: id}
+	if o.deleted[id] {
+		state.DeletedAt = gorm.DeletedAt{Time: timeutil.Now(), Valid: true}
+	}
+	return state, nil
+}
+
+func newExpiringService(subs []*usersub.Subscribe, deletedOwners ...int64) (*Service, *recordingNotifier, *expiringSubsRepo) {
 	notifier := &recordingNotifier{}
 	userSubs := &expiringSubsRepo{subs: subs}
+	owners := &expiringOwners{deleted: map[int64]bool{}}
+	for _, id := range deletedOwners {
+		owners.deleted[id] = true
+	}
 	svc := NewService(Deps{
 		UserSubs: userSubs,
 		Plans:    &expiringPlansRepo{plans: map[int64]*subscribe.Subscribe{9: {Id: 9, Name: "Pro 月付", UnitPrice: 1890}}},
 		Store:    &expiringStore{inbox: &expiringInbox{records: map[string]bool{}}},
+		Owners:   owners,
 		Notify:   notifier,
 	})
 	return svc, notifier, userSubs
@@ -139,6 +158,28 @@ func TestRemindExpiringSubscribesAnnouncesAgainAfterRenewal(t *testing.T) {
 
 	if len(notifier.reminders) != 2 {
 		t.Fatalf("reminders = %d, want 2 (one per expiry)", len(notifier.reminders))
+	}
+}
+
+// Deleting a user leaves the subscription active, so the sweep still finds
+// it; the deleted owner must not be reminded.
+func TestRemindExpiringSubscribesSkipsDeletedOwners(t *testing.T) {
+	expireAt := timeutil.Now().Add(48 * time.Hour)
+	svc, notifier, _ := newExpiringService([]*usersub.Subscribe{
+		{Id: 1, UserId: 7, SubscribeId: 9, ExpireTime: expireAt},
+		{Id: 2, UserId: 8, SubscribeId: 9, ExpireTime: expireAt},
+	}, 8)
+
+	if err := svc.RemindExpiringSubscribes(context.Background()); err != nil {
+		t.Fatalf("RemindExpiringSubscribes error = %v", err)
+	}
+
+	var owners []int64
+	for _, reminder := range notifier.reminders {
+		owners = append(owners, reminder.userID)
+	}
+	if len(owners) != 1 || owners[0] != 7 {
+		t.Fatalf("reminded owners = %v, want [7]", owners)
 	}
 }
 

@@ -299,6 +299,16 @@ func userQuoteColumn(db *gorm.DB, table, column string) string {
 	return table + "." + column
 }
 
+// joinUndeletedUsers joins auth methods to their owning users and drops
+// soft-deleted accounts. Delete leaves the bindings in place, and GORM's
+// soft-delete scope covers only the model table, so a join has to state the
+// predicate itself.
+func joinUndeletedUsers(query *gorm.DB) *gorm.DB {
+	return query.
+		Joins(fmt.Sprintf("JOIN %s ON %s = %s", userTableName(query), userColumn(query, "id"), authMethodsColumn(query, "user_id"))).
+		Where(userColumn(query, "deleted_at") + " IS NULL")
+}
+
 // --- user statistics / email recipients / batch delete ---
 
 // emailRecipientQuery builds the identity-side recipient query (user +
@@ -311,11 +321,9 @@ func emailRecipientQuery(conn *gorm.DB, filter *user.EmailRecipientFilter, scope
 	}
 	userID := userColumn(conn, "id")
 	userCreatedAt := userColumn(conn, "created_at")
-	authUserID := authMethodsColumn(conn, "user_id")
 	authType := authMethodsColumn(conn, "auth_type")
-	query := conn.Model(&user.AuthMethods{}).
+	query := joinUndeletedUsers(conn.Model(&user.AuthMethods{})).
 		Select("auth_identifier").
-		Joins(fmt.Sprintf("JOIN %s ON %s = %s", userTableName(conn), userID, authUserID)).
 		Where(authType+" = ?", "email")
 
 	if filter.RegisterStartTime != 0 {
@@ -565,14 +573,16 @@ func (m *UserRepo) FindUserAuthMethods(ctx context.Context, userId int64) ([]*us
 	return data, err
 }
 
+// FindUserAuthMethodsByUserIds resolves the bindings used to contact users
+// in bulk; soft-deleted users resolve to none.
 func (m *UserRepo) FindUserAuthMethodsByUserIds(ctx context.Context, method string, userIds []int64) ([]*user.AuthMethods, error) {
 	if len(userIds) == 0 {
 		return []*user.AuthMethods{}, nil
 	}
 	var data []*user.AuthMethods
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&user.AuthMethods{}).
-			Where("auth_type = ? AND user_id IN ?", method, userIds).
+		return joinUndeletedUsers(conn.Model(&user.AuthMethods{})).
+			Where(authMethodsColumn(conn, "auth_type")+" = ? AND "+authMethodsColumn(conn, "user_id")+" IN ?", method, userIds).
 			Find(v).Error
 	})
 	return data, err
