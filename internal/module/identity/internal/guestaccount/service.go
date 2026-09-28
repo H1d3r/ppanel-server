@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
@@ -53,6 +54,12 @@ func (s *Service) EnsureGuestAccount(ctx context.Context, command Command) (int6
 	if id, found, err := s.FindGuestAccount(ctx, command.OrderNo); err != nil || found {
 		return id, err
 	}
+	// A guest names an identifier nobody has verified. Only email and mobile
+	// are accepted: their owner can take the account over through a code,
+	// whereas a provider id would pre-claim someone else's OAuth sign-in.
+	if command.AuthType != identifier.Email && command.AuthType != identifier.Mobile {
+		return 0, fmt.Errorf("guest order %s names unsupported auth type %q", command.OrderNo, command.AuthType)
+	}
 	passwordHash := command.PasswordHash
 	if passwordHash == "" {
 		if command.LegacyPassword == "" {
@@ -66,7 +73,7 @@ func (s *Service) EnsureGuestAccount(ctx context.Context, command Command) (int6
 			return err
 		}
 		u.ReferCode = user.GenerateInviteCode(u.Id)
-		if err := tx.User().Update(ctx, u); err != nil {
+		if err := tx.User().UpdateColumns(ctx, u.Id, map[string]interface{}{"refer_code": u.ReferCode}); err != nil {
 			return err
 		}
 		if err := tx.UserAuth().InsertUserAuthMethods(ctx, &user.AuthMethods{
@@ -77,7 +84,7 @@ func (s *Service) EnsureGuestAccount(ctx context.Context, command Command) (int6
 		if command.InviteCode != "" {
 			if referer, err := tx.User().FindOneByReferCode(ctx, command.InviteCode); err == nil {
 				u.RefererId = referer.Id
-				if err := tx.User().Update(ctx, u); err != nil {
+				if err := tx.User().UpdateColumns(ctx, u.Id, map[string]interface{}{"referer_id": u.RefererId}); err != nil {
 					return err
 				}
 			} else {

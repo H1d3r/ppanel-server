@@ -2,7 +2,6 @@ package usersub
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
@@ -10,7 +9,6 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 )
@@ -36,7 +34,7 @@ func (l *ResetUserSubscribeTokenLogic) ResetUserSubscribeToken(req *dto.ResetUse
 		logger.Errorf("[ResetUserSubscribeToken] FindOneSubscribe error: %v", err.Error())
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneSubscribe error: %v", err.Error())
 	}
-	userSub.Token = usersub.TokenFromOrder(fmt.Sprintf("AdminUpdate:%d", timeutil.Now().UnixMilli()))
+	userSub.Token = usersub.NewToken()
 	userSub.UUID = uuid.NewV4().String()
 
 	err = l.deps.UserSubs.UpdateSubscribe(l.ctx, userSub)

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	tgbot "github.com/go-telegram/bot"
@@ -16,6 +17,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
+	"github.com/perfect-panel/server/pkg/random"
 )
 
 // Dependencies is the startup/reconfiguration boundary. It owns only mutable
@@ -47,6 +49,7 @@ func (d *Dependencies) updateConfig(update func(*config.Config)) {
 // provisioning must precede every node configuration read.
 func Start(deps *Dependencies) {
 	Migrate(deps)
+	WarnDefaultAdminPassword(deps)
 	Site(deps)
 	NodeSecret(deps)
 	Node(deps)
@@ -114,8 +117,9 @@ func Migrate(ctx *Dependencies) {
 		}
 		if count == 0 {
 			enable := true
+			adminPassword := initialAdminPassword(current.Administrator.Email, current.Administrator.Password)
 			admin := &user.User{
-				Password:  password.EncodePassWord(current.Administrator.Password),
+				Password:  password.EncodePassWord(adminPassword),
 				Algo:      password.PasswordAlgoArgon2id,
 				IsAdmin:   &enable,
 				ReferCode: user.GenerateInviteCode(time.Now().Unix()),
@@ -139,5 +143,47 @@ func Migrate(ctx *Dependencies) {
 	})
 	if err != nil {
 		panic(err)
+	}
+}
+
+// defaultAdminPassword is the value older releases seeded the first
+// administrator with when none was configured.
+const defaultAdminPassword = "password"
+
+// initialAdminPassword returns the configured password for the first
+// administrator, or a generated one when none was configured. The documented
+// Docker and environment-variable installs configure none, and falling back to
+// the published default would open the panel to anyone.
+func initialAdminPassword(email, configured string) string {
+	if configured != "" {
+		return configured
+	}
+	generated := random.KeyNew(20, 1)
+	// Printed once, outside the structured logger's redaction, so the
+	// operator can sign in; it is not stored anywhere else.
+	log.Printf("[Migrate] Created administrator %s with generated password %s; sign in and change it now", email, generated)
+	return generated
+}
+
+// WarnDefaultAdminPassword flags administrators that still sign in with the
+// password older releases seeded, which anyone can look up.
+func WarnDefaultAdminPassword(ctx *Dependencies) {
+	admins, err := ctx.Store.User().QueryAdminUsers(context.Background())
+	if err != nil {
+		logger.Errorf("[Migrate] Query admin users error: %v", err.Error())
+		return
+	}
+	for _, admin := range admins {
+		if !password.MultiPasswordVerify(admin.Algo, admin.Salt, defaultAdminPassword, admin.Password) {
+			continue
+		}
+		email := ""
+		for _, method := range admin.AuthMethods {
+			if method.AuthType == "email" {
+				email = method.AuthIdentifier
+			}
+		}
+		logger.Errorw("[Security] An administrator still uses the default password; change it immediately",
+			logger.Field("user_id", admin.Id), logger.Field("email", email))
 	}
 }

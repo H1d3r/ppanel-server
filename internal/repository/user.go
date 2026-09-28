@@ -21,7 +21,10 @@ type UserRepo interface {
 	FindOneForUpdate(ctx context.Context, id int64) (*user.User, error)
 	FindOneByEmail(ctx context.Context, email string) (*user.User, error)
 	FindOneByReferCode(ctx context.Context, referCode string) (*user.User, error)
-	Update(ctx context.Context, data *user.User, tx ...*gorm.DB) error
+	// UpdateColumns writes only the named columns. There is deliberately no
+	// whole-row update: a snapshot saved back whole reverts whatever changed
+	// meanwhile, including an administrator's disable or demotion.
+	UpdateColumns(ctx context.Context, id int64, columns map[string]interface{}, tx ...*gorm.DB) error
 	UpgradePasswordHash(ctx context.Context, id int64, currentHash, password, algo, salt string) (bool, error)
 	Delete(ctx context.Context, id int64, tx ...*gorm.DB) error
 	BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm.DB) error
@@ -46,6 +49,9 @@ type UserAuthRepo interface {
 	FindUserAuthMethods(ctx context.Context, userId int64) ([]*user.AuthMethods, error)
 	FindUserAuthMethodsByUserIds(ctx context.Context, method string, userIds []int64) ([]*user.AuthMethods, error)
 	FindUserAuthMethodByOpenID(ctx context.Context, method, openID string) (*user.AuthMethods, error)
+	// FindEmailAlias returns an email binding of a live account that reaches
+	// the same mailbox as email under another spelling.
+	FindEmailAlias(ctx context.Context, email string) (*user.AuthMethods, error)
 	ValidateEmailIdentityUniqueness(ctx context.Context) error
 	FindUserAuthMethodByPlatform(ctx context.Context, userId int64, platform string) (*user.AuthMethods, error)
 	FindUserAuthMethodByUserId(ctx context.Context, method string, userId int64) (*user.AuthMethods, error)
@@ -98,6 +104,11 @@ type UserSubscriptionRepo interface {
 	MarkSubscribesFinished(ctx context.Context, ids []int64, status uint8, finishedAt time.Time, tx ...*gorm.DB) error
 	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
 	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)
+	// UpdateSubscribeColumns writes only the named columns of a locally
+	// managed subscription, for callers that re-read the row under lock and
+	// must leave the columns other writers own (traffic counters,
+	// credentials, holds) as stored.
+	UpdateSubscribeColumns(ctx context.Context, data *usersub.Subscribe, columns ...string) error
 }
 
 // UserDeviceRepo manages registered devices and their online records.

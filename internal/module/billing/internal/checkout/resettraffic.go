@@ -39,6 +39,10 @@ func (s *Service) ResetTraffic(ctx context.Context, req *dto.ResetTrafficOrderRe
 	if userSubscribe.EntitlementSource != "" {
 		return nil, usersub.ErrProviderManaged
 	}
+	// A reset restores an exhausted subscription, never a refunded or stopped one.
+	if usersub.OnHold(userSubscribe.Status) {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "refunded or stopped subscription cannot reset traffic")
+	}
 	// NoLimit subscriptions use the Unix epoch as their expiry sentinel. A paid
 	// traffic reset must not be created for a subscription whose finite term has
 	// already elapsed, because it cannot restore access or extend that term.

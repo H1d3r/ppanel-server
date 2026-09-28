@@ -192,6 +192,52 @@ func TestQueryOrderEasyPayFallbackReportsUnpaid(t *testing.T) {
 	}
 }
 
+// Only an explicit standard status 0 means "awaiting payment"; an omitted,
+// refunded or frozen status and a status-only answer leave the state unknown.
+func TestQueryOrderReportsExplicitAwaitingPayment(t *testing.T) {
+	tests := []struct {
+		name         string
+		body         string
+		paid, unpaid bool
+	}{
+		{"awaiting payment", `{"code":1,"pid":1001,"out_trade_no":"order-1","status":0}`, false, true},
+		{"paid", `{"code":1,"pid":1001,"out_trade_no":"order-1","status":1}`, true, false},
+		{"refunded", `{"code":1,"pid":1001,"out_trade_no":"order-1","status":2}`, false, false},
+		{"status omitted", `{"code":1,"pid":1001,"out_trade_no":"order-1"}`, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			result, err := NewClient("1001", server.URL, "secret", "alipay").QueryOrder("order-1")
+			if err != nil {
+				t.Fatalf("QueryOrder: %v", err)
+			}
+			if result.Paid != tt.paid || result.Unpaid != tt.unpaid {
+				t.Fatalf("result = %+v, want paid=%t unpaid=%t", result, tt.paid, tt.unpaid)
+			}
+		})
+	}
+
+	statusOnly := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api.php" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":1,"data":{"status":"pending"}}`))
+	}))
+	defer statusOnly.Close()
+	result, err := NewClient("1001", statusOnly.URL, "secret", "alipay").QueryOrder("order-1")
+	if err != nil {
+		t.Fatalf("QueryOrder: %v", err)
+	}
+	if result.Paid || result.Unpaid {
+		t.Fatalf("status-only result = %+v, want neither paid nor awaiting payment", result)
+	}
+}
+
 func TestQueryOrderRejectsUnsuccessfulLookup(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"code":-1,"msg":"not found"}`))

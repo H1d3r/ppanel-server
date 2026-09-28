@@ -15,6 +15,8 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/xerr"
+	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -192,6 +194,76 @@ func TestV2GuestSessionExchangeRequiresActivatedAccount(t *testing.T) {
 	}
 	if _, err := logic.Session(orderInfo.OrderNo, "incorrect-capability"); err == nil {
 		t.Fatal("invalid checkout capability must not issue a session")
+	}
+}
+
+func v2GuestPurchase(authType, identifier string) *dto.V2CreateOrderRequest {
+	return &dto.V2CreateOrderRequest{
+		Type: v2OrderTypePurchase, PaymentID: 2, SubscribeID: 9, Quantity: 1,
+		Guest: &dto.V2GuestOrderRequest{AuthType: authType, Identifier: identifier, Password: "guest-password"},
+	}
+}
+
+// An anonymous purchase must not bind an OAuth or device identity: the paid
+// order would insert it as given and issue a session for it.
+func TestValidateV2CreateRequestRejectsNonPasswordGuestAuthTypes(t *testing.T) {
+	for _, authType := range []string{"github", "telegram", "google", "device", ""} {
+		err := validateV2CreateRequest(v2GuestPurchase(authType, "123456789"), nil)
+		var codeErr *xerr.CodeError
+		if !errors.As(errors.Cause(err), &codeErr) || codeErr.GetErrCode() != xerr.InvalidParams {
+			t.Fatalf("auth type %q: error = %v, want InvalidParams", authType, err)
+		}
+	}
+	if err := validateV2CreateRequest(v2GuestPurchase("email", "not-an-email"), nil); err == nil {
+		t.Fatal("malformed guest email must be rejected")
+	}
+}
+
+func TestValidateV2CreateRequestCanonicalizesGuestIdentity(t *testing.T) {
+	req := v2GuestPurchase(" Email ", "  Guest@Example.COM ")
+	if err := validateV2CreateRequest(req, nil); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if req.Guest.AuthType != "email" || req.Guest.Identifier != "guest@example.com" {
+		t.Fatalf("guest identity = (%q, %q), want canonical email", req.Guest.AuthType, req.Guest.Identifier)
+	}
+	req = v2GuestPurchase("mobile", "+86 155 0250 5555")
+	if err := validateV2CreateRequest(req, nil); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if req.Guest.Identifier != "+8615502505555" {
+		t.Fatalf("guest mobile = %q, want E.164", req.Guest.Identifier)
+	}
+}
+
+// A Turnstile token is single-use, so an idempotent retry carries a new one;
+// the retry must still resolve to the original order.
+func TestV2GuestRequestHashIgnoresTurnstileToken(t *testing.T) {
+	logic := NewService(Deps{}).flow(context.Background())
+	first := v2GuestPurchase("email", "guest@example.com")
+	first.Guest.TurnstileToken = "first-token"
+	second := v2GuestPurchase("email", "guest@example.com")
+	second.Guest.TurnstileToken = "second-token"
+	firstHash, err := logic.requestHash(first)
+	if err != nil {
+		t.Fatalf("hash first request: %v", err)
+	}
+	secondHash, err := logic.requestHash(second)
+	if err != nil {
+		t.Fatalf("hash second request: %v", err)
+	}
+	if firstHash != secondHash {
+		t.Fatal("turnstile token changed the idempotency hash")
+	}
+	if first.Guest.TurnstileToken != "first-token" {
+		t.Fatal("hashing must not strip the token from the request")
+	}
+	other, err := logic.requestHash(v2GuestPurchase("email", "other@example.com"))
+	if err != nil {
+		t.Fatalf("hash other request: %v", err)
+	}
+	if other == firstHash {
+		t.Fatal("a different guest identity must change the idempotency hash")
 	}
 }
 

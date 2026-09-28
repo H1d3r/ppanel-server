@@ -6,12 +6,10 @@ import (
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 )
@@ -47,20 +45,7 @@ func (l *ResetUserSubscribeTokenLogic) ResetUserSubscribeToken(req *dto.ResetUse
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "UserSubscribeId does not belong to the current user")
 	}
 
-	var orderDetails *order.Details
-	// find order
-	if userSub.OrderId != 0 {
-		orderDetails, err = l.deps.Orders.FindOneDetails(l.ctx, userSub.OrderId)
-		if err != nil {
-			l.Errorw("FindOneDetails failed:", logger.Field("error", err.Error()))
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneDetails failed: %v", err.Error())
-		}
-	} else {
-		// if order id is 0, this a admin create user subscribe
-		orderDetails = &order.Details{}
-	}
-
-	userSub.Token = usersub.TokenFromOrder(orderDetails.OrderNo + timeutil.Now().Format("20060102150405.000"))
+	userSub.Token = usersub.NewToken()
 	userSub.UUID = uuid.NewV4().String()
 	var newSub usersub.Subscribe
 	mapping.DeepCopy(&newSub, userSub)

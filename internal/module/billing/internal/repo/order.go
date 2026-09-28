@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -208,6 +209,18 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 	return count, err
 }
 
+// CountPendingGuestOrders counts the unpaid orders a guest identity holds
+// before its account exists; guest orders carry no user until activation.
+func (m *orderRepo) CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error) {
+	var count int64
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
+		return conn.Model(&order.Order{}).
+			Where("user_id = ? AND status = ? AND guest_auth_type = ? AND guest_identifier = ?", 0, uint8(1), authType, identifier).
+			Count(&count).Error
+	})
+	return count, err
+}
+
 // QueryOrderListByPage Query order list by page
 func (m *orderRepo) QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error) {
 	var list []*order.Details
@@ -359,6 +372,29 @@ func (m *orderRepo) SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, trade
 	return updated, err
 }
 
+func (m *orderRepo) SetCommission(ctx context.Context, orderNo string, amount int64, tx ...*gorm.DB) error {
+	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		if len(tx) > 0 {
+			conn = tx[0]
+		}
+		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).Update("commission", amount).Error
+	}, m.getCacheKeys(orderInfo)...)
+}
+
+func (m *orderRepo) HasCommissionedOrder(ctx context.Context, userID int64, exceptOrderNo string) (bool, error) {
+	var count int64
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
+		return conn.Model(&order.Order{}).
+			Where("user_id = ? AND commission > 0 AND order_no <> ?", userID, exceptOrderNo).
+			Count(&count).Error
+	})
+	return count > 0, err
+}
+
 func (m *orderRepo) CountPendingByPaymentID(ctx context.Context, paymentID int64) (int64, error) {
 	var count int64
 	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, value interface{}) error {
@@ -459,14 +495,23 @@ func (m *orderRepo) QueryMonthlyOrders(ctx context.Context, date time.Time) (ord
 	return result, err
 }
 
+// appDayStart returns midnight, in the application timezone, of the calendar
+// day containing date. Truncate(24*time.Hour) rounds to UTC midnight instead,
+// which shifts "today" by the zone offset.
+func appDayStart(date time.Time) time.Time {
+	loc := timeutil.Location()
+	local := date.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+}
+
 // QueryDateOrders Query orders by date
 func (m *orderRepo) QueryDateOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error) {
-	start := date.Truncate(24 * time.Hour)
-	end := start.Add(24 * time.Hour).Add(-time.Nanosecond)
+	start := appDayStart(date)
+	end := start.AddDate(0, 0, 1)
 	var result order.OrdersTotal
 	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&order.Order{}).
-			Where("status IN ? AND created_at BETWEEN ? AND ? AND method != ?", []int64{2, 5}, start, end, "balance").
+			Where("status IN ? AND created_at >= ? AND created_at < ? AND method != ?", []int64{2, 5}, start, end, "balance").
 			Select(
 				"SUM(amount) as amount_total, " +
 					"SUM(CASE WHEN is_new THEN amount ELSE 0 END) as new_order_amount, " +
@@ -611,8 +656,9 @@ func (m *orderRepo) QueryDailyOrdersList(ctx context.Context, date time.Time) ([
 	var results []order.OrdersTotalWithDate
 
 	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
-		firstDay := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
-		nextDay := date.AddDate(0, 0, 1).Truncate(24 * time.Hour)
+		today := appDayStart(date)
+		firstDay := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, today.Location())
+		nextDay := today.AddDate(0, 0, 1)
 		dateExpr := orderDateBucketExpr(conn, "created_at", "day")
 
 		return conn.Model(&order.Order{}).

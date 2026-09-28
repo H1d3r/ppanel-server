@@ -18,6 +18,12 @@ import (
 const (
 	GeoIPDBURL    = "https://raw.githubusercontent.com/adysec/IP_database/main/geolite/GeoLite2-City.mmdb"
 	GeoIPASNDBURL = "https://raw.githubusercontent.com/adysec/IP_database/main/geolite/GeoLite2-ASN.mmdb"
+
+	// Database types the downloads must declare in their metadata. The
+	// mirror publishes no checksums, so the file itself is what gets
+	// verified before it may replace the active database.
+	GeoIPDBType    = "GeoLite2-City"
+	GeoIPASNDBType = "GeoLite2-ASN"
 )
 
 type IPLocation struct {
@@ -33,7 +39,7 @@ func NewIPLocation(path string) (*IPLocation, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		logger.Infof("[GeoIP] Database not found, downloading from %s", GeoIPDBURL)
 		// 文件不存在，下载数据库
-		err := DownloadGeoIPDatabase(GeoIPDBURL, path)
+		err := DownloadGeoIPDatabase(GeoIPDBURL, path, GeoIPDBType)
 		if err != nil {
 			logger.Errorf("[GeoIP] Failed to download database: %v", err.Error())
 			return nil, err
@@ -51,7 +57,7 @@ func NewIPLocation(path string) (*IPLocation, error) {
 	ipLoc.ASNPath = asnPath
 	if _, err := os.Stat(asnPath); os.IsNotExist(err) {
 		logger.Infof("[GeoIP] ASN database not found, downloading from %s", GeoIPASNDBURL)
-		if err := DownloadGeoIPDatabase(GeoIPASNDBURL, asnPath); err != nil {
+		if err := DownloadGeoIPDatabase(GeoIPASNDBURL, asnPath, GeoIPASNDBType); err != nil {
 			// ASN enrichment is optional. A transient download problem must not
 			// turn logging metadata into an application startup dependency.
 			logger.Errorf("[GeoIP] Failed to download ASN database; network organization will be omitted: %v", err)
@@ -117,7 +123,9 @@ func preferredGeoName(names map[string]string) string {
 	return ""
 }
 
-func DownloadGeoIPDatabase(url, path string) error {
+// DownloadGeoIPDatabase fetches a database to path. The file only replaces
+// path once it has been verified as a complete database of databaseType.
+func DownloadGeoIPDatabase(url, path, databaseType string) error {
 
 	// 创建路径, 确保目录存在
 	err := os.MkdirAll(filepath.Dir(path), 0755)
@@ -167,9 +175,41 @@ func DownloadGeoIPDatabase(url, path string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
+	if err := verifyGeoIPDatabase(tempPath, databaseType); err != nil {
+		return err
+	}
 	if err := os.Rename(tempPath, path); err != nil {
 		return err
 	}
 	committed = true
+	return nil
+}
+
+// verifyGeoIPDatabase checks a downloaded file before it may replace the
+// active database. It must open as a MaxMind DB — the metadata section sits
+// at the very end of the file, so a truncated transfer fails here — declare
+// the expected database type, and answer a lookup through its search tree
+// and data section.
+func verifyGeoIPDatabase(path, databaseType string) error {
+	db, err := geoip2.Open(path)
+	if db != nil {
+		// An unknown database type still returns an open reader.
+		defer func() { _ = db.Close() }()
+	}
+	if err != nil {
+		return fmt.Errorf("downloaded GeoIP database is invalid: %w", err)
+	}
+	if got := db.Metadata().DatabaseType; got != databaseType {
+		return fmt.Errorf("downloaded GeoIP database type is %q, want %q", got, databaseType)
+	}
+	probe := net.IPv4(1, 1, 1, 1)
+	if databaseType == GeoIPASNDBType {
+		_, err = db.ASN(probe)
+	} else {
+		_, err = db.City(probe)
+	}
+	if err != nil {
+		return fmt.Errorf("downloaded GeoIP database failed a lookup: %w", err)
+	}
 	return nil
 }

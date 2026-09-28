@@ -70,6 +70,8 @@ type UnbindDeviceRequest struct {
 
 type UpdateBindEmailRequest struct {
 	Email string `json:"email" validate:"required,email"`
+	// Code is the register-type verification code sent to Email.
+	Code string `json:"code" validate:"required"`
 }
 
 type UpdateBindMobileRequest struct {
@@ -116,7 +118,10 @@ type UpdateUserNotifySettingRequest struct {
 }
 
 type UpdateUserPasswordRequest struct {
-	Password string `json:"password" validate:"required,min=8,max=128"`
+	// OldPassword is required once the account has a password; accounts
+	// created through OAuth or device sign-in set their first one without it.
+	OldPassword string `json:"old_password" validate:"max=128"`
+	Password    string `json:"password" validate:"required,min=8,max=128"`
 }
 
 type UpdateUserRulesRequest struct {

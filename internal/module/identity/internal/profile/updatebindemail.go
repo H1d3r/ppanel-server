@@ -2,11 +2,15 @@ package profile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
+	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
+	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -38,6 +42,12 @@ func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) 
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid email: %v", err)
 	}
 	req.Email = email
+	// The new address becomes a login identifier, so its owner must prove
+	// control of it first, as binding a mobile number does.
+	cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Register, email)
+	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
+		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+	}
 	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
 	if !ok {
 		logger.Error("current user is not found in context")
@@ -55,18 +65,21 @@ func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) 
 	if m.Id > 0 {
 		return errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "email already bind")
 	}
+	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
+		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+	}
 	if method.Id == 0 {
 		method = &user.AuthMethods{
 			UserId:         u.Id,
 			AuthType:       "email",
 			AuthIdentifier: req.Email,
-			Verified:       false,
+			Verified:       true,
 		}
 		if err := l.deps.UserAuth.InsertUserAuthMethods(l.ctx, method); err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "InsertUserAuthMethods error")
 		}
 	} else {
-		method.Verified = false
+		method.Verified = true
 		method.AuthIdentifier = req.Email
 		if err := l.deps.UserAuth.UpdateUserAuthMethods(l.ctx, method); err != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "UpdateUserAuthMethods error")

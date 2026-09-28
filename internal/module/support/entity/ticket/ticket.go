@@ -1,6 +1,9 @@
 package ticket
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	Pending   = 1 // Pending  # Pending follow up
@@ -8,6 +11,23 @@ const (
 	Processed = 3 // Processed
 	Closed    = 4 // Closed
 )
+
+// Follow types.
+const (
+	FollowText  = 1
+	FollowImage = 2 // Content is an image reference rendered as <img src>
+)
+
+// FromUser marks a follow written by the ticket's owner; the user client has
+// always sent this value. Staff replies carry anything else ("System" from
+// the admin panel, "admin" from the Telegram bot).
+const FromUser = "User"
+
+// IsFromUser reports whether a follow was written by the ticket's owner.
+// Older rows and callers spell the marker in lowercase or leave it empty.
+func IsFromUser(from string) bool {
+	return from == "" || strings.EqualFold(from, FromUser)
+}
 
 type Ticket struct {
 	Id          int64     `gorm:"primaryKey"`

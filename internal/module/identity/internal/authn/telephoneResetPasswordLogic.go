@@ -6,6 +6,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/config"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
@@ -65,19 +66,24 @@ func (l *TelephoneResetPasswordLogic) TelephoneResetPassword(req *dto.TelephoneR
 		l.Errorw("FindOneByTelephone Error", logger.Field("error", err))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query user info failed: %v", err.Error())
 	}
+	if err := ensureAccountActive(userInfo); err != nil {
+		return nil, err
+	}
 	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, code, true); err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
 	}
 
 	// Generate password
-	pwd := password.EncodePassWord(req.Password)
-	userInfo.Password = pwd
-	userInfo.Algo = password.PasswordAlgoArgon2id
-	userInfo.Salt = ""
-	err = l.deps.Store.User().Update(l.ctx, userInfo)
+	err = l.deps.Store.User().UpdateColumns(l.ctx, userInfo.Id, password.UserColumns(req.Password))
 	if err != nil {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "update user password failed: %v", err.Error())
 	}
+	// A reset usually follows a compromise: end every earlier session before
+	// issuing the new one.
+	if err = usersession.Revoke(l.ctx, l.deps.Redis, userInfo.Id); err != nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "revoke sessions error: %v", err.Error())
+	}
+	clearLoginFailures(l.ctx, l.deps.Redis, userInfo.Id)
 
 	device, err := bindLoginDevice(l.deps.DeviceBinder, req.Identifier, req.IP, req.UserAgent, userInfo.Id)
 	if err != nil {

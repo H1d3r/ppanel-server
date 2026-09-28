@@ -77,7 +77,7 @@ func (s *Service) GrantTrial(ctx context.Context, userID int64) error {
 				StartTime:   now,
 				ExpireTime:  timeutil.AddTime(policy.TimeUnit, policy.Duration, now),
 				Traffic:     plan.Traffic,
-				Token:       usersub.TokenFromOrder(fmt.Sprintf("Trial-%v-%s", userID, uuid.NewV7().String())),
+				Token:       usersub.NewToken(),
 				UUID:        uuid.NewV7().String(),
 				Status:      usersub.SubscribeStatusActive,
 			}

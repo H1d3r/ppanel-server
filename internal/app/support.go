@@ -32,6 +32,7 @@ func newSupportModule(store repository.Store, queue *taskqueue.Client, srv *Appl
 		Queue:         marketingQueue{client: queue},
 		EmailStopper:  emailWorkerStopper{},
 		TicketNotify:  ticketTopicNotifier{srv: srv},
+		Redis:         srv.Redis,
 	})
 }
 

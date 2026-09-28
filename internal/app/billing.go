@@ -63,8 +63,15 @@ func newBillingModule(c config.Config, store repository.Store, queue *taskqueue.
 			SiteName:          func() string { return srv.Runtime.Config().Site.SiteName },
 			CurrencyUnit:      func() string { return srv.Runtime.Config().Currency.Unit },
 			CurrencyAccessKey: func() string { return srv.Runtime.Config().Currency.AccessKey },
-			JwtSecret:         c.JwtAuth.AccessSecret,
-			JwtExpire:         c.JwtAuth.AccessExpire,
+			SiteHost:          func() string { return srv.Runtime.Config().Site.Host },
+			// Guest purchases create an account, so they follow the
+			// registration Turnstile setting.
+			GuestVerification: func() billing.GuestVerification {
+				current := srv.Runtime.Config().Verify
+				return billing.GuestVerification{Enabled: current.RegisterVerify, Secret: current.TurnstileSecret}
+			},
+			JwtSecret: c.JwtAuth.AccessSecret,
+			JwtExpire: c.JwtAuth.AccessExpire,
 		},
 	})
 }

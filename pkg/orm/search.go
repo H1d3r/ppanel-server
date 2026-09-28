@@ -58,6 +58,12 @@ func likeSearch(fields []string, pattern string) func(db *gorm.DB) *gorm.DB {
 	}
 }
 
+// LikeEscape escapes value for use inside a LIKE pattern paired with
+// LikeEscapeClause.
+func LikeEscape(value string) string {
+	return escapeLike(value)
+}
+
 func escapeLike(value string) string {
 	replacer := strings.NewReplacer(likeEscapeChar, likeEscapeChar+likeEscapeChar, `%`, likeEscapeChar+`%`, `_`, likeEscapeChar+`_`)
 	return replacer.Replace(value)

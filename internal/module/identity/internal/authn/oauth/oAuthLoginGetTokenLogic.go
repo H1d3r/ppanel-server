@@ -11,6 +11,7 @@ import (
 
 	identifier2 "github.com/perfect-panel/server/internal/auth/identifier"
 	token2 "github.com/perfect-panel/server/internal/auth/token"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -624,7 +625,7 @@ func (l *OAuthLoginGetTokenLogic) register(email, avatar, method, openid, invite
 			logger.Field("refer_code", userInfo.ReferCode),
 		)
 
-		if err := store.User().Update(l.ctx, userInfo); err != nil {
+		if err := store.User().UpdateColumns(l.ctx, userInfo.Id, map[string]interface{}{"refer_code": userInfo.ReferCode}); err != nil {
 			l.Errorw("failed to update refer code",
 				logger.Field("request_id", requestID),
 				logger.Field("user_id", userInfo.Id),
@@ -841,12 +842,17 @@ func (l *OAuthLoginGetTokenLogic) generateToken(userInfo *user.User, requestID s
 		logger.Field("session_id", sessionId),
 	)
 
+	epoch, err := usersession.AcquireEpoch(l.ctx, l.deps.Redis, userInfo.Id)
+	if err != nil {
+		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "session epoch error: %v", err)
+	}
 	token, err := token2.NewJwtToken(
 		l.deps.Config.JWTAccessSecret,
 		timeutil.Now().Unix(),
 		l.deps.Config.JWTAccessExpire,
 		token2.WithOption("UserId", userInfo.Id),
 		token2.WithOption("SessionId", sessionId),
+		token2.WithOption(usersession.EpochClaim, epoch),
 	)
 	if err != nil {
 		l.Errorw("failed to generate jwt token",
@@ -1120,6 +1126,18 @@ func (l *OAuthLoginGetTokenLogic) findOrRegisterUser(authType, openID, email, av
 		logger.Field("auth_type", authType),
 		logger.Field("user_id", userAuthMethod.UserId),
 	)
+	// Provider sign-in and binding always store verified identities. An
+	// unverified one was asserted by someone else (for example a guest
+	// checkout naming this provider id), so it must not open that account to
+	// whoever proves the identity now.
+	if !userAuthMethod.Verified {
+		l.Errorw("refusing sign-in through an unverified identity",
+			logger.Field("request_id", requestID),
+			logger.Field("auth_type", authType),
+			logger.Field("user_id", userAuthMethod.UserId),
+		)
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "%s identity is bound to an account that never verified it", authType)
+	}
 
 	userInfo, err := l.deps.Store.User().FindOne(l.ctx, userAuthMethod.UserId)
 	if err != nil {

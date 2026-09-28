@@ -182,6 +182,7 @@ POST /v1/public/ticket/follow github.com/perfect-panel/server/internal/module/su
 POST /v1/public/user/bind_oauth github.com/perfect-panel/server/internal/module/identity/transport/http/public/user.BindOAuthHandler
 POST /v1/public/user/bind_oauth/callback github.com/perfect-panel/server/internal/module/identity/transport/http/public/user.BindOAuthCallbackHandler
 POST /v1/public/user/commission_withdraw github.com/perfect-panel/server/internal/module/billing/transport/http/public/user.CommissionWithdrawHandler
+POST /v1/public/user/logout github.com/perfect-panel/server/internal/module/identity/transport/http/public/user.LogoutHandler
 POST /v1/public/user/unbind_oauth github.com/perfect-panel/server/internal/module/identity/transport/http/public/user.UnbindOAuthHandler
 POST /v1/public/user/unbind_telegram github.com/perfect-panel/server/internal/module/identity/transport/http/public/user.UnbindTelegramHandler
 POST /v1/public/user/unsubscribe github.com/perfect-panel/server/internal/module/subscription/transport/http/public/user.UnsubscribeHandler

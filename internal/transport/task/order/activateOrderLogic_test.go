@@ -151,6 +151,17 @@ func (r *activationOrderRepo) FindOneByOrderNoForUpdate(ctx context.Context, ord
 	return r.FindOneByOrderNo(ctx, orderNo)
 }
 
+func (r *activationOrderRepo) SetCommission(_ context.Context, orderNo string, amount int64, _ ...*gorm.DB) error {
+	if r.order.OrderNo == orderNo {
+		r.order.Commission = amount
+	}
+	return nil
+}
+
+func (r *activationOrderRepo) HasCommissionedOrder(context.Context, int64, string) (bool, error) {
+	return false, nil
+}
+
 func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo string, from, to uint8, _ ...*gorm.DB) (bool, error) {
 	if to == OrderStatusFinished && r.finalizeFailures > 0 {
 		r.finalizeFailures--
@@ -276,7 +287,7 @@ func (r *activationUserRepo) FindOneForUpdate(_ context.Context, id int64) (*use
 	return r.FindOne(context.Background(), id)
 }
 
-func (r *activationUserRepo) Update(_ context.Context, _ *userEntity.User, _ ...*gorm.DB) error {
+func (r *activationUserRepo) UpdateColumns(_ context.Context, _ int64, _ map[string]interface{}, _ ...*gorm.DB) error {
 	return nil
 }
 

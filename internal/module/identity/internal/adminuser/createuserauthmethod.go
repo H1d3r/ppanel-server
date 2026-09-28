@@ -33,10 +33,13 @@ func (l *CreateUserAuthMethodLogic) CreateUserAuthMethod(req *dto.CreateUserAuth
 		return errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "use device management for device identities")
 	}
 	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
+		// An administrator's binding vouches for the identity, so it signs
+		// in like one the user bound through the provider.
 		return store.UserAuth().UpsertUserAuthMethod(l.ctx, &user.AuthMethods{
 			UserId:         req.UserId,
 			AuthType:       req.AuthType,
 			AuthIdentifier: req.AuthIdentifier,
+			Verified:       true,
 		})
 	})
 	if err != nil {

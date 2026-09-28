@@ -3,7 +3,6 @@ package sms
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 
 	"github.com/perfect-panel/server/internal/infra/sms/abosend"
 	"github.com/perfect-panel/server/internal/infra/sms/alibabacloud"
@@ -16,8 +15,10 @@ type Sender interface {
 	GetSendCodeContent(code string) string
 }
 
+// NewSender builds the provider client for one send. config carries the
+// provider credentials (access keys, auth tokens, passwords) and must never
+// be logged.
 func NewSender(platform, config string) (Sender, error) {
-	log.Printf("platform: %s, config: %s", platform, config)
 	switch parsePlatform(platform) {
 	case AlibabaCloud:
 		cfg := alibabacloud.Config{}

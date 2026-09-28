@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/perfect-panel/server/internal/repository"
 
@@ -91,7 +92,21 @@ func (m *adsRepo) GetAdsListByPage(ctx context.Context, page, size int, filter a
 		if filter.Search != "" {
 			conn = conn.Scopes(orm.ContainsLike([]string{"title", "content"}, filter.Search))
 		}
+		if filter.ActiveAt != nil {
+			conn = conn.Scopes(adsActiveAt(*filter.ActiveAt))
+		}
 		return conn.Count(&total).Offset((page - 1) * size).Limit(size).Find(v).Error
 	})
 	return total, list, err
+}
+
+// adsActiveAt keeps the ads whose schedule covers at: start <= at < end. An
+// unset bound — NULL, or the Unix epoch the admin API stores for an omitted
+// time — leaves that side open. An unset start already sorts before any
+// instant; an unset end has to be matched explicitly.
+func adsActiveAt(at time.Time) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		return db.Where("(start_time IS NULL OR start_time <= ?)", at).
+			Where("(end_time IS NULL OR end_time <= ? OR end_time > ?)", time.UnixMilli(0), at)
+	}
 }

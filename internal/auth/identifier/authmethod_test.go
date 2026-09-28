@@ -45,3 +45,18 @@ func TestCanonicalIdentifierOnlyChangesEmail(t *testing.T) {
 		})
 	}
 }
+
+func TestEmailMailboxKey(t *testing.T) {
+	for email, want := range map[string]string{
+		"John.Smith+promo@Gmail.com":   "johnsmith@gmail.com",
+		"j.o.h.n.smith@googlemail.com": "johnsmith@gmail.com",
+		"john.smith+a+b@example.com":   "john.smith@example.com",
+		"john.smith@example.com":       "john.smith@example.com",
+		"+tag@example.com":             "+tag@example.com",
+		"not-an-email":                 "not-an-email",
+	} {
+		if got := EmailMailboxKey(email); got != want {
+			t.Errorf("EmailMailboxKey(%q) = %q, want %q", email, got, want)
+		}
+	}
+}

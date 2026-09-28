@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -56,7 +57,7 @@ func EncodePassWord(str string) string {
 	if _, err := rand.Read(salt); err != nil {
 		panic(fmt.Errorf("generate password salt: %w", err))
 	}
-	key := argon2.IDKey([]byte(str), salt, defaultArgon2id.Iterations, defaultArgon2id.Memory, defaultArgon2id.Parallelism, defaultArgon2id.KeyLen)
+	key := argon2IDKey([]byte(str), salt, defaultArgon2id.Iterations, defaultArgon2id.Memory, defaultArgon2id.Parallelism, defaultArgon2id.KeyLen)
 	return fmt.Sprintf(
 		"$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
 		defaultArgon2id.Memory,
@@ -65,6 +66,16 @@ func EncodePassWord(str string) string {
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	)
+}
+
+// UserColumns returns the user-row columns that store plain as a fresh
+// argon2id hash, for column-scoped updates.
+func UserColumns(plain string) map[string]interface{} {
+	return map[string]interface{}{
+		"password": EncodePassWord(plain),
+		"algo":     PasswordAlgoArgon2id,
+		"salt":     "",
+	}
 }
 
 func VerifyPassWord(passwd, EncodePasswd string) bool {
@@ -141,12 +152,23 @@ func verifyLegacyPBKDF2(password, hash string) bool {
 	return constantTimeStringEqual(hex.EncodeToString(derived), info[3])
 }
 
+// argon2Slots caps concurrent argon2id derivations. Each one holds its
+// memory parameter (19 MiB by default) while it runs, so a burst of sign-in
+// attempts would otherwise exhaust memory; extra callers wait for a slot.
+var argon2Slots = make(chan struct{}, max(2, runtime.NumCPU()))
+
+func argon2IDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	argon2Slots <- struct{}{}
+	defer func() { <-argon2Slots }()
+	return argon2.IDKey(password, salt, time, memory, threads, keyLen)
+}
+
 func verifyArgon2id(password, hash string) bool {
 	parsed, err := parseArgon2idPHC(hash)
 	if err != nil {
 		return false
 	}
-	key := argon2.IDKey(
+	key := argon2IDKey(
 		[]byte(password),
 		parsed.Salt,
 		parsed.Params.Iterations,

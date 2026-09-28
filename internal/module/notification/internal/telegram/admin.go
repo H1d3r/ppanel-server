@@ -232,7 +232,7 @@ func (a *TelegramAdmin) ticketDetail(msg *models.Message, adminUser *user.User, 
 		sb.WriteString("\n─── 回复记录 ───\n")
 		for _, f := range tk.Follows {
 			fromLabel := "用户"
-			if f.From != "user" && f.From != "" {
+			if !ticket.IsFromUser(f.From) {
 				fromLabel = "客服"
 			}
 			sb.WriteString(fmt.Sprintf("📝 %s (%s)\n   %s\n\n",
@@ -368,11 +368,28 @@ func (a *TelegramAdmin) authenticate(msg *models.Message) (admin *user.User, rej
 		a.Errorw("admin auth: query user failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))
 		return nil, "系统错误，请稍后再试。"
 	}
-	if u.IsAdmin == nil || !*u.IsAdmin {
-		a.Infow("admin auth: user is not admin", logger.Field("user_id", u.Id))
+	if refusal := panelAdminRefusal(u); refusal != "" {
+		a.Infow("admin auth: sender may not administer", logger.Field("user_id", u.Id), logger.Field("reason", refusal))
 		return nil, "您没有管理权限。"
 	}
 	return u, ""
+}
+
+// panelAdminRefusal explains why the account bound to a Telegram sender may
+// not act as a panel administrator, or returns "" when it may. Users.FindOne
+// is unscoped, so a soft-deleted account comes back like any other; it is
+// refused here together with disabled ones, the same gates the HTTP admin
+// routes apply.
+func panelAdminRefusal(u *user.User) string {
+	switch {
+	case u.DeletedAt.Valid:
+		return "account deleted"
+	case u.Enable == nil || !*u.Enable:
+		return "account disabled"
+	case u.IsAdmin == nil || !*u.IsAdmin:
+		return "not an administrator"
+	}
+	return ""
 }
 
 func (a *TelegramAdmin) userEmail(userId int64) (string, error) {
@@ -661,7 +678,9 @@ func (a *TelegramAdmin) confirmAction(msg *models.Message, adminUser *user.User,
 			opLabel = "已启用"
 		}
 		u.Enable = &enable
-		if err := a.deps.Users.Update(a.ctx, u); err != nil {
+		// Only the flag: a full-row save from this lookup could revert a
+		// concurrent change to the account.
+		if err := a.deps.Users.UpdateColumns(a.ctx, u.Id, map[string]interface{}{"enable": enable}); err != nil {
 			a.Errorw("ban user failed", logger.Field("error", err.Error()))
 			_ = a.reply(msg, "操作失败。")
 			return

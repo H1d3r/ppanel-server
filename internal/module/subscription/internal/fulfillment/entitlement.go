@@ -11,12 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"uuid"
+
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/timeutil"
-	"uuid"
 )
 
 var ErrEntitlementConflict = errors.New("entitlement ownership or revision conflict")
@@ -134,7 +135,7 @@ func (s *Service) reconcileEntitlement(ctx context.Context, cmd dto.ReconcileEnt
 			}
 			projected = &usersub.Subscribe{UserId: cmd.UserID, OrderId: cmd.OrderID, SubscribeId: cmd.PlanID,
 				StartTime: cmd.PeriodStart, ExpireTime: until, Traffic: trafficLimit,
-				Token: usersub.TokenFromOrder("entitlement:" + stateID), UUID: uuid.NewV4().String(), EntitlementSource: cmd.Source}
+				Token: usersub.NewToken(), UUID: uuid.NewV4().String(), EntitlementSource: cmd.Source}
 			projectEntitlement(projected, cmd, until, now, false)
 			if err := store.UserSubscription().InsertSubscribe(ctx, projected); err != nil {
 				return err

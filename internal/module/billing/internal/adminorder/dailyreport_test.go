@@ -54,7 +54,7 @@ func TestDailyReportLabelsThePlanBreakdown(t *testing.T) {
 	}}
 	svc := NewService(orders, nil, nil, nil, &dailyReportPlans{
 		plans: map[int64]*subscribe.Subscribe{9: {Id: 9, Name: "Pro 月付"}},
-	})
+	}, nil)
 
 	report, err := svc.DailyReport(context.Background(), orders.report.Date)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestDailyReportWithoutPlanReader(t *testing.T) {
 		Amount: 500,
 		ByPlan: []order.DailyBreakdown{{Id: 9, Orders: 1, Amount: 500}},
 	}}
-	svc := NewService(orders, nil, nil, nil, nil)
+	svc := NewService(orders, nil, nil, nil, nil, nil)
 
 	report, err := svc.DailyReport(context.Background(), time.Now())
 	if err != nil {

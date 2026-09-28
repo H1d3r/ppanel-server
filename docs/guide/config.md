@@ -50,9 +50,9 @@ Redis: # Redis configuration
   Host: "localhost:6379"            # Redis address
   Pass: ""                          # Redis password
   DB: 0                             # Redis database index
-Administer: # Admin login configuration
+Administrator: # First administrator, created on the first start
   Email: "admin@ppanel.dev"         # Admin login email
-  Password: "password"              # Admin login password
+  Password: ""                      # Admin login password; empty = generate one
 ```
 
 ## 3. Configuration Details
@@ -139,12 +139,15 @@ Administer: # Admin login configuration
 - **`DB`**: Redis database index.
   - Default: `0`.
 
-### 3.6 Admin Login (`Administer`)
+### 3.6 Admin Login (`Administrator`)
+
+Used once, to create the first administrator when the database has no users.
 
 - **`Email`**: Admin login email.
   - Default: `admin@ppanel.dev`.
 - **`Password`**: Admin login password.
-  - Default: `password`.
+  - Default: empty. When it is empty, a random password is generated and printed once in the startup log
+    (`docker logs`). Sign in with it and change it. A configured value is used as given.
 
 ## 4. Environment Variables
 
@@ -157,8 +160,8 @@ The following environment variables can be used to override configuration settin
 
 ## 5. Best Practices
 
-- **Security**: Avoid using default `Administer` credentials in production. Update `Email` and `Password` to secure
-  values.
+- **Security**: Change the first administrator's password after the first sign-in. The server logs an error at
+  startup while any administrator still uses the old default password `password`.
 - **Logging**: Use `file` or `volume` mode for production to persist logs. Adjust `Level` to `error` or `severe` to
   reduce log volume.
 - **Database**: Ensure `Database` and `Redis` credentials are secure and not exposed in version control.

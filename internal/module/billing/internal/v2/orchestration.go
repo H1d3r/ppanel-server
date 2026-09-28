@@ -214,7 +214,7 @@ func (l *V2OrderLogic) createOrder(ctx context.Context, req *dto.V2CreateOrderRe
 			resp, e := l.deps.Portal.Purchase(ctx, &dto.PortalPurchaseRequest{
 				AuthType: req.Guest.AuthType, Identifier: req.Guest.Identifier, Password: req.Guest.Password,
 				Payment: req.PaymentID, SubscribeId: req.SubscribeID, Quantity: req.Quantity,
-				Coupon: req.Coupon, InviteCode: req.Guest.InviteCode,
+				Coupon: req.Coupon, InviteCode: req.Guest.InviteCode, TurnstileToken: req.Guest.TurnstileToken,
 			})
 			if e != nil {
 				return "", "", e
@@ -407,11 +407,16 @@ func (l *V2OrderLogic) requestHash(req *dto.V2CreateOrderRequest) (string, error
 	}{
 		Type: req.Type, PaymentID: req.PaymentID, SubscribeID: req.SubscribeID,
 		UserSubscribeID: req.UserSubscribeID, Quantity: req.Quantity, Coupon: req.Coupon,
-		Amount: req.Amount, Guest: req.Guest,
+		Amount: req.Amount,
 	}
 	if currentUser := l.currentUser(); currentUser != nil {
 		canonical.UserID = currentUser.Id
-		canonical.Guest = nil
+	} else if req.Guest != nil {
+		// A Turnstile token is single-use, so a retry carries a fresh one; it
+		// must not change the request identity.
+		guest := *req.Guest
+		guest.TurnstileToken = ""
+		canonical.Guest = &guest
 	}
 	data, err := json.Marshal(canonical)
 	if err != nil {
@@ -449,9 +454,16 @@ func validateV2CreateRequest(req *dto.V2CreateOrderRequest, currentUser *user.Us
 			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid purchase parameters")
 		}
 		if currentUser == nil {
-			if req.Guest == nil || strings.TrimSpace(req.Guest.AuthType) == "" || strings.TrimSpace(req.Guest.Identifier) == "" || len(req.Guest.Password) < 8 || len(req.Guest.Password) > 128 {
+			if req.Guest == nil || len(req.Guest.Password) < 8 || len(req.Guest.Password) > 128 {
 				return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "guest credentials are required")
 			}
+			// Canonicalize in place so the idempotency hash, the replay
+			// ownership check and the created order share one identity.
+			authType, identifier, err := portal.NormalizeGuestIdentity(req.Guest.AuthType, req.Guest.Identifier)
+			if err != nil {
+				return err
+			}
+			req.Guest.AuthType, req.Guest.Identifier = authType, identifier
 		} else if req.Guest != nil {
 			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "guest is only allowed for anonymous purchase")
 		}

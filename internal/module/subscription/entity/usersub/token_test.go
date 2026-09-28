@@ -1,14 +1,21 @@
 package usersub
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+)
 
-func TestTokenFromOrderPreservesStoredFormat(t *testing.T) {
-	for _, tc := range []struct{ order, token string }{
-		{"20241213222445955", "46382230918a861482e4f1c61aa0e930"},
-		{"", "e3b0c44298fc1c149afbf4c8996fb924"},
-	} {
-		if got := TokenFromOrder(tc.order); got != tc.token {
-			t.Fatalf("TokenFromOrder(%q)=%q, want %q", tc.order, got, tc.token)
+func TestNewTokenKeepsStoredFormatAndIsRandom(t *testing.T) {
+	format := regexp.MustCompile(`^[0-9a-f]{32}$`)
+	seen := make(map[string]struct{}, 1000)
+	for i := 0; i < 1000; i++ {
+		token := NewToken()
+		if !format.MatchString(token) {
+			t.Fatalf("NewToken() = %q, want 32 lowercase hex characters", token)
 		}
+		if _, dup := seen[token]; dup {
+			t.Fatalf("NewToken() repeated %q", token)
+		}
+		seen[token] = struct{}{}
 	}
 }

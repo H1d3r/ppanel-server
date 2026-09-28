@@ -164,8 +164,12 @@ func handleInitConfig(_ context.Context, ctx *app.RequestContext) {
 		return
 	}
 
-	// write to file
-	if err = os.WriteFile(configPath, fileData, 0644); err != nil {
+	// write to file; the file holds the JWT secret and database credentials,
+	// and WriteFile keeps the mode of an existing file
+	if err = os.WriteFile(configPath, fileData, 0600); err == nil {
+		err = os.Chmod(configPath, 0600)
+	}
+	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, utils.H{
 			"code": 500,
 			"msg":  "Configuration initialization failed",

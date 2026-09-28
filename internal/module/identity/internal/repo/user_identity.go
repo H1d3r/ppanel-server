@@ -109,18 +109,24 @@ func (m *UserRepo) FindOneForUpdate(ctx context.Context, id int64) (*user.User, 
 	return &resp, err
 }
 
-func (m *UserRepo) Update(ctx context.Context, data *user.User, tx ...*gorm.DB) error {
-	old, err := m.FindOne(ctx, data.Id)
+// UpdateColumns writes only the named columns of the user row. Callers name
+// the fields they change, so a stale snapshot, such as the request's
+// authenticated user, cannot write back an enable flag, admin flag, password
+// or deletion that changed meanwhile, and a soft-deleted row stays deleted.
+func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[string]interface{}, tx ...*gorm.DB) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	old, err := m.FindOne(ctx, id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Save(data).Error
+		return conn.Model(&user.User{}).Where("id = ?", id).Updates(columns).Error
 	}, m.getCacheKeys(old)...)
-	return err
 }
 
 func (m *UserRepo) UpgradePasswordHash(ctx context.Context, id int64, currentHash, password, algo, salt string) (bool, error) {
@@ -424,7 +430,8 @@ func (m *UserRepo) BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm
 		if len(tx) > 0 {
 			conn = tx[0]
 		}
-		return conn.Where("id in ?", ids).Find(&users).Error
+		// The auth methods carry the email lookup's cache key.
+		return conn.Where("id in ?", ids).Preload("AuthMethods").Find(&users).Error
 	})
 	if err != nil {
 		return err
@@ -588,6 +595,61 @@ func (m *UserRepo) FindUserAuthMethodsByUserIds(ctx context.Context, method stri
 	return data, err
 }
 
+// FindEmailAlias returns an email binding of an account that is not deleted
+// and reaches the same mailbox as email under another spelling (see
+// identifier.EmailMailboxKey), or gorm.ErrRecordNotFound. The LIKE pattern
+// keeps the key's characters in order with anything between them, which
+// covers inserted Gmail dots and "+tag" subaddresses; its literal first
+// character keeps the lookup on the (auth_type, auth_identifier) index.
+func (m *UserRepo) FindEmailAlias(ctx context.Context, email string) (*user.AuthMethods, error) {
+	canonical := identifier2.CanonicalEmail(email)
+	key := identifier2.EmailMailboxKey(canonical)
+	at := strings.LastIndex(key, "@")
+	if at <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	local, domain := key[:at], key[at+1:]
+	domains := []string{domain}
+	if domain == "gmail.com" {
+		domains = append(domains, "googlemail.com")
+	}
+	var candidates []*user.AuthMethods
+	err := m.QueryNoCacheCtx(ctx, &candidates, func(conn *gorm.DB, v interface{}) error {
+		column := authMethodsColumn(conn, "auth_identifier")
+		conditions := make([]string, 0, len(domains))
+		args := make([]interface{}, 0, len(domains))
+		for _, d := range domains {
+			conditions = append(conditions, column+" LIKE ?"+orm.LikeEscapeClause())
+			args = append(args, emailAliasPattern(local, d))
+		}
+		return joinUndeletedUsers(conn.Model(&user.AuthMethods{})).
+			Where(authMethodsColumn(conn, "auth_type")+" = ?", identifier2.Email).
+			Where("("+strings.Join(conditions, " OR ")+")", args...).
+			Find(v).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		if candidate.AuthIdentifier != canonical && identifier2.EmailMailboxKey(candidate.AuthIdentifier) == key {
+			return candidate, nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+// emailAliasPattern matches the addresses whose mailbox key has the given
+// local part at domain: its characters in order, anything between and after.
+func emailAliasPattern(local, domain string) string {
+	var pattern strings.Builder
+	for _, r := range local {
+		pattern.WriteString(orm.LikeEscape(string(r)))
+		pattern.WriteByte('%')
+	}
+	pattern.WriteString("@" + orm.LikeEscape(domain))
+	return pattern.String()
+}
+
 func (m *UserRepo) FindUserAuthMethodByOpenID(ctx context.Context, method, openID string) (*user.AuthMethods, error) {
 	var data user.AuthMethods
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
@@ -748,6 +810,7 @@ func (m *UserRepo) UpsertUserAuthMethod(ctx context.Context, data *user.AuthMeth
 		return err
 	}
 	current.AuthIdentifier = data.AuthIdentifier
+	current.Verified = data.Verified
 	return m.UpdateUserAuthMethods(ctx, current)
 }
 

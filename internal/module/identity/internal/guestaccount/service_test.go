@@ -48,11 +48,17 @@ func (r guestUsers) Insert(_ context.Context, u *user.User, _ ...*gorm.DB) error
 	r.s.account = &copy
 	return nil
 }
-func (r guestUsers) Update(_ context.Context, u *user.User, _ ...*gorm.DB) error {
+func (r guestUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]interface{}, _ ...*gorm.DB) error {
 	if r.s.fail == "user" {
 		return errGuestWrite
 	}
-	copy := *u
+	copy := *r.s.account
+	if code, ok := columns["refer_code"].(string); ok {
+		copy.ReferCode = code
+	}
+	if referer, ok := columns["referer_id"].(int64); ok {
+		copy.RefererId = referer
+	}
 	r.s.account = &copy
 	return nil
 }
@@ -178,5 +184,19 @@ func TestGuestAccountCorruptMarkerDoesNotCreateAccount(t *testing.T) {
 	}
 	if store.transactions != 0 || store.account != nil {
 		t.Fatal("corrupt marker caused account creation")
+	}
+}
+
+// A guest names an identifier nobody verified; a provider id there would
+// pre-claim someone else's OAuth sign-in, so only email and mobile pass.
+func TestGuestAccountRejectsProviderIdentities(t *testing.T) {
+	for _, authType := range []string{"github", "telegram", "google", "apple", "device"} {
+		store := &guestStore{markers: map[string]string{}}
+		_, err := New(store).EnsureGuestAccount(context.Background(), Command{
+			OrderNo: "order-" + authType, AuthType: authType, Identifier: "583231", PasswordHash: password.EncodePassWord("guest-password"),
+		})
+		if err == nil || store.account != nil {
+			t.Fatalf("guest account created for auth type %q", authType)
+		}
 	}
 }

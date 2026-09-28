@@ -17,6 +17,7 @@ import (
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 // SubscriptionReader is the support module's port onto the subscription
@@ -129,8 +130,14 @@ func (s *Service) List(ctx context.Context, req *dto.GetDocumentListRequest) (*d
 	return resp, nil
 }
 
+// QueryDetail serves the user-facing detail. A hidden document answers
+// exactly like a missing one, so the endpoint cannot be used to read or probe
+// unpublished documents; the admin detail (GetDetail) still returns them.
 func (s *Service) QueryDetail(ctx context.Context, req *dto.QueryDocumentDetailRequest) (*dto.Document, error) {
 	data, err := s.repo.FindOne(ctx, req.Id)
+	if err == nil && (data.Show == nil || !*data.Show) {
+		err = gorm.ErrRecordNotFound
+	}
 	if err != nil {
 		logger.WithContext(ctx).Errorw("[QueryDocumentDetailLogic] FindOne error", logger.Field("id", req.Id), logger.Field("error", err.Error()))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOne error: %s", err.Error())

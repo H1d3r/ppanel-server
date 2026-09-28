@@ -121,11 +121,37 @@ func ensureCouponEnabled(couponInfo *coupon.Coupon) error {
 	return nil
 }
 
+// ensureCouponUserLimit re-counts the user's uses of a coupon inside the
+// order transaction. The count before the transaction is only a fast path:
+// concurrent orders all pass it. Callers hold the user's wallet row lock,
+// which serializes the user's order creation, and call this before any other
+// plain read in the transaction, so the count sees every order committed by a
+// request that held the lock first (MySQL REPEATABLE READ fixes the snapshot
+// at the first consistent read).
+func ensureCouponUserLimit(ctx context.Context, orders repository.OrderRepo, userID int64, code string, limit int64) error {
+	if code == "" || limit <= 0 {
+		return nil
+	}
+	count, err := orders.CountUserCouponUsage(ctx, userID, code)
+	if err != nil {
+		return err
+	}
+	if count >= limit {
+		return errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon limit exceeded")
+	}
+	return nil
+}
+
 func ensurePaymentAvailable(paymentInfo *paymentEntity.Payment) error {
 	if paymentInfo == nil || paymentInfo.Enable == nil || !*paymentInfo.Enable || payment.ParsePlatform(paymentInfo.Platform) == payment.UNSUPPORTED {
 		return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method is unavailable")
 	}
 	return nil
+}
+
+// isBalancePayment reports whether the method is the internal wallet balance.
+func isBalancePayment(paymentInfo *paymentEntity.Payment) bool {
+	return paymentInfo != nil && payment.ParsePlatform(paymentInfo.Platform) == payment.Balance
 }
 
 func calculateCoupon(amount int64, couponInfo *coupon.Coupon) int64 {

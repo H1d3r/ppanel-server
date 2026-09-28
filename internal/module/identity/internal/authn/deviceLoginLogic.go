@@ -188,7 +188,7 @@ func (l *DeviceLoginLogic) registerUserAndDevice(req *dto.DeviceLoginRequest) (*
 
 		// Update refer code
 		userInfo.ReferCode = user.GenerateInviteCode(userInfo.Id)
-		if err := store.User().Update(l.ctx, userInfo); err != nil {
+		if err := store.User().UpdateColumns(l.ctx, userInfo.Id, map[string]interface{}{"refer_code": userInfo.ReferCode}); err != nil {
 			l.Errorw("failed to update refer code",
 				logger.Field("user_id", userInfo.Id),
 				logger.Field("error", err.Error()),

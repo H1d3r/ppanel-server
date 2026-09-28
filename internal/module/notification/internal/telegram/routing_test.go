@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -239,6 +240,7 @@ type routingHarness struct {
 func newRoutingHarness() *routingHarness {
 	adminFlag := true
 	notAdmin := false
+	enabled := true
 	h := &routingHarness{
 		admin:     &fakeAdminHandler{},
 		messenger: &sinkMessenger{},
@@ -257,8 +259,8 @@ func newRoutingHarness() *routingHarness {
 			},
 		},
 		users: &fakeTelegramAdminUsers{users: map[int64]*user.User{
-			9: {Id: 9, IsAdmin: &adminFlag},
-			7: {Id: 7, IsAdmin: &notAdmin},
+			9: {Id: 9, IsAdmin: &adminFlag, Enable: &enabled},
+			7: {Id: 7, IsAdmin: &notAdmin, Enable: &enabled},
 		}},
 	}
 	h.logic = NewTelegramLogic(context.Background(), TelegramLogicDependencies{
@@ -531,12 +533,7 @@ func TestChatterInNotifyTopicIsIgnored(t *testing.T) {
 func TestClosingTicketTopicClosesTicket(t *testing.T) {
 	h := newRoutingHarness()
 	h.seedTopic(telegramtopic.KindTicket, 321, 12, telegramtopic.StatusActive)
-	closeMsg := &models.Message{
-		Chat:             models.Chat{ID: testGroupID, Type: models.ChatTypeSupergroup},
-		MessageThreadID:  12,
-		ForumTopicClosed: &models.ForumTopicClosed{},
-	}
-	h.dispatch(closeMsg)
+	h.dispatch(topicClosedBy(500, 12)) // 500 is the bound administrator
 
 	if len(h.tickets.statuses) != 1 || h.tickets.statuses[0] != (ticketStatusChange{id: 321, status: ticket.Closed}) {
 		t.Fatalf("statuses = %+v, want ticket 321 closed", h.tickets.statuses)
@@ -544,6 +541,112 @@ func TestClosingTicketTopicClosesTicket(t *testing.T) {
 	mapped, err := h.topics.FindByThread(context.Background(), testGroupID, 12)
 	if err != nil || mapped.Status != telegramtopic.StatusClosed {
 		t.Fatalf("mapping = %+v (err %v), want closed", mapped, err)
+	}
+}
+
+func topicClosedBy(sender int64, thread int) *models.Message {
+	return &models.Message{
+		Chat:             models.Chat{ID: testGroupID, Type: models.ChatTypeSupergroup},
+		From:             &models.User{ID: sender},
+		MessageThreadID:  thread,
+		ForumTopicClosed: &models.ForumTopicClosed{},
+	}
+}
+
+func topicReopenedBy(sender int64, thread int) *models.Message {
+	return &models.Message{
+		Chat:               models.Chat{ID: testGroupID, Type: models.ChatTypeSupergroup},
+		From:               &models.User{ID: sender},
+		MessageThreadID:    thread,
+		ForumTopicReopened: &models.ForumTopicReopened{},
+	}
+}
+
+// Any member with the manage-topics right can close or reopen a topic in
+// Telegram; only a panel administrator's action may change the ticket. The
+// mapping still follows the topic's real state, and the refusal is spoken.
+func TestNonAdminTopicLifecycleDoesNotChangeTicket(t *testing.T) {
+	for name, msg := range map[string]*models.Message{
+		"bound non-admin closes":  topicClosedBy(1001, 12),
+		"unbound member closes":   topicClosedBy(666, 12),
+		"bound non-admin reopens": topicReopenedBy(1001, 12),
+		"sender unknown closes": {
+			Chat:             models.Chat{ID: testGroupID, Type: models.ChatTypeSupergroup},
+			MessageThreadID:  12,
+			ForumTopicClosed: &models.ForumTopicClosed{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRoutingHarness()
+			h.seedTopic(telegramtopic.KindTicket, 321, 12, telegramtopic.StatusActive)
+			h.dispatch(msg)
+
+			if len(h.tickets.statuses) != 0 {
+				t.Fatalf("statuses = %+v, want the ticket untouched", h.tickets.statuses)
+			}
+			if len(h.messenger.sent) != 1 || !strings.Contains(h.messenger.sent[0].message, "工单状态未同步") || h.messenger.sent[0].threadID != 12 {
+				t.Fatalf("sent = %+v, want a spoken refusal in the topic", h.messenger.sent)
+			}
+			wantStatus := uint8(telegramtopic.StatusClosed)
+			if msg.ForumTopicReopened != nil {
+				wantStatus = telegramtopic.StatusActive
+			}
+			if mapped, err := h.topics.FindByThread(context.Background(), testGroupID, 12); err != nil || mapped.Status != wantStatus {
+				t.Fatalf("mapping = %+v (err %v), want status %d mirroring Telegram", mapped, err, wantStatus)
+			}
+		})
+	}
+}
+
+// FindOne is unscoped, so a deleted or disabled administrator still comes
+// back from the lookup; neither may act through the group any more.
+func TestInactiveAdminLosesGroupAuthority(t *testing.T) {
+	for name, deactivate := range map[string]func(*user.User){
+		"deleted":  func(u *user.User) { u.DeletedAt = gorm.DeletedAt{Time: time.Now(), Valid: true} },
+		"disabled": func(u *user.User) { u.Enable = new(bool) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRoutingHarness()
+			deactivate(h.users.users[9])
+			h.seedTopic(telegramtopic.KindSupport, 7, 11, telegramtopic.StatusActive)
+			h.seedTopic(telegramtopic.KindTicket, 321, 12, telegramtopic.StatusActive)
+
+			h.dispatch(groupMessage(500, 11, "support reply"))
+			h.dispatch(groupMessage(500, 12, "ticket reply"))
+			h.dispatch(topicClosedBy(500, 12))
+
+			if len(h.client.copies) != 0 || len(h.tickets.follows) != 0 || len(h.tickets.statuses) != 0 {
+				t.Fatalf("copies = %+v, follows = %+v, statuses = %+v, want no effect", h.client.copies, h.tickets.follows, h.tickets.statuses)
+			}
+			if len(h.messenger.sent) != 3 {
+				t.Fatalf("sent = %+v, want one spoken refusal per action", h.messenger.sent)
+			}
+			for _, sent := range h.messenger.sent {
+				if !strings.Contains(sent.message, "不是管理员") {
+					t.Fatalf("sent = %+v, want the non-admin refusal", h.messenger.sent)
+				}
+			}
+		})
+	}
+}
+
+// Closing a live-chat topic tells the customer the conversation ended, so
+// only an administrator's close may send that notice.
+func TestClosingSupportTopicNotifiesCustomerOnlyForAdmins(t *testing.T) {
+	h := newRoutingHarness()
+	h.seedTopic(telegramtopic.KindSupport, 7, 11, telegramtopic.StatusActive)
+	h.dispatch(topicClosedBy(1001, 11)) // bound non-admin
+	for _, sent := range h.messenger.sent {
+		if sent.chatID == 1001 {
+			t.Fatalf("sent = %+v, a non-admin's close reached the customer", h.messenger.sent)
+		}
+	}
+
+	h = newRoutingHarness()
+	h.seedTopic(telegramtopic.KindSupport, 7, 11, telegramtopic.StatusActive)
+	h.dispatch(topicClosedBy(500, 11)) // administrator
+	if len(h.messenger.sent) != 1 || h.messenger.sent[0].chatID != 1001 || !strings.Contains(h.messenger.sent[0].message, "会话已结束") {
+		t.Fatalf("sent = %+v, want the end-of-conversation notice to the customer", h.messenger.sent)
 	}
 }
 

@@ -35,11 +35,18 @@ func (l *UpdateUserNotifyLogic) UpdateUserNotify(req *dto.UpdateUserNotifyReques
 	if u.Id == 0 {
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "user not login")
 	}
-	u.EnableLoginNotify = req.EnableLoginNotify
-	u.EnableBalanceNotify = req.EnableBalanceNotify
-	u.EnableSubscribeNotify = req.EnableSubscribeNotify
-	u.EnableTradeNotify = req.EnableTradeNotify
-	if err := l.deps.Users.Update(l.ctx, u); err != nil {
+	columns := map[string]interface{}{}
+	for column, value := range map[string]*bool{
+		"enable_login_notify":     req.EnableLoginNotify,
+		"enable_balance_notify":   req.EnableBalanceNotify,
+		"enable_subscribe_notify": req.EnableSubscribeNotify,
+		"enable_trade_notify":     req.EnableTradeNotify,
+	} {
+		if value != nil {
+			columns[column] = *value
+		}
+	}
+	if err := l.deps.Users.UpdateColumns(l.ctx, u.Id, columns); err != nil {
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "update user notify error: %v", err.Error())
 	}
 	return nil

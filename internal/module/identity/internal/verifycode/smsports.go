@@ -7,6 +7,9 @@ type SmsCodeConfig struct {
 	VerifyCodeInterval int64
 	VerifyCodeLimit    int64
 	VerifyCodeExpire   int64
+	// WhitelistEnabled restricts delivery to the Whitelist area codes.
+	WhitelistEnabled bool
+	Whitelist        []string
 }
 
 // SendSmsCodeDependencies explicitly declares the collaborators of SMS code

@@ -86,6 +86,14 @@ func getServers() *lifecycle.Group {
 		}
 	}
 	conf.MustLoad(startConfigPath, &c)
+	// Sessions, order event tickets and guest-checkout HMACs are all keyed by
+	// this secret; an empty one lets anyone forge them.
+	if c.JwtAuth.AccessSecret == "" {
+		log.Fatalf("JwtAuth.AccessSecret is empty in %s; set a long random secret", startConfigPath)
+	}
+	if len(c.JwtAuth.AccessSecret) < 16 {
+		log.Printf("warning: JwtAuth.AccessSecret in %s is shorter than 16 characters and can be guessed; replace it with a long random secret", startConfigPath)
+	}
 	// Initialize application timezone
 	if err := timeutil.LoadLocation(c.AppLocation); err != nil {
 		logger.Errorf("load app timezone %q failed: %v, falling back to Local", c.AppLocation, err)
@@ -241,8 +249,12 @@ func initConfig(c *config.Config) bool {
 		if err != nil {
 			panic(err.Error())
 		}
-		// write to file
-		if err := os.WriteFile(startConfigPath, fileData, 0644); err != nil {
+		// write to file; the file holds the JWT secret and database
+		// credentials, and WriteFile keeps the mode of an existing file
+		if err := os.WriteFile(startConfigPath, fileData, 0600); err != nil {
+			panic(err.Error())
+		}
+		if err := os.Chmod(startConfigPath, 0600); err != nil {
 			panic(err.Error())
 		}
 	}

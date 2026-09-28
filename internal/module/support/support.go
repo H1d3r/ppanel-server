@@ -18,6 +18,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/support/internal/repo"
 	"github.com/perfect-panel/server/internal/module/support/internal/ticket"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Service is the only surface other code may depend on; the implementation
@@ -129,6 +130,8 @@ type Deps struct {
 	// TicketNotify mirrors ticket lifecycle into the Telegram admin group;
 	// nil disables the mirror. Best-effort by contract.
 	TicketNotify ticket.Notifier
+	// Redis backs the per-user ticket creation limit; nil disables it.
+	Redis *redis.Client
 }
 
 // NewRepoBuilder exports the module-owned repository implementations for
@@ -150,7 +153,7 @@ func New(deps Deps) Service {
 		announcements: announcement.NewService(deps.Announcements),
 		ads:           ads.NewService(deps.Ads),
 		documents:     document.NewService(deps.Documents, deps.Subscriptions),
-		tickets:       ticket.NewService(deps.Tickets, deps.TicketNotify),
+		tickets:       ticket.NewService(deps.Tickets, deps.TicketNotify, ticket.NewCreationLimiter(deps.Redis)),
 		marketing:     marketing.NewService(deps.Tasks, deps.Recipients, deps.QuotaTargets, deps.Queue, deps.EmailStopper),
 	}
 }

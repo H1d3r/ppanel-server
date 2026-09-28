@@ -9,6 +9,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/auth/devicesession"
 	token2 "github.com/perfect-panel/server/internal/auth/token"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -36,6 +37,18 @@ func bindLoginDevice(binder DeviceBinder, identifier, ip, ua string, userID int6
 	return device, nil
 }
 
+// ensureAccountActive rejects an account that can no longer sign in, so a
+// code sent to an identifier it still holds cannot bring it back.
+func ensureAccountActive(userInfo *user.User) error {
+	if userInfo.DeletedAt.Valid {
+		return errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user deleted")
+	}
+	if userInfo.Enable == nil || !*userInfo.Enable {
+		return errors.Wrapf(xerr.NewErrCode(xerr.UserDisabled), "user account is disabled")
+	}
+	return nil
+}
+
 func issueLoginSession(ctx context.Context, client *redis.Client, secret string, lifetime, userID int64, loginType string, device *user.Device) (*dto.LoginResponse, error) {
 	if value, ok := ctx.Value(requestctx.LoginType).(string); ok {
 		loginType = value
@@ -47,7 +60,11 @@ func issueLoginSession(ctx context.Context, client *redis.Client, secret string,
 		return nil, errors.New("session store unavailable")
 	}
 	sessionID := uuid.NewV7().String()
-	options := []token2.Option{token2.WithOption("UserId", userID), token2.WithOption("SessionId", sessionID), token2.WithOption("LoginType", loginType)}
+	epoch, err := usersession.AcquireEpoch(ctx, client, userID)
+	if err != nil {
+		return nil, err
+	}
+	options := []token2.Option{token2.WithOption("UserId", userID), token2.WithOption("SessionId", sessionID), token2.WithOption("LoginType", loginType), token2.WithOption(usersession.EpochClaim, epoch)}
 	if device != nil {
 		if device.Id <= 0 || device.UserId != userID || !device.Enabled {
 			return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "device session binding invalid")

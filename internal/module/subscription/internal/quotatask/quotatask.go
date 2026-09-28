@@ -67,6 +67,10 @@ type ErrorInfo struct {
 // task data); the queue shell maps it to its skip-retry sentinel.
 var ErrUnretryable = errors.New("quota task is not retryable")
 
+// errQuotaIneligible marks a subscription the grant skips; the run reports
+// it as a soft failure instead of stopping.
+var errQuotaIneligible = errors.New("deducted subscription is not eligible for quota grants")
+
 func newQuotaTaskLogic(deps Deps) *QuotaTaskLogic {
 	return &QuotaTaskLogic{deps: deps}
 }
@@ -233,17 +237,18 @@ func (l *QuotaTaskLogic) processSubscribes(ctx context.Context, subscribes []*us
 			})
 			continue
 		}
-		if sub.Status == usersub.SubscribeStatusDeducted {
-			errs = append(errs, ErrorInfo{UserSubscribeId: sub.Id, Error: "deducted subscription is not eligible for quota grants"})
-			if err := l.advanceTaskProgress(ctx, taskInfo, uint64(index+1)); err != nil {
-				return err
-			}
-			continue
+		err := errQuotaIneligible
+		if sub.Status != usersub.SubscribeStatusDeducted {
+			err = l.grantSubscription(ctx, taskInfo.Id, sub, content, now)
 		}
-		if err := l.grantSubscription(ctx, taskInfo.Id, sub, content, now); err != nil {
+		switch {
+		case errors.Is(err, errQuotaIneligible):
+			// Deducted when the task read its targets, or by the time the
+			// grant locked the row: neither stage applies.
+			errs = append(errs, ErrorInfo{UserSubscribeId: sub.Id, Error: err.Error()})
+		case err != nil:
 			return err
-		}
-		if content.GiftValue != 0 {
+		case content.GiftValue != 0:
 			if err := l.grantGift(ctx, taskInfo.Id, sub, content, now); err != nil {
 				return err
 			}
@@ -266,9 +271,15 @@ func (l *QuotaTaskLogic) advanceTaskProgress(ctx context.Context, taskInfo *task
 
 // grantSubscription applies the time extension and traffic reset in a
 // subscription-domain transaction, exactly once per (task, subscription).
+// The task read its targets when it started; traffic accounting, credential
+// resets and status changes may have landed since, so the row is re-read
+// under lock and only the columns the grant changes are written back. On
+// success sub is refreshed to the stored row.
 func (l *QuotaTaskLogic) grantSubscription(ctx context.Context, taskID int64, sub *usersub.Subscribe, content task.QuotaContent, now time.Time) error {
-	return l.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
-		mark, err := store.Inbox().Find(ctx, inboxQuotaGrant, inboxKey(taskID, sub.Id))
+	key := inboxKey(taskID, sub.Id)
+	var granted *usersub.Subscribe
+	err := l.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+		mark, err := store.Inbox().Find(ctx, inboxQuotaGrant, key)
 		if err != nil {
 			return err
 		}
@@ -276,62 +287,82 @@ func (l *QuotaTaskLogic) grantSubscription(ctx context.Context, taskID int64, su
 			return nil
 		}
 
-		if sub.EntitlementSource != "" {
-			return store.Inbox().Insert(ctx, inboxQuotaGrant, inboxKey(taskID, sub.Id), "skipped: provider-managed subscription")
+		current, err := store.UserSubscription().FindOneSubscribeForUpdate(ctx, sub.Id)
+		if err != nil {
+			return fmt.Errorf("lock subscription %d: %w", sub.Id, err)
 		}
-		updated := false
-
-		// 处理有限期延长，同时保留 NoLimit 的 epoch 哨兵值。
-		if content.Days != 0 {
-			if sub.ExpireTime.Unix() == 0 {
-				// Unix epoch is the NoLimit sentinel. Adding finite days must
-				// never downgrade an unlimited subscription to a finite term.
-				if sub.Status != usersub.SubscribeStatusActive {
-					sub.Status = usersub.SubscribeStatusActive
-					sub.FinishedAt = nil
-					updated = true
-				}
-			} else if sub.ExpireTime.Before(now) {
-				// 已过期，从现在开始计算
-				sub.ExpireTime = now.AddDate(0, 0, int(content.Days))
-				updated = true
-			} else {
-				// 在原有过期时间基础上延长
-				sub.ExpireTime = sub.ExpireTime.AddDate(0, 0, int(content.Days))
-				updated = true
-			}
-			// 如果订阅延长到未来时间，设置为激活状态
-			if sub.ExpireTime.Unix() != 0 && sub.ExpireTime.After(now) && sub.Status != usersub.SubscribeStatusActive {
-				sub.Status = usersub.SubscribeStatusActive
-				sub.FinishedAt = nil
-			}
+		if current.EntitlementSource != "" {
+			return store.Inbox().Insert(ctx, inboxQuotaGrant, key, "skipped: provider-managed subscription")
+		}
+		if current.Status == usersub.SubscribeStatusDeducted {
+			return errQuotaIneligible
 		}
 
-		// 处理流量重置
+		columns := applyQuotaGrant(current, content, now)
 		if content.ResetTraffic {
-			sub.Download = 0
-			sub.Upload = 0
-			if sub.Status == usersub.SubscribeStatusFinished {
-				sub.Status = usersub.SubscribeStatusActive
-				sub.FinishedAt = nil
-			}
-			updated = true
-			if err := l.createResetTrafficLog(ctx, store.Log(), sub.Id, sub.UserId, now); err != nil {
-				return fmt.Errorf("create reset traffic log for subscription %d: %w", sub.Id, err)
+			if err := l.createResetTrafficLog(ctx, store.Log(), current.Id, current.UserId, now); err != nil {
+				return fmt.Errorf("create reset traffic log for subscription %d: %w", current.Id, err)
 			}
 		}
-
-		// 只有在有更新时才保存订阅信息
-		if updated {
-			if err := store.UserSubscription().UpdateSubscribe(ctx, sub); err != nil {
-				return fmt.Errorf("update subscription %d: %w", sub.Id, err)
-			}
+		if err := store.UserSubscription().UpdateSubscribeColumns(ctx, current, columns...); err != nil {
+			return fmt.Errorf("update subscription %d: %w", current.Id, err)
 		}
+		granted = current
 
 		// The marker commits with the mutation (or records a reported soft
 		// failure), so a retried run never re-applies this stage.
-		return store.Inbox().Insert(ctx, inboxQuotaGrant, inboxKey(taskID, sub.Id), "")
+		return store.Inbox().Insert(ctx, inboxQuotaGrant, key, "")
 	})
+	if err == nil && granted != nil {
+		*sub = *granted
+	}
+	return err
+}
+
+// applyQuotaGrant applies the grant to the locked row and names the columns
+// it changed. An admin hold (Stopped) or a refund (Deducted) is never lifted:
+// the term is still extended and usage still reset, but the status stays.
+func applyQuotaGrant(sub *usersub.Subscribe, content task.QuotaContent, now time.Time) []string {
+	var columns []string
+	activate := func() {
+		switch sub.Status {
+		case usersub.SubscribeStatusActive, usersub.SubscribeStatusStopped, usersub.SubscribeStatusDeducted:
+			return
+		}
+		sub.Status = usersub.SubscribeStatusActive
+		sub.FinishedAt = nil
+		columns = append(columns, "status", "finished_at")
+	}
+
+	if content.Days != 0 {
+		switch {
+		case sub.ExpireTime.Unix() == 0:
+			// Unix epoch is the NoLimit sentinel. Adding finite days must
+			// never downgrade an unlimited subscription to a finite term.
+			activate()
+		case sub.ExpireTime.Before(now):
+			// Already expired: the extension starts now.
+			sub.ExpireTime = now.AddDate(0, 0, int(content.Days))
+			columns = append(columns, "expire_time")
+		default:
+			sub.ExpireTime = sub.ExpireTime.AddDate(0, 0, int(content.Days))
+			columns = append(columns, "expire_time")
+		}
+		// A term extended into the future reactivates the subscription.
+		if sub.ExpireTime.Unix() != 0 && sub.ExpireTime.After(now) {
+			activate()
+		}
+	}
+
+	if content.ResetTraffic {
+		sub.Download = 0
+		sub.Upload = 0
+		columns = append(columns, "download", "upload")
+		if sub.Status == usersub.SubscribeStatusFinished {
+			activate()
+		}
+	}
+	return columns
 }
 
 // grantGift credits the gift money in a billing-domain transaction, exactly

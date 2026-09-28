@@ -38,7 +38,16 @@ const (
 	trafficFieldSeparator    = "|"
 	defaultTrafficBatchSize  = 1000
 	defaultTrafficMultiplier = 1
+	droppedSIDLogLimit       = 20
 )
+
+// MaxReportedTraffic bounds the bytes (upload plus download) one traffic
+// report may attribute to one subscription. No node carries that much for a
+// single user between two reports (10 TiB is about 15 minutes at a sustained
+// 100 Gbit/s), so only a corrupt or forged report reaches it; the bound also
+// keeps the Redis HINCRBY and SQL `upload + ?` increments far from int64
+// overflow.
+const MaxReportedTraffic int64 = 10 << 40
 
 type UserTraffic struct {
 	SID      int64
@@ -83,6 +92,10 @@ type Deps struct {
 	// Multiplier returns the node traffic multiplier in effect at the given
 	// time; nil means no multiplier is configured.
 	Multiplier func(at time.Time) float32
+	// ServedSubscriptions resolves the user_subscribe ids the server serves
+	// over the protocol; report entries naming any other subscription are
+	// dropped. nil skips the check. It is called at most once per report.
+	ServedSubscriptions func(ctx context.Context, serverID int64, protocol string) (map[int64]struct{}, error)
 }
 
 func New(deps Deps) *Aggregator {
@@ -149,23 +162,81 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 		multiplier = a.deps.Multiplier(now)
 	}
 
+	threshold := int64(0)
+	if a.deps.TrafficReportThreshold != nil {
+		threshold = a.deps.TrafficReportThreshold()
+	}
+	// Entries are checked one by one: an invalid or foreign entry is dropped
+	// and logged without costing the rest of the report.
+	var (
+		served            map[int64]struct{}
+		invalid, unserved droppedEntries
+	)
+	reported := make(map[int64]int64, len(logs))
 	trafficOps := 0
 	for _, item := range logs {
 		if item.SID <= 0 {
 			continue
 		}
-		threshold := int64(0)
-		if a.deps.TrafficReportThreshold != nil {
-			threshold = a.deps.TrafficReportThreshold()
-		}
-		if item.Download+item.Upload <= threshold {
+		total, ok := reportedTotal(item)
+		if !ok {
+			invalid.add(item.SID)
 			continue
 		}
+		if total <= threshold {
+			continue
+		}
+		if a.deps.ServedSubscriptions != nil {
+			if served == nil {
+				if served, err = a.deps.ServedSubscriptions(ctx, serverInfo.Id, protocol); err != nil {
+					// Nothing can be attributed without the scope; the
+					// heartbeat is still recorded.
+					if _, execErr := pipe.Exec(ctx); execErr != nil {
+						logger.WithContext(ctx).Error("[TrafficAggregator] Record server report failed",
+							logger.Field("server_id", serverInfo.Id),
+							logger.Field("error", execErr.Error()),
+						)
+					}
+					return fmt.Errorf("resolve served subscriptions: %w", err)
+				}
+				if served == nil {
+					served = map[int64]struct{}{}
+				}
+			}
+			if _, ok := served[item.SID]; !ok {
+				unserved.add(item.SID)
+				continue
+			}
+		}
+		// Repeated entries for one subscription share the per-report bound.
+		if reported[item.SID] > MaxReportedTraffic-total {
+			invalid.add(item.SID)
+			continue
+		}
+		reported[item.SID] += total
 		download := int64(float32(item.Download) * ratio * multiplier)
 		upload := int64(float32(item.Upload) * ratio * multiplier)
 		pipe.HIncrBy(ctx, bucketKey, trafficField(serverInfo.Id, item.SID, trafficFieldDownload), download)
 		pipe.HIncrBy(ctx, bucketKey, trafficField(serverInfo.Id, item.SID, trafficFieldUpload), upload)
 		trafficOps++
+	}
+	if invalid.count > 0 {
+		logger.WithContext(ctx).Error("[TrafficAggregator] Dropped invalid traffic entries",
+			logger.Field("server_id", serverInfo.Id),
+			logger.Field("protocol", protocol),
+			logger.Field("count", invalid.count),
+			logger.Field("sids", invalid.sids),
+		)
+	}
+	if unserved.count > 0 {
+		// A few are expected around a user-list refresh (a subscription that
+		// just expired or moved plans); many point at a misbehaving node.
+		logger.WithContext(ctx).Info("[TrafficAggregator] Dropped traffic for subscriptions the server does not serve",
+			logger.Field("server_id", serverInfo.Id),
+			logger.Field("protocol", protocol),
+			logger.Field("count", unserved.count),
+			logger.Field("sids", unserved.sids),
+		)
 	}
 
 	if trafficOps > 0 {
@@ -518,6 +589,29 @@ func (a *Aggregator) bucketProcessed(ctx context.Context, consumer, suffix strin
 		return false, err
 	}
 	return mark != nil, nil
+}
+
+// reportedTotal validates one reported entry and returns its upload plus
+// download: both must be non-negative and within MaxReportedTraffic.
+func reportedTotal(item UserTraffic) (int64, bool) {
+	if item.Upload < 0 || item.Download < 0 || item.Upload > MaxReportedTraffic || item.Download > MaxReportedTraffic-item.Upload {
+		return 0, false
+	}
+	return item.Upload + item.Download, true
+}
+
+// droppedEntries counts the report entries a check rejected, keeping the
+// first few subscription ids for the log line.
+type droppedEntries struct {
+	count int
+	sids  []int64
+}
+
+func (d *droppedEntries) add(sid int64) {
+	d.count++
+	if len(d.sids) < droppedSIDLogLimit {
+		d.sids = append(d.sids, sid)
+	}
 }
 
 func protocolRatio(serverInfo *node.Server, protocol string) (float32, bool, error) {

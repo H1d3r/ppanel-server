@@ -52,10 +52,12 @@ func (l *QueryUserCommissionLogLogic) QueryUserCommissionLog(req *dto.QueryUserC
 			continue
 		}
 		list = append(list, dto.BillingCommissionLogSnapshot{
-			UserId:           datum.ObjectID,
-			Type:             content.Type,
-			Amount:           content.Amount,
-			OrderNo:          content.OrderNo,
+			UserId: datum.ObjectID,
+			Type:   content.Type,
+			Amount: content.Amount,
+			// OrderNo is left out: it belongs to the referee's order, and
+			// subscription tokens issued before random tokens were derived
+			// from it.
 			Timestamp:        content.Timestamp,
 			ClientIP:         content.ClientIP,
 			UserAgent:        content.UserAgent,

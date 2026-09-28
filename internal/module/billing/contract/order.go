@@ -94,8 +94,10 @@ type OrderDetail struct {
 	UpdatedAt      int64                    `json:"updated_at"`
 }
 
+// PortalPurchaseRequest creates a guest order. AuthType is email or mobile; a
+// mobile identifier includes its country calling code.
 type PortalPurchaseRequest struct {
-	AuthType       string `json:"auth_type" validate:"required"`
+	AuthType       string `json:"auth_type" validate:"required" enums:"email,mobile"`
 	Identifier     string `json:"identifier" validate:"required"`
 	Password       string `json:"password" validate:"required,min=8,max=128"`
 	Payment        int64  `json:"payment" validate:"required,gt=0"`

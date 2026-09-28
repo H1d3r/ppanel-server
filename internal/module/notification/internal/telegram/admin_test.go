@@ -74,10 +74,13 @@ func (r *fakeTelegramAdminUsers) FindOne(_ context.Context, id int64) (*user.Use
 	return &copy, nil
 }
 
-func (r *fakeTelegramAdminUsers) Update(_ context.Context, data *user.User, _ ...*gorm.DB) error {
-	copy := *data
+func (r *fakeTelegramAdminUsers) UpdateColumns(_ context.Context, id int64, columns map[string]interface{}, _ ...*gorm.DB) error {
+	copy := *r.users[id]
+	if enable, ok := columns["enable"].(bool); ok {
+		copy.Enable = &enable
+	}
 	r.updated = &copy
-	r.users[data.Id] = &copy
+	r.users[id] = &copy
 	return nil
 }
 
@@ -128,6 +131,49 @@ func TestTelegramAdminRejectsUnboundChat(t *testing.T) {
 	}
 }
 
+// Users.FindOne is unscoped: a soft-deleted or disabled administrator still
+// resolves through the Telegram binding and must be refused all the same.
+func TestTelegramAdminRejectsInactiveAdministrators(t *testing.T) {
+	yes, no := true, false
+	for name, account := range map[string]*user.User{
+		"deleted":      {Id: 1, IsAdmin: &yes, Enable: &yes, DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}},
+		"disabled":     {Id: 1, IsAdmin: &yes, Enable: &no},
+		"enable unset": {Id: 1, IsAdmin: &yes},
+		"not admin":    {Id: 1, IsAdmin: &no, Enable: &yes},
+	} {
+		t.Run(name, func(t *testing.T) {
+			messenger := &fakeTelegramMessenger{}
+			admin := NewTelegramAdmin(context.Background(), TelegramAdminDependencies{
+				Messenger: messenger,
+				Users:     &fakeTelegramAdminUsers{users: map[int64]*user.User{1: account}},
+				UserAuth:  &fakeTelegramAdminAuth{byChat: map[string]*user.AuthMethods{"42": {UserId: 1}}},
+			})
+
+			admin.Handle(telegramCommand(42, "/help"))
+
+			if len(messenger.messages) != 1 || !strings.Contains(messenger.messages[0].message, "没有管理权限") {
+				t.Fatalf("messages = %#v, want the permission refusal", messenger.messages)
+			}
+		})
+	}
+}
+
+func TestTelegramAdminAcceptsActiveAdministrator(t *testing.T) {
+	yes := true
+	messenger := &fakeTelegramMessenger{}
+	admin := NewTelegramAdmin(context.Background(), TelegramAdminDependencies{
+		Messenger: messenger,
+		Users:     &fakeTelegramAdminUsers{users: map[int64]*user.User{1: {Id: 1, IsAdmin: &yes, Enable: &yes}}},
+		UserAuth:  &fakeTelegramAdminAuth{byChat: map[string]*user.AuthMethods{"42": {UserId: 1}}},
+	})
+
+	admin.Handle(telegramCommand(42, "/help"))
+
+	if len(messenger.messages) != 1 || !strings.Contains(messenger.messages[0].message, "Admin Commands") {
+		t.Fatalf("messages = %#v, want the admin help", messenger.messages)
+	}
+}
+
 func TestTelegramAdminConfirmBanUsesOnlyInjectedPorts(t *testing.T) {
 	const (
 		chatID   = int64(42)
@@ -144,7 +190,7 @@ func TestTelegramAdminConfirmBanUsesOnlyInjectedPorts(t *testing.T) {
 	messenger := &fakeTelegramMessenger{}
 	actions := &fakeTelegramActions{values: map[string]string{tgActionPrefix + actionID: string(action)}}
 	users := &fakeTelegramAdminUsers{users: map[int64]*user.User{
-		adminID:  {Id: adminID, IsAdmin: &adminFlag},
+		adminID:  {Id: adminID, IsAdmin: &adminFlag, Enable: &adminFlag},
 		targetID: {Id: targetID, Enable: &targetEnabled},
 	}}
 	admin := NewTelegramAdmin(context.Background(), TelegramAdminDependencies{

@@ -20,6 +20,11 @@ RUN go mod download
 # Copy the rest of the application code
 COPY . .
 
+# Ship an empty configuration: a locally initialized etc/ppanel.yaml holds the
+# JWT secret and database credentials and must never be baked into the image
+# (.dockerignore keeps it out of the build context as well).
+RUN mkdir -p etc && : > etc/ppanel.yaml
+
 # Build the binary with version and build time
 RUN BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S") && \
     go build -ldflags="-s -w -X 'github.com/perfect-panel/server/internal/app/buildinfo.Version=${VERSION}' -X 'github.com/perfect-panel/server/internal/app/buildinfo.BuildTime=${BUILD_TIME}' -X 'github.com/perfect-panel/server/internal/app/buildinfo.Channel=${CHANNEL}'" -o /app/ppanel main.go

@@ -4,10 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/module/billing"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
 	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
+	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
+	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
 )
@@ -32,6 +36,14 @@ func (f *fakeOrderRepo) FindOneDetailsByOrderNo(_ context.Context, orderNo strin
 
 func (f *fakeOrderRepo) FindOne(_ context.Context, id int64) (*orderEntity.Order, error) {
 	if f.order == nil || f.order.Id != id {
+		return nil, gorm.ErrRecordNotFound
+	}
+	copy := *f.order
+	return &copy, nil
+}
+
+func (f *fakeOrderRepo) FindOneByOrderNo(_ context.Context, orderNo string) (*orderEntity.Order, error) {
+	if f.order == nil || f.order.OrderNo != orderNo {
 		return nil, gorm.ErrRecordNotFound
 	}
 	copy := *f.order
@@ -112,10 +124,71 @@ type billingStoreView struct {
 	repository.BillingStore
 	orders   *fakeOrderRepo
 	payments *fakePaymentRepo
+	coupons  *fakeReleaseCouponRepo
+	wallets  *fakeWalletRepo
+	logs     *fakeLogRepo
 }
 
 func (v billingStoreView) Order() repository.OrderRepo     { return v.orders }
 func (v billingStoreView) Payment() repository.PaymentRepo { return v.payments }
+func (v billingStoreView) Coupon() repository.CouponRepo   { return v.coupons }
+func (v billingStoreView) Wallet() repository.WalletRepo   { return v.wallets }
+func (v billingStoreView) Log() repository.LogRepo         { return v.logs }
+
+// fakeCloseStore serves the checkout close flow the admin close runs through.
+type fakeCloseStore struct {
+	billing.Store
+	view billingStoreView
+}
+
+func (s fakeCloseStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
+	return fn(s.view)
+}
+
+type fakeReleaseCouponRepo struct {
+	repository.CouponRepo
+	released []string
+}
+
+func (f *fakeReleaseCouponRepo) ReleaseUsage(_ context.Context, code string, _ ...*gorm.DB) error {
+	f.released = append(f.released, code)
+	return nil
+}
+
+type fakeWalletRepo struct {
+	repository.WalletRepo
+	wallet *walletEntity.Wallet
+}
+
+func (f *fakeWalletRepo) FindOneForUpdate(_ context.Context, userID int64) (*walletEntity.Wallet, error) {
+	if f.wallet == nil || f.wallet.UserId != userID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	copy := *f.wallet
+	return &copy, nil
+}
+
+func (f *fakeWalletRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
+	f.wallet.Balance, f.wallet.GiftAmount = data.Balance, data.GiftAmount
+	return nil
+}
+
+type fakeLogRepo struct {
+	repository.LogRepo
+}
+
+func (fakeLogRepo) Insert(context.Context, *logEntity.SystemLog) error { return nil }
+
+type fakeInventory struct {
+	restored []string
+}
+
+func (f *fakeInventory) Reserve(context.Context, string, int64) error { return nil }
+
+func (f *fakeInventory) Restore(_ context.Context, orderNo string, _ int64) error {
+	f.restored = append(f.restored, orderNo)
+	return nil
+}
 
 type fakeActivationQueue struct {
 	enqueued []string
@@ -140,6 +213,7 @@ func newBillingService(orders *fakeOrderRepo, payments *fakePaymentRepo) (billin
 		Orders:   orders,
 		Payments: payments,
 		Tx:       fakeBillingTx{orders: orders, payments: payments},
+		Store:    fakeCloseStore{view: billingStoreView{orders: orders, payments: payments}},
 		Queue:    fakes.queue,
 		Host:     "panel.example.com",
 	})
@@ -202,6 +276,54 @@ func TestUpdateOrderStatusCloseDoesNotEnqueue(t *testing.T) {
 	}
 	if len(fakes.queue.enqueued) != 0 {
 		t.Fatal("closing must not enqueue activation")
+	}
+}
+
+// An administrator's close runs the shared close flow. The bare status update
+// it replaced kept the coupon use, the gift deduction and the plan stock.
+func TestUpdateOrderStatusCloseReleasesReservations(t *testing.T) {
+	orders := &fakeOrderRepo{order: &orderEntity.Order{
+		Id: 1, OrderNo: "o-4", Status: 1, Type: 1, UserId: 7, SubscribeId: 9,
+		GiftAmount: 300, Coupon: "SPRING", CouponReserved: true,
+	}}
+	payments := &fakePaymentRepo{}
+	coupons := &fakeReleaseCouponRepo{}
+	wallets := &fakeWalletRepo{wallet: &walletEntity.Wallet{UserId: 7, GiftAmount: 100}}
+	inventory := &fakeInventory{}
+	svc := billing.New(billing.Deps{
+		Orders:   orders,
+		Payments: payments,
+		Tx:       fakeBillingTx{orders: orders, payments: payments},
+		Store: fakeCloseStore{view: billingStoreView{
+			orders: orders, payments: payments, coupons: coupons, wallets: wallets, logs: &fakeLogRepo{},
+		}},
+		Inventory: inventory,
+		Queue:     &fakeActivationQueue{},
+	})
+	// The administrator is not the order's owner.
+	ctx := context.WithValue(context.Background(), requestctx.CtxKeyUser, &userEntity.User{Id: 99})
+
+	if err := svc.UpdateOrderStatus(ctx, &dto.UpdateOrderStatusRequest{Id: 1, Status: 3}); err != nil {
+		t.Fatalf("UpdateOrderStatus: %v", err)
+	}
+	if orders.order.Status != 3 {
+		t.Fatalf("status = %d, want closed", orders.order.Status)
+	}
+	if len(coupons.released) != 1 || coupons.released[0] != "SPRING" {
+		t.Fatalf("released coupons = %v, want [SPRING]", coupons.released)
+	}
+	if wallets.wallet.GiftAmount != 400 {
+		t.Fatalf("gift amount = %d, want the 300 deduction refunded", wallets.wallet.GiftAmount)
+	}
+	if len(inventory.restored) != 1 || inventory.restored[0] != "o-4" {
+		t.Fatalf("restored inventory = %v, want [o-4]", inventory.restored)
+	}
+
+	if err := svc.UpdateOrderStatus(ctx, &dto.UpdateOrderStatusRequest{Id: 1, Status: 3}); err == nil {
+		t.Fatal("closing an order that is no longer pending must be rejected")
+	}
+	if len(coupons.released) != 1 {
+		t.Fatal("a repeated close must not release the coupon again")
 	}
 }
 

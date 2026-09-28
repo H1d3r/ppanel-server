@@ -222,12 +222,9 @@ func (l *SubscribeLogic) getUserSubscribe(token string) (*usersub.Subscribe, err
 	// 修复结束 (Fix end)
 	// =========================================================
 
-	//  Ignore expiration check
-	//if userSub.Status > 1 {
-	// l.Infow("[Generate Subscribe]subscribe is not available", logger.Field("status", int(userSub.Status)), logger.Field("token", token))
-	// return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "subscribe is not available")
-	//}
-
+	// No status gate here: every subscription renders, and getServers
+	// decides between real nodes and a notice placeholder (expired, out of
+	// traffic, deducted or stopped).
 	return userSub, nil
 }
 
@@ -257,7 +254,14 @@ func (l *SubscribeLogic) logSubscribeActivity(userSub *usersub.Subscribe) error 
 	return nil
 }
 
+// getServers returns the nodes the client config lists. Subscriptions that
+// may not use the service get notice placeholders instead of real nodes, so
+// the client shows why.
 func (l *SubscribeLogic) getServers(userSub *usersub.Subscribe, subDetails *subscribe.Subscribe) ([]*node.Node, error) {
+	if l.isSubscriptionUnavailable(userSub) {
+		return l.createNoticeServers("订阅不可用 / Subscribe Unavailable"), nil
+	}
+
 	if l.isSubscriptionExpired(userSub) {
 		return l.createNoticeServers("订阅已过期 / Subscribe Expired"), nil
 	}
@@ -285,6 +289,13 @@ func (l *SubscribeLogic) getServers(userSub *usersub.Subscribe, subDetails *subs
 	}
 	logger.Debugf("[Generate Subscribe]found servers: %v", len(nodes))
 	return nodes, nil
+}
+
+// isSubscriptionUnavailable reports a refunded (Deducted) subscription or one
+// an administrator stopped: neither may reach real nodes, whatever its expiry
+// and traffic say.
+func (l *SubscribeLogic) isSubscriptionUnavailable(userSub *usersub.Subscribe) bool {
+	return userSub.Status == usersub.SubscribeStatusDeducted || userSub.Status == usersub.SubscribeStatusStopped
 }
 
 func (l *SubscribeLogic) isSubscriptionExpired(userSub *usersub.Subscribe) bool {

@@ -41,6 +41,10 @@ func (l *ServerPushUserTrafficLogic) ServerPushUserTraffic(req *dto.ServerPushUs
 			return l.deps.Config().Node.TrafficReportThreshold
 		},
 		Multiplier: l.deps.Multiplier,
+		// A node may only bill the subscriptions its user list hands it.
+		ServedSubscriptions: func(ctx context.Context, serverID int64, protocol string) (map[int64]struct{}, error) {
+			return newGetServerUserListLogic(ctx, l.deps, RequestMeta{}).servedSubscriptionIDs(serverID, protocol)
+		},
 	}).AddReport(l.ctx, serverInfo, req.Protocol, dtoTrafficToAggregator(req.Traffic)); err != nil {
 		l.Errorw("[ServerPushUserTraffic] Aggregate traffic error", logger.Field("error", err.Error()))
 		return errors.Wrap(err, "aggregate traffic")

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
@@ -547,6 +548,97 @@ func TestCloseEPayOrderUserCancelBypassesUnconfirmedGateway(t *testing.T) {
 				t.Fatalf("status = %d, want closed", store.orders.order.Status)
 			}
 		})
+	}
+}
+
+// epayQueryGateway answers every EPay order query with body.
+func epayQueryGateway(t *testing.T, body string) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+const epayAwaitingPaymentBody = `{"code":1,"msg":"ok","trade_no":"","out_trade_no":"epay-order","type":"alipay","money":"10.00","pid":"1001","status":0}`
+
+// The expiry close releases an EPay order the gateway explicitly lists as
+// awaiting payment once the extended window has passed. It used to keep such
+// orders, abandoned guest orders included, and their stock and coupon forever.
+func TestCloseEPayOrderReconcilerClosesUnpaidOrderAfterExtendedWindow(t *testing.T) {
+	store, svc := epayCloseFixture(epayQueryGateway(t, epayAwaitingPaymentBody))
+	store.orders.order.CreatedAt = time.Now().Add(-epayUnpaidCloseAge - time.Minute)
+
+	if err := svc.Close(context.Background(), &dto.CloseOrderRequest{OrderNo: "epay-order"}); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if store.orders.order.Status != 3 {
+		t.Fatalf("status = %d, want closed", store.orders.order.Status)
+	}
+}
+
+// An unpaid order inside the extended window may still be paid on an open
+// gateway page, and any status other than awaiting payment leaves the payment
+// state unknown; both keep the order pending.
+func TestCloseEPayOrderReconcilerKeepsUncertainOrdersPending(t *testing.T) {
+	statusOnlyGateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api.php" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":1,"msg":"ok","data":{"status":"pending"}}`))
+	}))
+	defer statusOnlyGateway.Close()
+	old := epayUnpaidCloseAge + time.Minute
+
+	tests := []struct {
+		name       string
+		gatewayURL string
+		age        time.Duration
+	}{
+		{"awaiting payment inside the extended window", epayQueryGateway(t, epayAwaitingPaymentBody), CloseOrderTimeMinutes*time.Minute + time.Minute},
+		{"refunded", epayQueryGateway(t, strings.Replace(epayAwaitingPaymentBody, `"status":0`, `"status":2`, 1)), old},
+		{"frozen", epayQueryGateway(t, strings.Replace(epayAwaitingPaymentBody, `"status":0`, `"status":3`, 1)), old},
+		{"status omitted", epayQueryGateway(t, strings.Replace(epayAwaitingPaymentBody, `,"status":0`, "", 1)), old},
+		{"status-only answer", statusOnlyGateway.URL, old},
+		{"lookup failed", epayQueryGateway(t, `{"code":-1,"msg":"order not found"}`), old},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, svc := epayCloseFixture(tt.gatewayURL)
+			store.orders.order.CreatedAt = time.Now().Add(-tt.age)
+
+			err := svc.Close(context.Background(), &dto.CloseOrderRequest{OrderNo: "epay-order"})
+			if !stderrors.Is(err, ErrGatewayUnconfirmed) {
+				t.Fatalf("Close error = %v, want ErrGatewayUnconfirmed", err)
+			}
+			if store.orders.order.Status != 1 {
+				t.Fatalf("status = %d, want still pending", store.orders.order.Status)
+			}
+		})
+	}
+}
+
+// An administrator resolves an order by hand: the owner check does not apply,
+// and like the owner the administrator may forfeit a payment the gateway
+// cannot confirm.
+func TestCloseByAdminClosesUnconfirmedEPayOrder(t *testing.T) {
+	store, svc := epayCloseFixture(unreachableGatewayURL())
+	adminCtx := context.WithValue(context.Background(), requestctx.CtxKeyUser, &userEntity.User{Id: 99})
+
+	if err := svc.Close(adminCtx, &dto.CloseOrderRequest{OrderNo: "epay-order"}); err == nil {
+		t.Fatal("the owner close must keep rejecting a caller who does not own the order")
+	}
+	closed, err := svc.CloseByAdmin(adminCtx, "epay-order", 99)
+	if err != nil || !closed {
+		t.Fatalf("CloseByAdmin = (%t, %v), want (true, nil)", closed, err)
+	}
+	if store.orders.order.Status != 3 {
+		t.Fatalf("status = %d, want closed", store.orders.order.Status)
+	}
+	if closed, err = svc.CloseByAdmin(adminCtx, "epay-order", 99); err != nil || closed {
+		t.Fatalf("repeated CloseByAdmin = (%t, %v), want (false, nil)", closed, err)
 	}
 }
 

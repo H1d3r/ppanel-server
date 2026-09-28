@@ -81,13 +81,15 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 		VerifyCodeConfig: func() identity.VerifyCodeSnapshot {
 			c := srv.Runtime.Config()
 			return identity.VerifyCodeSnapshot{
-				DomainSuffixList:   c.Email.DomainSuffixList,
-				EnableDomainSuffix: c.Email.EnableDomainSuffix,
-				VerifyCodeInterval: c.VerifyCode.Interval,
-				VerifyCodeLimit:    c.VerifyCode.Limit,
-				VerifyCodeExpire:   c.VerifyCode.ExpireTime,
-				SiteLogo:           c.Site.SiteLogo,
-				SiteName:           c.Site.SiteName,
+				DomainSuffixList:       c.Email.DomainSuffixList,
+				EnableDomainSuffix:     c.Email.EnableDomainSuffix,
+				VerifyCodeInterval:     c.VerifyCode.Interval,
+				VerifyCodeLimit:        c.VerifyCode.Limit,
+				VerifyCodeExpire:       c.VerifyCode.ExpireTime,
+				MobileWhitelistEnabled: c.Mobile.EnableWhitelist,
+				MobileWhitelist:        c.Mobile.Whitelist,
+				SiteLogo:               c.Site.SiteLogo,
+				SiteName:               c.Site.SiteName,
 			}
 		},
 	})

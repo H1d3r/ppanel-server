@@ -45,16 +45,9 @@ func (l *TelegramLogic) handleGroup(msg *models.Message) {
 		return
 	}
 	// Whatever staff write in a mapped topic reaches a customer, so it
-	// carries the same authority as an administrator command. The rejection
-	// is spoken but rate-limited: an unbound member flooding a topic must
-	// not make the bot flood it too.
-	if reject := l.rejectNonAdminSender(msg); reject != "" {
-		if l.deps.Limiter != nil {
-			if allowed, _ := l.deps.Limiter.Allow(l.ctx, msg.From.ID); !allowed {
-				return
-			}
-		}
-		_ = l.deps.Messenger.Send(msg.Chat.ID, int64(msg.MessageThreadID), reject)
+	// carries the same authority as an administrator command.
+	if reject := l.rejectNonAdminSender(msg, "回复未送达用户"); reject != "" {
+		l.rejectAloud(msg, reject)
 		return
 	}
 	switch topic.Kind {
@@ -65,30 +58,48 @@ func (l *TelegramLogic) handleGroup(msg *models.Message) {
 	}
 }
 
-// rejectNonAdminSender enforces panel-administrator identity for topic
-// replies. The sender would otherwise reasonably believe their message
-// reached the customer, so a rejection is always spoken, never silent.
-func (l *TelegramLogic) rejectNonAdminSender(msg *models.Message) string {
+// rejectNonAdminSender enforces panel-administrator identity for actions
+// taken inside mapped topics: the sender must have their own Telegram bound
+// to an enabled, non-deleted administrator account. The sender would
+// otherwise reasonably believe the action took effect, so a rejection is
+// always spoken, never silent; consequence names what did not happen.
+func (l *TelegramLogic) rejectNonAdminSender(msg *models.Message, consequence string) string {
 	if l.deps.Users == nil || l.deps.UserAuth == nil {
-		return "系统未配置，回复未送达用户。"
+		return "系统未配置，" + consequence + "。"
+	}
+	if msg.From == nil {
+		return "⚠️ 无法识别发送者，" + consequence + "。"
 	}
 	auth, err := l.deps.UserAuth.FindUserAuthMethodByOpenID(l.ctx, "telegram", strconv.FormatInt(msg.From.ID, 10))
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "⚠️ 您的 Telegram 未绑定管理员账号，回复未送达用户。"
+			return "⚠️ 您的 Telegram 未绑定管理员账号，" + consequence + "。"
 		}
 		l.Errorw("group relay: sender lookup failed", logger.Field("error", err.Error()))
-		return "系统错误，回复未送达用户。"
+		return "系统错误，" + consequence + "。"
 	}
 	u, err := l.deps.Users.FindOne(l.ctx, auth.UserId)
 	if err != nil {
 		l.Errorw("group relay: sender user lookup failed", logger.Field("error", err.Error()))
-		return "系统错误，回复未送达用户。"
+		return "系统错误，" + consequence + "。"
 	}
-	if u.IsAdmin == nil || !*u.IsAdmin {
-		return "⚠️ 您不是管理员，回复未送达用户。"
+	if refusal := panelAdminRefusal(u); refusal != "" {
+		l.Infow("group relay: sender may not administer", logger.Field("user_id", u.Id), logger.Field("reason", refusal))
+		return "⚠️ 您不是管理员，" + consequence + "。"
 	}
 	return ""
+}
+
+// rejectAloud posts a rejection into the topic the sender acted in. It is
+// rate-limited per sender: an unbound member flooding a topic must not make
+// the bot flood it too.
+func (l *TelegramLogic) rejectAloud(msg *models.Message, reject string) {
+	if l.deps.Limiter != nil && msg.From != nil {
+		if allowed, _ := l.deps.Limiter.Allow(l.ctx, msg.From.ID); !allowed {
+			return
+		}
+	}
+	_ = l.deps.Messenger.Send(msg.Chat.ID, int64(msg.MessageThreadID), reject)
 }
 
 // relayAdminReply copies a staff message from a support topic to the bound
@@ -142,6 +153,10 @@ func (l *TelegramLogic) appendTicketFollow(msg *models.Message, topic *telegramt
 // bot as From) and must be ignored: syncing them back would overwrite the
 // status the website side just wrote — e.g. an automatic reopen while
 // posting a website reply would flip the ticket from Waiting to Pending.
+//
+// Any group member with the manage-topics right can close a topic, so the
+// effects beyond the mapping — the ticket status and the customer notice —
+// require the same panel-administrator identity as a topic reply.
 func (l *TelegramLogic) syncTopicLifecycle(msg *models.Message) {
 	if msg.From != nil && msg.From.IsBot {
 		return
@@ -158,10 +173,17 @@ func (l *TelegramLogic) syncTopicLifecycle(msg *models.Message) {
 	if closed {
 		status = telegramtopic.StatusClosed
 	}
+	// The mapping records the topic's actual state in Telegram, whoever
+	// changed it, so the relays keep reopening it when needed.
 	if err := l.deps.Topics.UpdateStatus(l.ctx, topic.Id, status); err != nil {
 		l.Errorw("topic lifecycle: mapping update failed", logger.Field("error", err.Error()))
 	}
-	if topic.Kind == telegramtopic.KindTicket && l.deps.Tickets != nil {
+	switch {
+	case topic.Kind == telegramtopic.KindTicket && l.deps.Tickets != nil:
+		if reject := l.rejectNonAdminSender(msg, "工单状态未同步"); reject != "" {
+			l.rejectAloud(msg, reject)
+			return
+		}
 		ticketStatus := uint8(ticket.Pending)
 		if closed {
 			ticketStatus = ticket.Closed
@@ -169,8 +191,11 @@ func (l *TelegramLogic) syncTopicLifecycle(msg *models.Message) {
 		if err := l.deps.Tickets.UpdateTicketStatus(l.ctx, topic.RefId, 0, ticketStatus); err != nil {
 			l.Errorw("topic lifecycle: ticket status sync failed", logger.Field("error", err.Error()), logger.Field("ticket_id", topic.RefId))
 		}
-	}
-	if topic.Kind == telegramtopic.KindSupport && closed {
+	case topic.Kind == telegramtopic.KindSupport && closed:
+		if reject := l.rejectNonAdminSender(msg, "用户未收到会话结束通知"); reject != "" {
+			l.rejectAloud(msg, reject)
+			return
+		}
 		// Best effort: tell the customer the conversation ended.
 		if method, err := l.deps.UserAuth.FindUserAuthMethodByUserId(l.ctx, "telegram", topic.RefId); err == nil {
 			if chatID, perr := strconv.ParseInt(method.AuthIdentifier, 10, 64); perr == nil {

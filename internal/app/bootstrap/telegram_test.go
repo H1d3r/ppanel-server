@@ -3,12 +3,16 @@ package bootstrap
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	tgbot "github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
+	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/logger/logtest"
 )
 
 type emptyTelegramTokenStore struct {
@@ -29,6 +33,35 @@ func (emptyTelegramTokenAuthRepo) FindOneByMethod(context.Context, string) (*aut
 		Config:  `{"bot_token":"","enable_notify":false,"webhook_domain":"","group_chat_id":""}`,
 		Enabled: &enabled,
 	}, nil
+}
+
+type panickingNotification struct {
+	notification.Service
+	handled int
+}
+
+func (n *panickingNotification) HandleTelegramUpdate(context.Context, *models.Update) {
+	n.handled++
+	panic("handler bug")
+}
+
+// The polling loop runs handlers without recover: a panic escaping the
+// update handler would kill the API process.
+func TestTelegramUpdateHandlerContainsPanics(t *testing.T) {
+	logs := logtest.NewCollector(t)
+	notify := &panickingNotification{}
+	handle := telegramUpdateHandler(&Dependencies{Notification: notify})
+
+	handle(context.Background(), nil, &models.Update{ID: 1, Message: &models.Message{Text: "first"}})
+	handle(context.Background(), nil, &models.Update{ID: 2, Message: &models.Message{Text: "second"}})
+	handle(context.Background(), nil, &models.Update{ID: 3})
+
+	if notify.handled != 2 {
+		t.Fatalf("handled = %d, want both message updates dispatched and the empty one skipped", notify.handled)
+	}
+	if out := logs.String(); !strings.Contains(out, "update handler panicked") || !strings.Contains(out, "handler bug") || !strings.Contains(out, "telegramUpdateHandler") {
+		t.Fatalf("log = %s, want the panic logged with its stack", out)
+	}
 }
 
 func TestTelegramEmptyTokenClearsPublishedRuntimeState(t *testing.T) {

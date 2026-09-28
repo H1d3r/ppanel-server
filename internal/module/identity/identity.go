@@ -43,6 +43,8 @@ type Service interface {
 	// notification preferences.
 	QueryUserInfo(ctx context.Context) (*dto.User, error)
 	UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) error
+	// Logout ends the calling session.
+	Logout(ctx context.Context) error
 	UpdateUserNotify(ctx context.Context, req *dto.UpdateUserNotifyRequest) error
 	UpdateUserRules(ctx context.Context, req *dto.UpdateUserRulesRequest) error
 	GetLoginLog(ctx context.Context, req *dto.GetLoginLogRequest) (*dto.GetLoginLogResponse, error)
@@ -304,6 +306,10 @@ func (s *service) QueryUserInfo(ctx context.Context) (*dto.User, error) {
 
 func (s *service) UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) error {
 	return s.profile.UpdateUserPassword(ctx, req)
+}
+
+func (s *service) Logout(ctx context.Context) error {
+	return s.profile.Logout(ctx)
 }
 
 func (s *service) UpdateUserNotify(ctx context.Context, req *dto.UpdateUserNotifyRequest) error {

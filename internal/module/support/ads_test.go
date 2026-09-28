@@ -59,6 +59,24 @@ func TestCreateAdsConvertsMilliTimestamps(t *testing.T) {
 	}
 }
 
+// The public list must honour the schedule, not only the enabled flag.
+func TestGetPublicAdsRequiresEnabledAndScheduled(t *testing.T) {
+	repo := &fakeAdsRepo{}
+	svc := newAdsService(repo)
+
+	before := time.Now()
+	if _, err := svc.GetPublicAds(context.Background(), &dto.GetAdsRequest{}); err != nil {
+		t.Fatalf("GetPublicAds: %v", err)
+	}
+	filter := repo.listFilter
+	if filter.Status == nil || *filter.Status != 1 {
+		t.Fatalf("status filter = %v, want enabled ads only", filter.Status)
+	}
+	if filter.ActiveAt == nil || filter.ActiveAt.Before(before) || filter.ActiveAt.After(time.Now()) {
+		t.Fatalf("schedule filter = %v, want the current time", filter.ActiveAt)
+	}
+}
+
 func TestUpdateAdsOverwritesTimesAfterCopy(t *testing.T) {
 	repo := &fakeAdsRepo{findOne: &adsEntity.Ads{
 		Id: 5, Title: "old", StartTime: time.Unix(0, 0), EndTime: time.Unix(0, 0),

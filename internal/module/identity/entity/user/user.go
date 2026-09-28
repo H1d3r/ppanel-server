@@ -43,11 +43,13 @@ func (*User) TableName() string {
 	return "user"
 }
 
+// AuthMethods is a login identity of a user. An identifier is unique within
+// its auth type (idx_auth_type_identifier), not across types.
 type AuthMethods struct {
 	Id             int64     `gorm:"primaryKey"`
 	UserId         int64     `gorm:"index:idx_user_id;not null;comment:User ID"`
-	AuthType       string    `gorm:"type:varchar(255);not null;comment:Auth Type 1: apple 2: google 3: github 4: facebook 5: telegram 6: email 7: mobile 8: device"`
-	AuthIdentifier string    `gorm:"type:varchar(255);unique;index:idx_auth_identifier;not null;comment:Auth Identifier"`
+	AuthType       string    `gorm:"type:varchar(255);not null;uniqueIndex:idx_auth_type_identifier,priority:1;comment:Auth Type 1: apple 2: google 3: github 4: facebook 5: telegram 6: email 7: mobile 8: device"`
+	AuthIdentifier string    `gorm:"type:varchar(255);uniqueIndex:idx_auth_type_identifier,priority:2;not null;comment:Auth Identifier"`
 	Verified       bool      `gorm:"default:false;not null;comment:Is Verified"`
 	CreatedAt      time.Time `gorm:"<-:create;comment:Creation Time"`
 	UpdatedAt      time.Time `gorm:"comment:Update Time"`

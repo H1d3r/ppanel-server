@@ -5,6 +5,8 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -52,12 +54,30 @@ type CheckoutDependencies struct {
 	ExchangeRateCache  ExchangeRateCache
 }
 
-// CheckoutConfig is the configuration snapshot consumed by checkout.
+// CheckoutConfig is the configuration snapshot consumed by checkout. Host and
+// SiteHost are the configured site hosts that anchor payment notify URLs.
 type CheckoutConfig struct {
 	Host              string
+	SiteHost          string
 	SiteName          string
 	CurrencyUnit      string
 	CurrencyAccessKey string
+}
+
+// orderTypeRecharge is the balance top-up order type.
+const orderTypeRecharge uint8 = 4
+
+// errNotifyURLNotConfigured fails a gateway checkout whose notify URL cannot
+// be built from configuration. The code error reaches the caller unwrapped.
+var errNotifyURLNotConfigured = xerr.NewErrCodeMsg(xerr.ERROR, "PAYMENT_NOTIFY_URL_NOT_CONFIGURED")
+
+// gatewayCheckoutError keeps the notify URL configuration error visible to
+// the caller; other gateway failures keep their generic code.
+func gatewayCheckoutError(err error, format string) error {
+	if errors.Is(err, errNotifyURLNotConfigured) {
+		return err
+	}
+	return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), format, err.Error())
 }
 
 // GuestCheckoutCache provides the one Redis operation needed to validate
@@ -223,7 +243,7 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		url, err := l.epayPayment(paymentConfig, orderInfo, req.ReturnUrl)
 		if err != nil {
 			l.Logger.Error("[PurchaseCheckout] epay error", logger.Field("error", err.Error()))
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "epayPayment error: %v", err.Error())
+			return nil, gatewayCheckoutError(err, "epayPayment error: %v")
 		}
 		resp = &dto.CheckoutOrderResponse{
 			CheckoutUrl: url,
@@ -246,7 +266,7 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		url, err := l.alipayF2fPayment(paymentConfig, orderInfo)
 		if err != nil {
 			l.Errorw("[PurchaseCheckout] alipayF2fPayment error", logger.Field("error", err.Error()))
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "alipayF2fPayment error: %v", err.Error())
+			return nil, gatewayCheckoutError(err, "alipayF2fPayment error: %v")
 		}
 		resp = &dto.CheckoutOrderResponse{
 			Type:        "qr", // Client should display QR code
@@ -258,7 +278,7 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		url, err := l.cryptomusPayment(paymentConfig, orderInfo, req.ReturnUrl)
 		if err != nil {
 			l.Errorw("[PurchaseCheckout] cryptomusPayment error", logger.Field("error", err.Error()))
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "cryptomusPayment error: %v", err.Error())
+			return nil, gatewayCheckoutError(err, "cryptomusPayment error: %v")
 		}
 		resp = &dto.CheckoutOrderResponse{
 			CheckoutUrl: url,
@@ -266,6 +286,12 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *dto.CheckoutOrderRequest) 
 		}
 
 	case payment2.Balance:
+		// A top-up must bring money in from outside the wallet. The balance
+		// checkout spends gift credit first, so paying a recharge with it would
+		// turn gift credit into regular balance.
+		if orderInfo.Type == orderTypeRecharge {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance cannot pay for a recharge")
+		}
 		// Process balance payment - validate user and process payment immediately
 		if orderInfo.UserId == 0 {
 			l.Errorw("[PurchaseCheckout] user not found", logger.Field("userId", orderInfo.UserId))
@@ -345,15 +371,9 @@ func (l *PurchaseCheckoutLogic) alipayF2fPayment(pay *payment.Payment, info *ord
 	}
 
 	// Build notification URL for payment status callbacks
-	notifyUrl := ""
-	if pay.Domain != "" {
-		notifyUrl = strings.TrimSuffix(pay.Domain, "/") + "/v1/notify/" + pay.Platform + "/" + pay.Token
-	} else {
-		host, ok := l.ctx.Value(requestctx.CtxKeyRequestHost).(string)
-		if !ok {
-			host = l.deps.Config.Host
-		}
-		notifyUrl = "https://" + strings.TrimSuffix(host, "/") + "/v1/notify/" + pay.Platform + "/" + pay.Token
+	notifyUrl, err := l.paymentNotifyURL(pay)
+	if err != nil {
+		return "", err
 	}
 
 	// Initialize Alipay client with configuration
@@ -488,6 +508,12 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 		l.Errorw("[PurchaseCheckout] Unmarshal EPay config error", logger.Field("error", err.Error()))
 		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Unmarshal error: %s", err.Error())
 	}
+	// Resolve the callback before recording the payment expectation: an order
+	// with a recorded expectation counts as sent to the gateway when it closes.
+	notifyURL, err := l.paymentNotifyURL(config)
+	if err != nil {
+		return "", err
+	}
 	// Initialize EPay client with merchant credentials
 	client := epay.NewClient(epayConfig.Pid, epayConfig.Url, epayConfig.Key, epayConfig.Type)
 	var amount float64
@@ -509,8 +535,6 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 		return "", err
 	}
 
-	baseURL := l.paymentPublicBaseURL(config)
-	notifyURL := baseURL + "/v1/notify/" + config.Platform + "/" + config.Token
 	return client.CreatePayUrl(epay.Order{
 		Name:      l.deps.Config.SiteName,
 		Amount:    amount,
@@ -536,6 +560,15 @@ func (l *PurchaseCheckoutLogic) cryptomusPayment(config *payment.Payment, info *
 	})
 
 	currency := strings.ToUpper(l.deps.Config.CurrencyUnit)
+	// A new invoice needs the callback; resolve it before recording the
+	// payment expectation, which marks the order as sent to the gateway.
+	var notifyURL string
+	if info.TradeNo == "" {
+		var err error
+		if notifyURL, err = l.paymentNotifyURL(config); err != nil {
+			return "", err
+		}
+	}
 	if err := l.persistPaymentExpectation(info, info.Amount, currency); err != nil {
 		return "", err
 	}
@@ -552,7 +585,6 @@ func (l *PurchaseCheckoutLogic) cryptomusPayment(config *payment.Payment, info *
 		return l.cryptomusInvoiceURL(invoice, info)
 	}
 
-	notifyURL := l.paymentPublicBaseURL(config) + "/v1/notify/" + config.Platform + "/" + config.Token
 	invoice, err := client.CreateInvoice(cryptomus.Order{
 		OrderNo:   info.OrderNo,
 		Amount:    info.Amount,
@@ -619,16 +651,62 @@ func (l *PurchaseCheckoutLogic) cryptomusInvoiceURL(invoice *cryptomus.Invoice, 
 	return invoice.URL, nil
 }
 
-func (l *PurchaseCheckoutLogic) paymentPublicBaseURL(config *payment.Payment) string {
-	baseURL := strings.TrimSuffix(config.Domain, "/")
-	if baseURL == "" {
-		host, ok := l.ctx.Value(requestctx.CtxKeyRequestHost).(string)
-		if !ok || host == "" {
-			host = l.deps.Config.Host
-		}
-		baseURL = "https://" + strings.TrimSuffix(host, "/")
+// paymentNotifyURL builds the gateway callback URL, which carries the payment
+// method's secret token in its path.
+func (l *PurchaseCheckoutLogic) paymentNotifyURL(config *payment.Payment) (string, error) {
+	baseURL, err := l.paymentPublicBaseURL(config)
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSuffix(baseURL, "/")
+	return baseURL + "/v1/notify/" + config.Platform + "/" + config.Token, nil
+}
+
+// paymentPublicBaseURL resolves the base URL a gateway calls back from
+// operator configuration only: the payment method's Domain, else the
+// configured site host. The request Host header is client-controlled, so
+// deriving the callback from it would let a caller send the notification,
+// token included, to a server of its choice.
+func (l *PurchaseCheckoutLogic) paymentPublicBaseURL(config *payment.Payment) (string, error) {
+	if baseURL := strings.TrimSuffix(strings.TrimSpace(config.Domain), "/"); baseURL != "" {
+		return baseURL, nil
+	}
+	for _, host := range []string{l.deps.Config.Host, l.deps.Config.SiteHost} {
+		if baseURL, ok := publicBaseURL(host); ok {
+			return baseURL, nil
+		}
+	}
+	l.Errorw("[PurchaseCheckout] payment notify URL is not configured; set the payment method domain or the site host",
+		logger.Field("payment", config.Id),
+		logger.Field("platform", config.Platform),
+	)
+	return "", errors.Wrapf(errNotifyURLNotConfigured, "payment method %d has no domain and no site host is configured", config.Id)
+}
+
+// publicBaseURL turns a configured host, either a bare host[:port] or a full
+// URL, into a callback base URL. Wildcard and loopback listen addresses (the
+// config Host defaults to 0.0.0.0) are unreachable for a gateway and count as
+// not configured.
+func publicBaseURL(host string) (string, bool) {
+	raw := strings.TrimSpace(host)
+	if raw == "" {
+		return "", false
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "localhost" {
+		return "", false
+	}
+	if ip := net.ParseIP(hostname); ip != nil && (ip.IsUnspecified() || ip.IsLoopback()) {
+		return "", false
+	}
+	return strings.TrimSuffix(parsed.Scheme+"://"+parsed.Host+parsed.EscapedPath(), "/"), true
 }
 
 // queryExchangeRate converts the order amount from system currency to target currency

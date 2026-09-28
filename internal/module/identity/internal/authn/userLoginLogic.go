@@ -83,9 +83,14 @@ func (l *UserLoginLogic) UserLogin(req *dto.UserLoginRequest) (resp *dto.LoginRe
 	}
 
 	// Verify password
+	if err := ensureLoginAllowed(l.ctx, l.deps.Redis, userInfo.Id); err != nil {
+		return nil, err
+	}
 	if !password.MultiPasswordVerify(userInfo.Algo, userInfo.Salt, req.Password, userInfo.Password) {
+		recordLoginFailure(l.ctx, l.deps.Redis, userInfo.Id)
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserPasswordError), "user password")
 	}
+	clearLoginFailures(l.ctx, l.deps.Redis, userInfo.Id)
 
 	// Check if user is enabled
 	if !*userInfo.Enable {

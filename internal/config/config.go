@@ -37,8 +37,10 @@ type Config struct {
 	Log           Log                 `yaml:"Log"`
 	Currency      Currency            `yaml:"Currency"`
 	Administrator struct {
-		Email    string `yaml:"Email" default:"admin@ppanel.dev"`
-		Password string `yaml:"Password" default:"password"`
+		Email string `yaml:"Email" default:"admin@ppanel.dev"`
+		// Password seeds the first administrator. Left empty, a random one is
+		// generated and printed once at the first start.
+		Password string `yaml:"Password"`
 	} `yaml:"Administrator"`
 }
 

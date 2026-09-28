@@ -2,7 +2,10 @@ package password
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestEncodePassWord(t *testing.T) {
@@ -79,5 +82,35 @@ func TestPasswordNeedsRehashForNonCurrentArgon2idPHC(t *testing.T) {
 	duplicateParams := strings.Replace(hash, "m=19456,t=2,p=1", "m=19456,m=19456,t=2,p=1", 1)
 	if MultiPasswordVerify(PasswordAlgoArgon2id, "", "password", duplicateParams) {
 		t.Fatal("argon2id PHC with duplicate parameters must not verify")
+	}
+}
+
+// Concurrent hashing never holds more argon2id memory than the slots allow.
+func TestArgon2DerivationsShareBoundedSlots(t *testing.T) {
+	var running, peak atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 4*cap(argon2Slots); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			argon2Slots <- struct{}{}
+			now := running.Add(1)
+			for {
+				old := peak.Load()
+				if now <= old || peak.CompareAndSwap(old, now) {
+					break
+				}
+			}
+			time.Sleep(time.Millisecond)
+			running.Add(-1)
+			<-argon2Slots
+		}()
+	}
+	wg.Wait()
+	if int(peak.Load()) > cap(argon2Slots) {
+		t.Fatalf("peak concurrent derivations = %d, want at most %d", peak.Load(), cap(argon2Slots))
+	}
+	if hash := EncodePassWord("slot-test"); !VerifyPassWord("slot-test", hash) {
+		t.Fatal("hashing through the slots broke verification")
 	}
 }

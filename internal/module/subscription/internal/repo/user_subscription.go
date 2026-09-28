@@ -9,6 +9,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/cache"
+	"github.com/perfect-panel/server/pkg/timeutil"
 
 	trafficEntity "github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
@@ -170,17 +171,34 @@ func (m *UserSubscriptionRepo) FindUsersSubscribeBySubscribeId(ctx context.Conte
 	return m.FindUsersSubscribeBySubscribeIds(ctx, []int64{subscribeId})
 }
 
+// FindUsersSubscribeBySubscribeIds returns the plans' subscriptions a node
+// may serve (see servableSubscribes).
 func (m *UserSubscriptionRepo) FindUsersSubscribeBySubscribeIds(ctx context.Context, subscribeIds []int64) ([]*usersub.Subscribe, error) {
 	var data []*usersub.Subscribe
 	if len(subscribeIds) == 0 {
 		return data, nil
 	}
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&usersub.Subscribe{}).
-			Where("subscribe_id IN ? AND status IN ?", subscribeIds, []int64{1, 0}).
-			Order("subscribe_id ASC, id ASC").Find(v).Error
+		return servableSubscribes(conn, subscribeIds, timeutil.Now()).Find(v).Error
 	})
 	return data, err
+}
+
+// servableSubscribes selects the plans' subscriptions a node may serve:
+// pending or active, not past expiry and not out of traffic. These are the
+// lifecycle sweep's own expiry and traffic predicates, so access ends when a
+// subscription is due to finish rather than when the sweep next runs. The
+// epoch sentinel (like a NULL expiry) never expires, traffic 0 is unlimited,
+// and IS NOT TRUE keeps rows with NULL counters, which the sweep never
+// finishes either. Not built on activeLifecycleSubscribes: its finished_at
+// term exists for the sweep's partial index, which this plan-driven query
+// does not use, and would change who is served.
+func servableSubscribes(conn *gorm.DB, subscribeIds []int64, now time.Time) *gorm.DB {
+	return conn.Model(&usersub.Subscribe{}).
+		Where("subscribe_id IN ? AND status IN ?", subscribeIds, []int64{1, 0}).
+		Where("(expire_time IS NULL OR expire_time = ? OR expire_time > ?)", time.UnixMilli(0), now).
+		Where("(traffic > 0 AND upload + download >= traffic) IS NOT TRUE").
+		Order("subscribe_id ASC, id ASC")
 }
 
 func (m *UserSubscriptionRepo) FindUserSubscribesByStatus(ctx context.Context, status ...int64) ([]*usersub.Subscribe, error) {
@@ -487,6 +505,24 @@ func (m *UserSubscriptionRepo) UpdateSubscribe(ctx context.Context, data *usersu
 		}
 		return conn.Model(&usersub.Subscribe{}).Where("id = ?", data.Id).Save(data).Error
 	})
+}
+
+// UpdateSubscribeColumns persists only the given columns of data (plus the
+// update timestamp). Unlike UpdateSubscribe's full-row save, concurrent writes
+// to every other column survive; provider-managed rows are refused.
+func (m *UserSubscriptionRepo) UpdateSubscribeColumns(ctx context.Context, data *usersub.Subscribe, columns ...string) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	if data.EntitlementSource != "" {
+		return usersub.ErrProviderManaged
+	}
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		return conn.Model(&usersub.Subscribe{}).
+			Where("id = ? AND entitlement_source = ?", data.Id, "").
+			Select(columns).
+			Updates(data).Error
+	}, data.GetCacheKeys()...)
 }
 
 func (m *UserSubscriptionRepo) ApplyEntitlementProjection(ctx context.Context, data *usersub.Subscribe) error {

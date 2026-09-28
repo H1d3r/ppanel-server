@@ -158,12 +158,14 @@ func expireOf(sub *usersub.Subscribe) time.Time {
 
 // loadOutcome rebuilds the notification context for a replayed delivery.
 func (s *Service) loadOutcome(ctx context.Context, orderInfo *order.Order) (*outcomeParts, error) {
-	token := orderInfo.SubscribeToken
+	var userSub *usersub.Subscribe
+	var err error
 	if orderInfo.Type == OrderTypeSubscribe {
-		// New-purchase tokens are derived from the order number.
-		token = usersub.TokenFromOrder(orderInfo.OrderNo)
+		// A new purchase created its subscription under this order.
+		userSub, err = s.deps.UserSubs.FindOneSubscribeByOrderId(ctx, orderInfo.Id)
+	} else {
+		userSub, err = s.deps.UserSubs.FindOneSubscribeByToken(ctx, orderInfo.SubscribeToken)
 	}
-	userSub, err := s.deps.UserSubs.FindOneSubscribeByToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +264,7 @@ func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository
 		StartTime:   now,
 		ExpireTime:  timeutil.AddTime(sub.UnitTime, orderInfo.Quantity, now),
 		Traffic:     sub.Traffic,
-		Token:       usersub.TokenFromOrder(orderInfo.OrderNo),
+		Token:       usersub.NewToken(),
 		UUID:        uuid.NewV4().String(),
 		Status:      1,
 	}
@@ -282,6 +284,10 @@ func (s *Service) activateRenewalTx(ctx context.Context, store repository.Subscr
 	}
 	if userSub.EntitlementSource != "" {
 		return nil, usersub.ErrProviderManaged
+	}
+	// The order may have been created before the refund or the hold.
+	if usersub.OnHold(userSub.Status) {
+		return nil, usersub.ErrSubscriptionOnHold
 	}
 	sub, err := store.Subscribe().FindOne(ctx, orderInfo.SubscribeId)
 	if err != nil {
@@ -330,6 +336,9 @@ func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.S
 	}
 	if userSub.EntitlementSource != "" {
 		return nil, usersub.ErrProviderManaged
+	}
+	if usersub.OnHold(userSub.Status) {
+		return nil, usersub.ErrSubscriptionOnHold
 	}
 	userSub.Download = 0
 	userSub.Upload = 0

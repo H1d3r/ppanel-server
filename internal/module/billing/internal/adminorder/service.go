@@ -6,9 +6,12 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
+	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/internal/module/billing/internal/orderaudit"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -32,6 +35,12 @@ type PlanNameReader interface {
 	FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error)
 }
 
+// OrderCloser is the checkout close flow shared with owner and expiry closes;
+// it reports whether the call closed the order.
+type OrderCloser interface {
+	CloseByAdmin(ctx context.Context, orderNo string, adminID int64) (bool, error)
+}
+
 type Service struct {
 	orders   repository.OrderRepo
 	payments repository.PaymentRepo
@@ -39,11 +48,12 @@ type Service struct {
 	queue    ActivationEnqueuer
 	// plans resolves plan names for the daily report; optional so callers
 	// that only manage orders need not provide it.
-	plans PlanNameReader
+	plans  PlanNameReader
+	closer OrderCloser
 }
 
-func NewService(orders repository.OrderRepo, payments repository.PaymentRepo, tx Transactor, queue ActivationEnqueuer, plans PlanNameReader) *Service {
-	return &Service{orders: orders, payments: payments, tx: tx, queue: queue, plans: plans}
+func NewService(orders repository.OrderRepo, payments repository.PaymentRepo, tx Transactor, queue ActivationEnqueuer, plans PlanNameReader, closer OrderCloser) *Service {
+	return &Service{orders: orders, payments: payments, tx: tx, queue: queue, plans: plans, closer: closer}
 }
 
 func (s *Service) Create(ctx context.Context, req *dto.CreateOrderRequest) error {
@@ -118,6 +128,9 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 	if req.Status == 3 && (req.PaymentId != 0 || req.TradeNo != "") {
 		return errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_ORDER_CLOSE_REQUEST"), "payment_id and trade_no are not allowed when closing an order")
 	}
+	if req.Status == 3 {
+		return s.close(ctx, info)
+	}
 
 	var transitioned bool
 	err = s.tx.InBillingTx(ctx, func(txStore repository.BillingStore) error {
@@ -130,22 +143,18 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 			return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
 		}
 
-		if req.Status == 2 {
-			if req.PaymentId != 0 {
-				paymentMethod, err := txStore.Payment().FindOne(ctx, req.PaymentId)
-				if err != nil {
-					return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method not found: %v", err)
-				}
-				current.PaymentId = paymentMethod.Id
-				current.Method = paymentMethod.Platform
-				if err := orderStore.Update(ctx, current); err != nil {
-					return err
-				}
+		if req.PaymentId != 0 {
+			paymentMethod, err := txStore.Payment().FindOne(ctx, req.PaymentId)
+			if err != nil {
+				return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method not found: %v", err)
 			}
-			transitioned, err = orderStore.MarkOrderPaid(ctx, current.OrderNo, req.TradeNo)
-		} else {
-			transitioned, err = orderStore.UpdateOrderStatusFrom(ctx, current.OrderNo, 1, 3)
+			current.PaymentId = paymentMethod.Id
+			current.Method = paymentMethod.Platform
+			if err := orderStore.Update(ctx, current); err != nil {
+				return err
+			}
 		}
+		transitioned, err = orderStore.MarkOrderPaid(ctx, current.OrderNo, req.TradeNo)
 		if err != nil {
 			return err
 		}
@@ -158,13 +167,36 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 		log.Errorw("[UpdateOrderStatus] Transaction error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Transaction error: %v", err.Error())
 	}
-	if req.Status != 2 || !transitioned {
+	if !transitioned {
 		return nil
 	}
 	if err := s.queue.EnqueueActivation(ctx, info.OrderNo); err != nil {
 		// The committed Paid state is a durable outbox; reconciliation will
 		// repair an enqueue failure without reversing a real payment.
 		return errors.Wrapf(xerr.NewErrCode(xerr.QueueEnqueueError), "enqueue activation: %v", err)
+	}
+	return nil
+}
+
+// close routes the administrator's close through the checkout close flow, so
+// the coupon, gift deduction and plan inventory are released and a
+// cancellable gateway payment is voided first. A payment the gateway confirms
+// is settled instead, and the close reports the order as no longer pending.
+func (s *Service) close(ctx context.Context, info *order.Order) error {
+	var adminID int64
+	if admin, ok := ctx.Value(requestctx.CtxKeyUser).(*user.User); ok && admin != nil {
+		adminID = admin.Id
+	}
+	closed, err := s.closer.CloseByAdmin(ctx, info.OrderNo, adminID)
+	if err != nil {
+		logger.WithContext(ctx).Errorw("[UpdateOrderStatus] Close order error", logger.Field("error", err.Error()), logger.Field("orderNo", info.OrderNo))
+		if errors.Is(err, checkout.ErrGatewayUnconfirmed) {
+			return errors.Wrapf(xerr.NewErrCodeMsg(409, "PAYMENT_STATUS_UNCONFIRMED"), "close order: %v", err)
+		}
+		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "close order: %v", err)
+	}
+	if !closed {
+		return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
 	}
 	return nil
 }

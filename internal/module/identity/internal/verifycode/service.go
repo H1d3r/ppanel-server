@@ -18,8 +18,12 @@ type Snapshot struct {
 	VerifyCodeInterval int64
 	VerifyCodeLimit    int64
 	VerifyCodeExpire   int64
-	SiteLogo           string
-	SiteName           string
+	// MobileWhitelist lists the area codes SMS codes may be sent to when
+	// MobileWhitelistEnabled is set.
+	MobileWhitelistEnabled bool
+	MobileWhitelist        []string
+	SiteLogo               string
+	SiteName               string
 }
 
 // Deps declares the subdomain's dependencies; the identity facade forwards
@@ -73,6 +77,8 @@ func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 			VerifyCodeInterval: cfg.VerifyCodeInterval,
 			VerifyCodeLimit:    cfg.VerifyCodeLimit,
 			VerifyCodeExpire:   cfg.VerifyCodeExpire,
+			WhitelistEnabled:   cfg.MobileWhitelistEnabled,
+			Whitelist:          cfg.MobileWhitelist,
 		},
 		Policy: s.deps.Policy,
 	}).SendSmsCode(req)

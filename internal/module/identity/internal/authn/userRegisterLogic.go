@@ -81,6 +81,14 @@ func (l *UserRegisterLogic) UserRegister(req *dto.UserRegisterRequest) (resp *dt
 	} else if err == nil && u.DeletedAt.Valid {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserDisabled), "user email deleted: %v", req.Email)
 	}
+	// One inbox must not open many accounts (and trials): "a.b+x@gmail.com"
+	// reaches the mailbox of an existing "ab@gmail.com".
+	if _, err := l.deps.Store.UserAuth().FindEmailAlias(l.ctx, canonicalEmail); err == nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "email reaches the mailbox of an existing account: %v", req.Email)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		l.Errorw("FindEmailAlias Error", logger.Field("error", err))
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query email aliases failed: %v", err.Error())
+	}
 	if err := l.deps.Policy.TakeIPPermit(l.ctx, req.IP); err != nil {
 		return nil, err
 	}
@@ -109,7 +117,7 @@ func (l *UserRegisterLogic) UserRegister(req *dto.UserRegisterRequest) (resp *dt
 		// Generate ReferCode
 		userInfo.ReferCode = user.GenerateInviteCode(userInfo.Id)
 		// Update ReferCode
-		if err := store.User().Update(l.ctx, userInfo); err != nil {
+		if err := store.User().UpdateColumns(l.ctx, userInfo.Id, map[string]interface{}{"refer_code": userInfo.ReferCode}); err != nil {
 			return err
 		}
 		// create user auth info

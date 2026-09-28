@@ -27,10 +27,38 @@ import (
 
 const orderTypeSubscribe uint8 = 1
 
+// epayUnpaidCloseAge is the order age after which an EPay order the gateway
+// lists as unpaid may close. EPay cannot cancel an issued payment URL, so the
+// payment window is doubled for a payer who opened the gateway page near
+// expiry; a payment arriving after the close is rejected.
+const epayUnpaidCloseAge = 2 * CloseOrderTimeMinutes * time.Minute
+
 // ErrGatewayUnconfirmed reports that a gateway order could not be confirmed
 // safe to close, so the order intentionally stays pending.
 // Schedulers treat it as an expected outcome, not a per-order failure.
 var ErrGatewayUnconfirmed = stderrors.New("gateway could not confirm the order as paid")
+
+// closeActorKind identifies who asks for a pending order to be closed.
+type closeActorKind uint8
+
+const (
+	// closeBySystem is the expiry task or the pending-order reconciler; it
+	// closes only what the gateway confirms is safe to close.
+	closeBySystem closeActorKind = iota
+	// closeByOwner is the order's owner abandoning the order.
+	closeByOwner
+	// closeByAdmin is an administrator resolving the order by hand.
+	closeByAdmin
+)
+
+type closeActor struct {
+	kind   closeActorKind
+	userID int64 // the owner's or the administrator's user id
+}
+
+// explicit reports whether a person deliberately gave the order up, which
+// forfeits an EPay/Alipay payment the gateway cannot confirm.
+func (a closeActor) explicit() bool { return a.kind != closeBySystem }
 
 // Close closes a pending order: the billing transaction releases the coupon
 // reservation and refunds the gift deduction, then the reserved plan
@@ -38,44 +66,60 @@ var ErrGatewayUnconfirmed = stderrors.New("gateway could not confirm the order a
 // step 2). Orders whose gateway checkout already collected money are settled
 // instead of closed.
 func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
-	log := logger.WithContext(ctx)
-	// Find order information by order number
-	orderInfo, err := s.deps.Orders.FindOneByOrderNo(ctx, req.OrderNo)
-	if err != nil {
-		log.Errorw("[CloseOrder] Find order info failed",
-			logger.Field("error", err.Error()),
-			logger.Field("orderNo", req.OrderNo),
-		)
-		return nil
-	}
 	// Public callers are authenticated by the route. Queue workers use a
 	// context without a user and are the only internal callers allowed to close
 	// any expired order.
-	currentUser, userInitiated := ctx.Value(requestctx.CtxKeyUser).(*user.User)
-	userInitiated = userInitiated && currentUser != nil
-	if userInitiated && orderInfo.UserId != currentUser.Id {
-		return errors.New("order does not belong to the current user")
+	actor := closeActor{kind: closeBySystem}
+	if currentUser, ok := ctx.Value(requestctx.CtxKeyUser).(*user.User); ok && currentUser != nil {
+		actor = closeActor{kind: closeByOwner, userID: currentUser.Id}
+	}
+	_, err := s.closeOrder(ctx, req.OrderNo, actor)
+	return err
+}
+
+// CloseByAdmin closes a pending order for an administrator through the same
+// flow as owner and expiry closes, so the coupon, gift deduction and plan
+// inventory are released and a cancellable gateway payment is voided first;
+// a payment the gateway confirms is settled instead. It reports whether this
+// call closed the order.
+func (s *Service) CloseByAdmin(ctx context.Context, orderNo string, adminID int64) (bool, error) {
+	return s.closeOrder(ctx, orderNo, closeActor{kind: closeByAdmin, userID: adminID})
+}
+
+func (s *Service) closeOrder(ctx context.Context, orderNo string, actor closeActor) (bool, error) {
+	log := logger.WithContext(ctx)
+	// Find order information by order number
+	orderInfo, err := s.deps.Orders.FindOneByOrderNo(ctx, orderNo)
+	if err != nil {
+		log.Errorw("[CloseOrder] Find order info failed",
+			logger.Field("error", err.Error()),
+			logger.Field("orderNo", orderNo),
+		)
+		return false, nil
+	}
+	if actor.kind == closeByOwner && orderInfo.UserId != actor.userID {
+		return false, errors.New("order does not belong to the current user")
 	}
 	// If the order status is not 1, it means that the order has been closed or paid
 	if orderInfo.Status != 1 {
 		log.Infow("[CloseOrder] Order status is not 1",
-			logger.Field("orderNo", req.OrderNo),
+			logger.Field("orderNo", orderNo),
 			logger.Field("status", orderInfo.Status),
 		)
 		if orderInfo.Status == 3 {
 			// Resume a restoration lost between the close commit and the
 			// inventory transaction; RestoreInventoryOnce no-ops when the
 			// order never reserved or already restored.
-			return s.restoreReservedInventory(ctx, orderInfo)
+			return false, s.restoreReservedInventory(ctx, orderInfo)
 		}
-		return nil
+		return false, nil
 	}
-	settled, err := s.settleOrCancelGatewayOrder(ctx, orderInfo, userInitiated)
+	settled, err := s.settleOrCancelGatewayOrder(ctx, orderInfo, actor.explicit())
 	if err != nil {
-		return err
+		return false, err
 	}
 	if settled {
-		return nil
+		return false, nil
 	}
 
 	var closed bool
@@ -84,7 +128,7 @@ func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
 			// Checkout persists its payment expectation before creating an
 			// invoice. Serialize this recheck with that write so a "checkout
 			// never started" snapshot cannot close an in-flight invoice.
-			current, err := txStore.Order().FindOneByOrderNoForUpdate(ctx, req.OrderNo)
+			current, err := txStore.Order().FindOneByOrderNoForUpdate(ctx, orderNo)
 			if err != nil {
 				return err
 			}
@@ -99,11 +143,11 @@ func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
 		// Only the still-pending order may be closed.  A payment callback can
 		// race this task, so an unconditional status write would otherwise turn
 		// a paid order back into a closed order.
-		closed, err = txStore.Order().UpdateOrderStatusFrom(ctx, req.OrderNo, 1, 3)
+		closed, err = txStore.Order().UpdateOrderStatusFrom(ctx, orderNo, 1, 3)
 		if err != nil {
 			log.Errorw("[CloseOrder] Update order status failed",
 				logger.Field("error", err.Error()),
-				logger.Field("orderNo", req.OrderNo),
+				logger.Field("orderNo", orderNo),
 			)
 			return err
 		}
@@ -171,15 +215,21 @@ func (s *Service) Close(ctx context.Context, req *dto.CloseOrderRequest) error {
 	})
 	if err != nil {
 		logger.Errorf("[CloseOrder] Transaction failed: %v", err.Error())
-		return err
+		return false, err
 	}
 	if !closed {
-		return nil
+		return false, nil
+	}
+	if actor.kind == closeByAdmin {
+		log.Infow("[CloseOrder] Administrator closed pending order",
+			logger.Field("orderNo", orderNo),
+			logger.Field("adminId", actor.userID),
+		)
 	}
 	// The reserved plan inventory returns in its own subscription-domain
 	// transaction (ADR-001 step 2). A crash before this point is resumed by
 	// the retried close task via the status==3 branch above.
-	return s.restoreReservedInventory(ctx, orderInfo)
+	return true, s.restoreReservedInventory(ctx, orderInfo)
 }
 
 // restoreReservedInventory returns the closed order's reserved inventory
@@ -204,16 +254,16 @@ func (s *Service) restoreReservedInventory(ctx context.Context, orderInfo *order
 
 // settleOrCancelGatewayOrder ensures that closing locally cannot leave an
 // active provider checkout able to charge the user after stock and coupons
-// have been released. userInitiated selects the legacy owner-cancellation
+// have been released. explicit selects the owner/administrator cancellation
 // policy for EPay/Alipay; Cryptomus requires confirmation for every caller.
-func (s *Service) settleOrCancelGatewayOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
+func (s *Service) settleOrCancelGatewayOrder(ctx context.Context, orderInfo *order.Order, explicit bool) (bool, error) {
 	switch payment2.ParsePlatform(orderInfo.Method) {
 	case payment2.Stripe:
 		return s.settleOrCancelStripeOrder(ctx, orderInfo)
 	case payment2.EPay:
-		return s.settleEPayOrder(ctx, orderInfo, userInitiated)
+		return s.settleEPayOrder(ctx, orderInfo, explicit)
 	case payment2.AlipayF2F:
-		return s.settleAlipayOrder(ctx, orderInfo, userInitiated)
+		return s.settleAlipayOrder(ctx, orderInfo, explicit)
 	case payment2.Cryptomus:
 		return s.settleCryptomusOrder(ctx, orderInfo)
 	default:
@@ -333,7 +383,7 @@ func (s *Service) settleCryptomusOrder(ctx context.Context, orderInfo *order.Ord
 // a lost payment notification would otherwise void an order the customer
 // already paid for — and a scanned-but-unpaid trade is closed at the gateway
 // first so its QR code cannot collect money afterwards.
-func (s *Service) settleAlipayOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
+func (s *Service) settleAlipayOrder(ctx context.Context, orderInfo *order.Order, explicit bool) (bool, error) {
 	if orderInfo.PaymentCurrency == "" {
 		return false, nil // checkout was never started; safe to close.
 	}
@@ -360,8 +410,8 @@ func (s *Service) settleAlipayOrder(ctx context.Context, orderInfo *order.Order,
 		return false, nil // the QR code was never scanned; no money was collected.
 	}
 	if err != nil {
-		if userInitiated {
-			logger.WithContext(ctx).Infow("[CloseOrder] user-requested close of Alipay order without gateway confirmation",
+		if explicit {
+			logger.WithContext(ctx).Infow("[CloseOrder] explicit close of Alipay order without gateway confirmation",
 				logger.Field("orderNo", orderInfo.OrderNo),
 				logger.Field("queryError", err.Error()),
 			)
@@ -388,8 +438,8 @@ func (s *Service) settleAlipayOrder(ctx context.Context, orderInfo *order.Order,
 	if err == nil && trade.Status.Paid() {
 		return s.settleQueriedAlipayTrade(ctx, orderInfo, trade)
 	}
-	if userInitiated {
-		return false, nil // the owner explicitly forfeits the unconfirmed trade.
+	if explicit {
+		return false, nil // the owner or administrator forfeits the unconfirmed trade.
 	}
 	return false, fmt.Errorf("cannot safely expire Alipay order %s: gateway close failed: %v: %w", orderInfo.OrderNo, closeErr, ErrGatewayUnconfirmed)
 }
@@ -407,15 +457,17 @@ func (s *Service) settleQueriedAlipayTrade(ctx context.Context, orderInfo *order
 	return true, nil
 }
 
-// EPay-compatible gateways have no standard cancellation API. Once a payment
-// URL has been issued, retaining the pending reservation is safer than closing
-// locally and accepting a later customer charge with no fulfillment. Gateways
-// with an order-query endpoint are reconciled here; unsupported or unavailable
-// gateways remain pending for retry/manual resolution instead of losing funds.
-// A user-initiated cancellation is the exception: the owner explicitly gives
-// up the order, so absent any evidence of payment the close proceeds. A late
-// callback on the closed order is still rejected and leaves an audit trail.
-func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order, userInitiated bool) (bool, error) {
+// EPay-compatible gateways have no standard cancellation API, and a late
+// callback on a closed order is rejected rather than reopened or refunded.
+// Gateways with an order-query endpoint are reconciled here: a paid order is
+// settled, and an order the gateway explicitly lists as awaiting payment
+// closes once it is epayUnpaidCloseAge old. Any other answer — a failed,
+// unsupported or unavailable query, or a status that is neither paid nor
+// awaiting payment — leaves the payment state unknown, so the order stays
+// pending for retry or manual resolution instead of losing funds. An explicit
+// cancellation by the owner or an administrator is the exception: absent any
+// evidence of payment the close proceeds.
+func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order, explicit bool) (bool, error) {
 	if orderInfo.PaymentCurrency == "" {
 		return false, nil // checkout was never started; safe to close.
 	}
@@ -429,8 +481,8 @@ func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order, u
 	}
 	result, err := epay.NewClient(config.Pid, config.Url, config.Key, config.Type).QueryOrder(orderInfo.OrderNo)
 	if err != nil {
-		if userInitiated {
-			logger.WithContext(ctx).Infow("[CloseOrder] user-requested close of EPay order without gateway confirmation",
+		if explicit {
+			logger.WithContext(ctx).Infow("[CloseOrder] explicit close of EPay order without gateway confirmation",
 				logger.Field("orderNo", orderInfo.OrderNo),
 				logger.Field("queryError", err.Error()),
 			)
@@ -439,10 +491,16 @@ func (s *Service) settleEPayOrder(ctx context.Context, orderInfo *order.Order, u
 		return false, fmt.Errorf("cannot safely expire EPay order %s: %v: %w", orderInfo.OrderNo, err, ErrGatewayUnconfirmed)
 	}
 	if !result.Paid {
-		if userInitiated {
+		if explicit {
 			return false, nil
 		}
-		return false, fmt.Errorf("cannot safely expire unpaid EPay order %s; gateway does not provide cancellation: %w", orderInfo.OrderNo, ErrGatewayUnconfirmed)
+		if !result.Unpaid {
+			return false, fmt.Errorf("cannot safely expire EPay order %s: gateway reports it neither paid nor awaiting payment: %w", orderInfo.OrderNo, ErrGatewayUnconfirmed)
+		}
+		if time.Since(orderInfo.CreatedAt) < epayUnpaidCloseAge {
+			return false, fmt.Errorf("unpaid EPay order %s stays pending until it is %s old: %w", orderInfo.OrderNo, epayUnpaidCloseAge, ErrGatewayUnconfirmed)
+		}
+		return false, nil // the gateway confirms no payment after the extended window.
 	}
 	if result.StatusOnly {
 		return false, fmt.Errorf("cannot safely reconcile paid EPay order %s: gateway query has no transaction details", orderInfo.OrderNo)

@@ -3,6 +3,7 @@ package quotatask
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,13 +39,35 @@ type quotaLogRepo struct{ repository.LogRepo }
 
 func (quotaLogRepo) Insert(context.Context, *logEntity.SystemLog) error { return nil }
 
-type failingSubscriptionRepo struct {
+// quotaSubscriptionRepo holds one stored row: the grant re-reads it under
+// lock and writes back the named columns.
+type quotaSubscriptionRepo struct {
 	repository.UserSubscriptionRepo
-	err error
+	row     *usersub.Subscribe
+	err     error
+	columns []string
 }
 
-func (r *failingSubscriptionRepo) UpdateSubscribe(_ context.Context, _ *usersub.Subscribe, _ ...*gorm.DB) error {
-	return r.err
+func newQuotaSubscriptionRepo(row usersub.Subscribe) *quotaSubscriptionRepo {
+	return &quotaSubscriptionRepo{row: &row}
+}
+
+func (r *quotaSubscriptionRepo) FindOneSubscribeForUpdate(_ context.Context, id int64) (*usersub.Subscribe, error) {
+	if r.row == nil || r.row.Id != id {
+		return nil, gorm.ErrRecordNotFound
+	}
+	row := *r.row
+	return &row, nil
+}
+
+func (r *quotaSubscriptionRepo) UpdateSubscribeColumns(_ context.Context, data *usersub.Subscribe, columns ...string) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.columns = append(r.columns, columns...)
+	row := *data
+	r.row = &row
+	return nil
 }
 
 type quotaInbox struct {
@@ -90,11 +113,12 @@ func (r *quotaInbox) Insert(context.Context, string, string, string) error {
 
 func TestGrantSubscriptionDoesNotMarkInboxAfterUpdateFailure(t *testing.T) {
 	wantErr := errors.New("write failed")
-	users := &failingSubscriptionRepo{err: wantErr}
+	sub := &usersub.Subscribe{Id: 9, ExpireTime: time.Now().Add(time.Hour)}
+	users := newQuotaSubscriptionRepo(*sub)
+	users.err = wantErr
 	marks := &quotaInbox{}
 	store := &quotaFailureStore{subscription: &quotaSubscriptionStore{users: users, inbox: marks}}
 	logic := &QuotaTaskLogic{deps: Deps{Store: store}}
-	sub := &usersub.Subscribe{Id: 9, ExpireTime: time.Now().Add(time.Hour)}
 
 	err := logic.grantSubscription(context.Background(), 7, sub, task.QuotaContent{Days: 1}, time.Now())
 	if err == nil || marks.inserts != 0 {
@@ -103,36 +127,43 @@ func TestGrantSubscriptionDoesNotMarkInboxAfterUpdateFailure(t *testing.T) {
 }
 
 func TestGrantSubscriptionReactivatesTrafficFinishedSubscription(t *testing.T) {
-	users := &failingSubscriptionRepo{}
-	marks := &quotaInbox{}
-	store := &quotaFailureStore{subscription: &quotaSubscriptionStore{users: users, inbox: marks}}
-	logic := &QuotaTaskLogic{deps: Deps{Store: store}}
 	finishedAt := time.Now()
 	sub := &usersub.Subscribe{
 		Id: 9, Status: usersub.SubscribeStatusFinished, FinishedAt: &finishedAt,
 		Download: 10, Upload: 20,
 	}
+	users := newQuotaSubscriptionRepo(*sub)
+	marks := &quotaInbox{}
+	store := &quotaFailureStore{subscription: &quotaSubscriptionStore{users: users, inbox: marks}}
+	logic := &QuotaTaskLogic{deps: Deps{Store: store}}
 
 	if err := logic.grantSubscription(context.Background(), 7, sub, task.QuotaContent{ResetTraffic: true}, time.Now()); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
-	if sub.Status != usersub.SubscribeStatusActive || sub.FinishedAt != nil || sub.Download != 0 || sub.Upload != 0 || marks.inserts != 1 {
-		t.Fatalf("reset quota did not reactivate subscription atomically: sub=%+v inserts=%d", sub, marks.inserts)
+	stored := users.row
+	if stored.Status != usersub.SubscribeStatusActive || stored.FinishedAt != nil || stored.Download != 0 || stored.Upload != 0 || marks.inserts != 1 {
+		t.Fatalf("reset quota did not reactivate subscription atomically: row=%+v inserts=%d", stored, marks.inserts)
+	}
+	if fmt.Sprint(users.columns) != "[download upload status finished_at]" {
+		t.Fatalf("reset quota wrote columns %v", users.columns)
+	}
+	if *sub != *stored {
+		t.Fatalf("caller copy was not refreshed: sub=%+v row=%+v", sub, stored)
 	}
 }
 
 func TestGrantSubscriptionPreservesNoLimitExpiry(t *testing.T) {
-	users := &failingSubscriptionRepo{}
+	sub := &usersub.Subscribe{Id: 9, Status: usersub.SubscribeStatusActive, ExpireTime: time.UnixMilli(0)}
+	users := newQuotaSubscriptionRepo(*sub)
 	marks := &quotaInbox{}
 	store := &quotaFailureStore{subscription: &quotaSubscriptionStore{users: users, inbox: marks}}
 	logic := &QuotaTaskLogic{deps: Deps{Store: store}}
-	sub := &usersub.Subscribe{Id: 9, Status: usersub.SubscribeStatusActive, ExpireTime: time.UnixMilli(0)}
 
 	if err := logic.grantSubscription(context.Background(), 7, sub, task.QuotaContent{Days: 30}, time.Now()); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
-	if sub.ExpireTime.UnixMilli() != 0 || sub.Status != usersub.SubscribeStatusActive || marks.inserts != 1 {
-		t.Fatalf("NoLimit subscription was downgraded: sub=%+v inserts=%d", sub, marks.inserts)
+	if stored := users.row; stored.ExpireTime.UnixMilli() != 0 || stored.Status != usersub.SubscribeStatusActive || len(users.columns) != 0 || marks.inserts != 1 {
+		t.Fatalf("NoLimit subscription was downgraded: row=%+v columns=%v inserts=%d", stored, users.columns, marks.inserts)
 	}
 }
 

@@ -245,6 +245,19 @@ func TestCloseCryptomusRequiresMatchingInvoiceBeforeCancellation(t *testing.T) {
 	}
 }
 
+// A Cryptomus invoice cannot be cancelled, so an administrator's close waits
+// for the gateway to confirm that no money was collected, like every caller.
+func TestCloseByAdminKeepsCryptomusConfirmationRule(t *testing.T) {
+	store, svc, queue := cryptomusCloseFixture(t, func() (int, string, error) {
+		return 200, cryptomusInvoiceBody("check", false, "0.00"), nil
+	})
+	closed, err := svc.CloseByAdmin(context.Background(), "cryptomus-order", 99)
+	if closed || !errors.Is(err, ErrGatewayUnconfirmed) || store.orders.order.Status != 1 || len(queue.activations) != 0 {
+		t.Fatalf("CloseByAdmin = (%t, %v), order %+v; want the order kept pending", closed, err, store.orders.order)
+	}
+	assertCryptomusReservationUnchanged(t, store)
+}
+
 func TestCloseCryptomusCancelledUnpaidInvoiceReleasesReservation(t *testing.T) {
 	store, svc, _ := cryptomusCloseFixture(t, func() (int, string, error) {
 		return 200, cryptomusInvoiceBody("cancel", true, "0.00000000"), nil

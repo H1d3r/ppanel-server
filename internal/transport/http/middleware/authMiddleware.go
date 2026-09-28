@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/perfect-panel/server/internal/auth/devicesession"
 	token2 "github.com/perfect-panel/server/internal/auth/token"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/repository"
@@ -80,23 +81,30 @@ func AuthenticateRequest(ctx context.Context, deps AuthDeps, token string, path 
 		return ctx, errors.Wrapf(xerr.NewErrCode(xerr.ErrorTokenExpire), "Token Invalid")
 	}
 
-	loginType := ""
-	if claims["LoginType"] != nil {
-		loginType = claims["LoginType"].(string)
+	// Other tokens are signed with the same secret (order event tickets, for
+	// one), so a verified token is not necessarily a session: every claim is
+	// checked before use.
+	loginType, _ := claims["LoginType"].(string)
+	rawUserID, ok := claims["UserId"].(float64)
+	sessionId, hasSession := claims["SessionId"].(string)
+	if !ok || !hasSession || sessionId == "" {
+		return ctx, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
-
-	userId := int64(claims["UserId"].(float64))
-	sessionId := claims["SessionId"].(string)
+	userId := int64(rawUserID)
 	sessionIdCacheKey := fmt.Sprintf("%v:%v", config.SessionIdKey, sessionId)
-	value, err := deps.Redis.Get(ctx, sessionIdCacheKey).Result()
+	values, err := deps.Redis.MGet(ctx, sessionIdCacheKey, usersession.Key(userId)).Result()
 	if err != nil {
 		logger.WithContext(ctx).Debug("[AuthMiddleware] Redis Get", logger.Field("error", err.Error()), logger.Field("sessionId", sessionId))
 		return ctx, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 
-	if value != fmt.Sprintf("%v", userId) {
+	if value, _ := values[0].(string); value != fmt.Sprintf("%v", userId) {
 		logger.WithContext(ctx).Debug("[AuthMiddleware] Invalid Access", logger.Field("userId", userId), logger.Field("sessionId", sessionId))
 		return ctx, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+	}
+	epoch, _ := values[1].(string)
+	if err := usersession.Check(claims, epoch); err != nil {
+		return ctx, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "session revoked")
 	}
 	deviceID, epoch, err := devicesession.Binding(claims)
 	if err != nil {

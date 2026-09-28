@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -50,6 +51,11 @@ func (l *SendSmsCodeLogic) SendSmsCode(req *dto.SendSmsCodeRequest) (resp *dto.S
 		}
 	} else if err := l.deps.Policy.EnsureMethodEnabled(l.ctx, identifier.Mobile); err != nil {
 		return nil, err
+	}
+	// Each code costs the operator money; outside the configured countries a
+	// script could pump premium-rate numbers.
+	if l.deps.Config.WhitelistEnabled && !areaCodeAllowed(req.TelephoneAreaCode, l.deps.Config.Whitelist) {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.TelephoneError), "area code %q is not allowed", req.TelephoneAreaCode)
 	}
 	phoneNumber, err := identifier.FormatToE164(req.TelephoneAreaCode, req.Telephone)
 	if err != nil {
@@ -128,4 +134,16 @@ func (l *SendSmsCodeLogic) SendSmsCode(req *dto.SendSmsCodeRequest) (resp *dto.S
 	return &dto.SendCodeResponse{
 		Status: true,
 	}, nil
+}
+
+// areaCodeAllowed reports whether the area code is on the whitelist; either
+// side may carry a leading plus.
+func areaCodeAllowed(areaCode string, whitelist []string) bool {
+	areaCode = strings.TrimPrefix(strings.TrimSpace(areaCode), "+")
+	for _, allowed := range whitelist {
+		if strings.TrimPrefix(strings.TrimSpace(allowed), "+") == areaCode {
+			return true
+		}
+	}
+	return false
 }

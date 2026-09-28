@@ -39,8 +39,7 @@ func (l *UpdateUserRulesLogic) UpdateUserRules(req *dto.UpdateUserRulesRequest) 
 			l.Logger.Errorf("UpdateUserRulesLogic json marshal rules error: %v", err)
 			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "json marshal rules failed: %v", err.Error())
 		}
-		u.Rules = string(bytes)
-		err = l.deps.Users.Update(l.ctx, u)
+		err = l.deps.Users.UpdateColumns(l.ctx, u.Id, map[string]interface{}{"rules": string(bytes)})
 		if err != nil {
 			l.Logger.Errorf("UpdateUserRulesLogic UpdateUserRules error: %v", err)
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update user rules failed: %v", err.Error())

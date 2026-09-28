@@ -100,11 +100,12 @@ func (m *documentRepo) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
-// QueryDocumentDetail queries the details of a document.
+// QueryDocumentDetail queries the details of a document for administrators,
+// hidden ones included. Document has no associations to preload.
 func (m *documentRepo) QueryDocumentDetail(ctx context.Context, id int64) (*document.Document, error) {
 	var data document.Document
 	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
-		return conn.Model(&document.Document{}).Preload("Group").Where("id = ?", id).Find(v).Error
+		return conn.Model(&document.Document{}).Where("id = ?", id).Find(v).Error
 	})
 	return &data, err
 }

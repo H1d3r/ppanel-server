@@ -116,6 +116,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 	}
 
 	var coupon int64 = 0
+	var couponUserLimit int64
 	// Calculate the coupon deduction
 	if req.Coupon != "" {
 		couponInfo, err := s.deps.Coupons.FindOneByCode(ctx, req.Coupon)
@@ -143,6 +144,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		if couponInfo.UserLimit > 0 && count >= couponInfo.UserLimit {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon limit exceeded")
 		}
+		couponUserLimit = couponInfo.UserLimit
 		coupon = calculateCoupon(amount, couponInfo)
 	}
 	// Calculate the handling fee
@@ -204,6 +206,9 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		// orders cannot spend the same balance.
 		lockedUser, e := txStore.Wallet().FindOneForUpdate(ctx, u.Id)
 		if e != nil {
+			return e
+		}
+		if e := ensureCouponUserLimit(ctx, txStore.Order(), u.Id, orderInfo.Coupon, couponUserLimit); e != nil {
 			return e
 		}
 

@@ -3,6 +3,7 @@ package serverapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"uuid"
@@ -15,6 +16,8 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/xerr"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 type GetServerUserListLogic struct {
@@ -40,13 +43,21 @@ func (l *GetServerUserListLogic) ResponseMeta() ResponseMeta {
 	return l.response
 }
 
+// placeholderServerUserID is the id of the stand-in user an empty list
+// carries. It is also a valid subscription id.
+const placeholderServerUserID int64 = 1
+
 // The placeholder is generated only while rebuilding an empty user list.
 // Cache hits reuse the serialized UUID and ETag until the list expires/changes.
 func placeholderServerUser() dto.ServerUser {
 	return dto.ServerUser{
-		Id:   1,
+		Id:   placeholderServerUserID,
 		UUID: uuid.NewV7().String(),
 	}
+}
+
+func serverUserListCacheKey(serverID int64, protocol string) string {
+	return fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, serverID, protocol)
 }
 
 func (l *GetServerUserListLogic) queryMatchedSubscribes(nodeIds []int64, nodeTags []string) ([]*subscribe.Subscribe, error) {
@@ -54,7 +65,7 @@ func (l *GetServerUserListLogic) queryMatchedSubscribes(nodeIds []int64, nodeTag
 }
 
 func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListRequest) (resp *dto.GetServerUserListResponse, err error) {
-	cacheKey := fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, req.ServerId, req.Protocol)
+	cacheKey := serverUserListCacheKey(req.ServerId, req.Protocol)
 	cache, err := l.deps.Redis.Get(l.ctx, cacheKey).Result()
 	if cache != "" {
 		etag := httpx.GenerateETag([]byte(cache))
@@ -71,18 +82,62 @@ func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListReq
 		}
 		return resp, nil
 	}
-	generation, err := l.deps.Store.Node().ServerCacheGeneration(l.ctx, req.ServerId)
+	list, err := l.rebuildUserList(req.ServerId, req.Protocol)
 	if err != nil {
 		return nil, err
 	}
-	server, err := l.deps.Store.Node().FindOneServer(l.ctx, req.ServerId)
-	if err != nil {
-		return nil, err
+	etag := httpx.GenerateETag(list.payload)
+	l.response.SetHeader("ETag", etag)
+	//  Check If-None-Match header
+	if match := l.request.IfNoneMatch; match == etag {
+		return nil, xerr.StatusNotModified
 	}
+	return list.resp, nil
+}
 
+// userList is a rebuilt node user list with its cached serialization.
+type userList struct {
+	resp    *dto.GetServerUserListResponse
+	payload []byte
+	// served is false when no subscription is served and the list only
+	// carries the placeholder user.
+	served bool
+}
+
+// rebuildUserList resolves the server protocol's user list from the database
+// and caches it for the next reader.
+func (l *GetServerUserListLogic) rebuildUserList(serverID int64, protocol string) (*userList, error) {
+	generation, err := l.deps.Store.Node().ServerCacheGeneration(l.ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	server, err := l.deps.Store.Node().FindOneServer(l.ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	users, err := l.servedUsers(server, protocol)
+	if err != nil {
+		return nil, err
+	}
+	list := &userList{served: len(users) > 0}
+	if !list.served {
+		users = []dto.ServerUser{placeholderServerUser()}
+	}
+	list.resp = &dto.GetServerUserListResponse{Users: users}
+	list.payload, _ = json.Marshal(list.resp)
+	if err := l.deps.Store.Node().SetServerCache(l.ctx, serverID, serverUserListCacheKey(serverID, protocol), string(list.payload), generation); err != nil {
+		l.Errorw("[ServerUserListCacheKey] cache set error", logger.Field("error", err.Error()))
+	}
+	return list, nil
+}
+
+// servedUsers resolves the users the server serves over the protocol: the
+// servable subscriptions of the plans scoped to its nodes, owned by enabled
+// accounts.
+func (l *GetServerUserListLogic) servedUsers(server *node.Server, protocol string) ([]dto.ServerUser, error) {
 	nodes, err := l.deps.Store.Node().ListNodes(l.ctx, &node.FilterNodeParams{
 		ServerId: []int64{server.Id},
-		Protocol: req.Protocol,
+		Protocol: protocol,
 	})
 	if err != nil {
 		l.Errorw("FilterNodeList error", logger.Field("error", err.Error()))
@@ -103,10 +158,7 @@ func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListReq
 		return nil, err
 	}
 	if len(subs) == 0 {
-		resp = &dto.GetServerUserListResponse{
-			Users: []dto.ServerUser{placeholderServerUser()},
-		}
-		return l.storeUserListResponse(req.ServerId, generation, cacheKey, resp)
+		return nil, nil
 	}
 	type candidate struct {
 		userSub *usersub.Subscribe
@@ -153,25 +205,59 @@ func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListReq
 			SpeedLimit: item.plan.SpeedLimit, DeviceLimit: item.plan.DeviceLimit,
 		})
 	}
-	if len(users) == 0 {
-		users = append(users, placeholderServerUser())
-	}
-	resp = &dto.GetServerUserListResponse{
-		Users: users,
-	}
-	return l.storeUserListResponse(req.ServerId, generation, cacheKey, resp)
+	return users, nil
 }
 
-func (l *GetServerUserListLogic) storeUserListResponse(serverID, generation int64, cacheKey string, resp *dto.GetServerUserListResponse) (*dto.GetServerUserListResponse, error) {
-	val, _ := json.Marshal(resp)
-	etag := httpx.GenerateETag(val)
-	l.response.SetHeader("ETag", etag)
-	if err := l.deps.Store.Node().SetServerCache(l.ctx, serverID, cacheKey, string(val), generation); err != nil {
-		l.Errorw("[ServerUserListCacheKey] cache set error", logger.Field("error", err.Error()))
+// servedSubscriptionIDs returns the ids of the subscriptions the server
+// serves over the protocol: the users GET /v1/server/user hands the node,
+// read from that endpoint's cache. A miss rebuilds and caches the list as the
+// endpoint does, so checking a traffic report costs no per-entry lookups.
+func (l *GetServerUserListLogic) servedSubscriptionIDs(serverID int64, protocol string) (map[int64]struct{}, error) {
+	var users []dto.ServerUser
+	cached, err := l.deps.Redis.Get(l.ctx, serverUserListCacheKey(serverID, protocol)).Result()
+	switch {
+	case err != nil && !errors.Is(err, redis.Nil):
+		return nil, err
+	case cached == "":
+		list, err := l.rebuildUserList(serverID, protocol)
+		if err != nil {
+			return nil, err
+		}
+		if list.served {
+			users = list.resp.Users
+		}
+	default:
+		var resp dto.GetServerUserListResponse
+		if err := json.Unmarshal([]byte(cached), &resp); err != nil {
+			return nil, err
+		}
+		if users, err = l.withoutPlaceholder(resp.Users); err != nil {
+			return nil, err
+		}
 	}
-	//  Check If-None-Match header
-	if match := l.request.IfNoneMatch; match == etag {
-		return nil, xerr.StatusNotModified
+	ids := make(map[int64]struct{}, len(users))
+	for _, user := range users {
+		ids[user.Id] = struct{}{}
 	}
-	return resp, nil
+	return ids, nil
+}
+
+// withoutPlaceholder drops the stand-in user of a cached empty list. Its id
+// is a valid subscription id, so a lone entry with that id is kept only when
+// its UUID is that subscription's UUID.
+func (l *GetServerUserListLogic) withoutPlaceholder(users []dto.ServerUser) ([]dto.ServerUser, error) {
+	if len(users) != 1 || users[0].Id != placeholderServerUserID {
+		return users, nil
+	}
+	sub, err := l.deps.Store.UserSubscription().FindOneSubscribe(l.ctx, placeholderServerUserID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sub.UUID != users[0].UUID {
+		return nil, nil
+	}
+	return users, nil
 }

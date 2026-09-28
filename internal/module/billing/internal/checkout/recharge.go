@@ -47,6 +47,12 @@ func (s *Service) Recharge(ctx context.Context, req *dto.RechargeOrderRequest) (
 	if err := ensurePaymentAvailable(payment); err != nil {
 		return nil, err
 	}
+	// A top-up must bring money in from outside the wallet. The balance
+	// checkout spends gift credit first, so a balance-paid recharge would turn
+	// gift credit into regular balance.
+	if isBalancePayment(payment) {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance cannot pay for a recharge")
+	}
 	// Calculate the handling fee
 	feeAmount := calculateFee(req.Amount, payment)
 	totalAmount := req.Amount + feeAmount

@@ -12,10 +12,12 @@ import (
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	order2 "github.com/perfect-panel/server/internal/module/billing/entity/order"
+	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -182,6 +184,40 @@ func TestBalancePaymentDoesNotDebitNonPendingOrder(t *testing.T) {
 	}
 	if len(store.logs.logs) != 0 {
 		t.Fatalf("unexpected logs: %d", len(store.logs.logs))
+	}
+}
+
+type rechargeCheckoutStore struct {
+	notifyCheckoutStore
+	debited bool
+}
+
+func (s *rechargeCheckoutStore) FindUser(_ context.Context, id int64) (*userEntity.User, error) {
+	return &userEntity.User{Id: id}, nil
+}
+
+func (s *rechargeCheckoutStore) InTx(context.Context, func(CheckoutTransaction) error) error {
+	s.debited = true
+	return stderrors.New("balance debit attempted")
+}
+
+// Orders created before recharge rejected the balance method, and orders an
+// administrator created, must not be paid from the wallet either.
+func TestBalanceCheckoutRejectsRechargeOrder(t *testing.T) {
+	enabled := true
+	store := &rechargeCheckoutStore{notifyCheckoutStore: notifyCheckoutStore{
+		order:   &order2.Order{OrderNo: "recharge-1", UserId: 10, Type: 4, Status: 1, Amount: 1000, PaymentId: 1, Method: "balance"},
+		payment: &paymentEntity.Payment{Id: 1, Platform: "balance", Enable: &enabled},
+	}}
+	ctx := context.WithValue(context.Background(), requestctx.CtxKeyUser, &userEntity.User{Id: 10})
+	logic := NewPurchaseCheckoutLogic(ctx, CheckoutDependencies{Store: store})
+
+	_, err := logic.PurchaseCheckout(&dto.CheckoutOrderRequest{OrderNo: "recharge-1"})
+	if errCode(err) != xerr.PaymentMethodNotFound {
+		t.Fatalf("PurchaseCheckout error = %v, want PaymentMethodNotFound", err)
+	}
+	if store.debited {
+		t.Fatal("the wallet was debited for a recharge order")
 	}
 }
 

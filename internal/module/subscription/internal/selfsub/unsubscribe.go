@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/infra/requestctx"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
@@ -191,10 +192,13 @@ func (l *UnsubscribeLogic) settleRefundOnce(userID, subID int64, subKey string) 
 				return err
 			}
 			// Query the original order information to determine refund strategy
-			orderInfo, err := store.Order().FindOne(l.ctx, orderID)
+			orderInfo, err := store.Order().FindOneDetails(l.ctx, orderID)
 			if err != nil {
 				return err
 			}
+			// A refund never exceeds what was paid, whatever amount an older
+			// cancellation marker recorded.
+			remainingAmount = min(remainingAmount, refundBasis(orderInfo))
 			// Calculate refund distribution based on payment method and gift amount priority
 			var balance, gift int64
 			if orderInfo.Method == "balance" {
@@ -266,8 +270,66 @@ func (l *UnsubscribeLogic) settleRefundOnce(userID, subID int64, subKey string) 
 			if err := store.Wallet().UpdateBalanceFields(l.ctx, lockedUser); err != nil {
 				return err
 			}
+			if err := l.reverseCommission(store, userID, orderInfo, remainingAmount); err != nil {
+				return err
+			}
 		}
 		return store.Inbox().Insert(l.ctx, unsubscribeRefundConsumer, subKey, "")
+	})
+}
+
+// reverseCommission takes back the referral commission the refunded orders
+// earned, in proportion to the refund, so recycled balance cannot farm
+// commission through buy-and-refund loops. A referrer who already withdrew it
+// goes negative, which blocks withdrawals until it is earned back.
+func (l *UnsubscribeLogic) reverseCommission(store repository.BillingStore, buyerID int64, details *order.Details, refund int64) error {
+	commission := details.Commission
+	for _, subOrder := range details.SubOrders {
+		if isPaidRenewal(subOrder) {
+			commission += subOrder.Commission
+		}
+	}
+	basis := refundBasis(details)
+	if commission <= 0 || refund <= 0 || basis <= 0 {
+		return nil
+	}
+	reversed := commission
+	if refund < basis {
+		reversed = int64(float64(commission) * float64(refund) / float64(basis))
+	}
+	if reversed <= 0 {
+		return nil
+	}
+	buyer, err := l.deps.Users.FindOne(l.ctx, buyerID)
+	if err != nil {
+		return err
+	}
+	if buyer.RefererId == 0 {
+		return nil
+	}
+	referer, err := store.Wallet().FindOneForUpdate(l.ctx, buyer.RefererId)
+	if err != nil {
+		return err
+	}
+	referer.Commission -= reversed
+	if err := store.Wallet().UpdateCommission(l.ctx, referer); err != nil {
+		return err
+	}
+	// Negative like withdrawals, so summed commission logs stay net.
+	content, err := (&log.Commission{
+		Type:      log.CommissionTypeRefund,
+		Amount:    -reversed,
+		OrderNo:   details.OrderNo,
+		Timestamp: timeutil.Now().UnixMilli(),
+	}).Marshal()
+	if err != nil {
+		return err
+	}
+	return store.Log().Insert(l.ctx, &log.SystemLog{
+		Type:     log.TypeCommission.Uint8(),
+		Date:     timeutil.Now().Format(time.DateOnly),
+		ObjectID: referer.UserId,
+		Content:  string(content),
 	})
 }
 

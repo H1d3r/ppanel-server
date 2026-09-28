@@ -63,7 +63,12 @@ type QueryResult struct {
 	Type       string
 	Money      string
 	Paid       bool
-	Message    string
+	// Unpaid reports that the gateway explicitly lists the order as awaiting
+	// payment (standard status 0). A result that is neither Paid nor Unpaid,
+	// such as a refunded or frozen order or an unrecognised status-only
+	// answer, leaves the payment state unknown.
+	Unpaid  bool
+	Message string
 	// StatusOnly reports that the gateway query API returned only a payment
 	// status. Callers must not treat omitted payment details as verified.
 	StatusOnly bool
@@ -77,7 +82,8 @@ type queryOrderResponse struct {
 	Type       string          `json:"type"`
 	Money      string          `json:"money"`
 	Pid        json.RawMessage `json:"pid"`
-	Status     int             `json:"status"`
+	// Status is a pointer so an omitted status is not read as 0 (unpaid).
+	Status *int `json:"status"`
 }
 
 // easyPayQueryOrderResponse is used by a non-standard EPay variant. Its
@@ -212,7 +218,8 @@ func (c *Client) queryStandardOrder(orderNo string) (*QueryResult, error) {
 		OrderNo:    response.OutTradeNo,
 		Type:       response.Type,
 		Money:      response.Money,
-		Paid:       response.Status == 1,
+		Paid:       response.Status != nil && *response.Status == 1,
+		Unpaid:     response.Status != nil && *response.Status == 0,
 		Message:    response.Msg,
 	}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/auth/password"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
@@ -41,6 +42,7 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 	// leaves the money unadjusted for the admin to retry — the same
 	// partial-failure surface the flows will have as services.
 	accessStateChanged := false
+	passwordChanged := false
 	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
 		userInfo, err := store.User().FindOneForUpdate(l.ctx, req.UserId)
 		if err != nil {
@@ -49,26 +51,29 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 		if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
 			return err
 		}
-		userInfo.Avatar = req.Avatar
-		userInfo.ReferCode = req.ReferCode
-		userInfo.RefererId = req.RefererId
-		userInfo.OnlyFirstPurchase = &req.OnlyFirstPurchase
-		userInfo.ReferralPercentage = req.ReferralPercentage
 		accessStateChanged = userInfo.Enable == nil || *userInfo.Enable != req.Enable
-		userInfo.Enable = &req.Enable
-		userInfo.IsAdmin = &req.IsAdmin
+		columns := map[string]interface{}{
+			"avatar":              req.Avatar,
+			"refer_code":          req.ReferCode,
+			"referer_id":          req.RefererId,
+			"only_first_purchase": req.OnlyFirstPurchase,
+			"referral_percentage": req.ReferralPercentage,
+			"enable":              req.Enable,
+			"is_admin":            req.IsAdmin,
+		}
 		if req.Password != "" && req.Password != "***" {
 			if userInfo.Id == 2 && isDemo {
 				return errors.Wrapf(xerr.NewErrCodeMsg(503, "Demo mode does not allow modification of the admin user password"), "UpdateUserBasicInfo failed: cannot update admin user password in demo mode")
 			}
-			userInfo.Password = password.EncodePassWord(req.Password)
-			userInfo.Algo = password.PasswordAlgoArgon2id
-			userInfo.Salt = ""
+			for column, value := range password.UserColumns(req.Password) {
+				columns[column] = value
+			}
+			passwordChanged = true
 		}
-		// The profile save skips the billing-owned money columns; the
-		// admin's wallet adjustment runs in its own billing transaction
-		// below.
-		return store.User().Update(l.ctx, userInfo)
+		// Only these profile columns are written: the billing-owned money
+		// columns go through the admin's wallet adjustment in its own
+		// billing transaction below.
+		return store.User().UpdateColumns(l.ctx, userInfo.Id, columns)
 	})
 	if err != nil {
 		l.Errorw("[UpdateUserBasicInfoLogic] Update User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
@@ -79,6 +84,14 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 	// the service plane immediately instead of waiting for the five-minute TTL.
 	if accessStateChanged {
 		clearUserAccessCaches(l.ctx, l.deps, []int64{req.UserId})
+	}
+	// An administrator sets a new password when the old one leaked; the
+	// sessions opened with it end too.
+	if passwordChanged {
+		if err := usersession.Revoke(l.ctx, l.deps.Redis, req.UserId); err != nil {
+			l.Errorw("[UpdateUserBasicInfoLogic] Revoke sessions error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
+			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Revoke user sessions error")
+		}
 	}
 
 	err = l.deps.Store.InBillingTx(l.ctx, func(store repository.BillingStore) error {

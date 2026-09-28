@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
+	"time"
 
+	"github.com/perfect-panel/server/internal/auth/challenge"
+	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -15,6 +19,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -22,18 +27,101 @@ import (
 	"gorm.io/gorm"
 )
 
+// maxPendingGuestOrders caps the unpaid guest orders one identity may hold.
+// Each pending order reserves plan inventory and a coupon use until it
+// closes, and only one of them can ever create the identity's account.
+const maxPendingGuestOrders = 3
+
+// NormalizeGuestIdentity validates the account a guest purchase creates and
+// returns its canonical auth type and identifier. Only email and mobile are
+// accepted: the paid order inserts the auth method as given and issues a
+// session, so an OAuth or device identifier would let a buyer pre-bind
+// someone else's third-party identity and take over its first sign-in.
+// Mobile numbers must carry their country calling code; they are stored in
+// E.164 like the telephone registration and login flows store them.
+func NormalizeGuestIdentity(authType, value string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(authType)) {
+	case identifier.Email:
+		email, err := identifier.ValidateEmail(value, "", false)
+		if err != nil {
+			return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid guest email: %v", err)
+		}
+		return identifier.Email, email, nil
+	case identifier.Mobile:
+		number := strings.TrimPrefix(strings.TrimSpace(value), "+")
+		if number == "" || !identifier.CheckPhone(number) {
+			return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid guest mobile number")
+		}
+		e164, err := identifier.FormatToE164("", number)
+		if err != nil {
+			return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid guest mobile number: %v", err)
+		}
+		return identifier.Mobile, e164, nil
+	default:
+		return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "unsupported guest auth type")
+	}
+}
+
+// verifyGuestHuman applies the registration Turnstile check to a guest
+// purchase before it touches any account or reservation.
+func (s *Service) verifyGuestHuman(ctx context.Context, token string) error {
+	if s.deps.Config.GuestVerification == nil {
+		return nil
+	}
+	policy := s.deps.Config.GuestVerification()
+	if !policy.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(token) == "" || strings.TrimSpace(policy.Secret) == "" {
+		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed")
+	}
+	verify := s.deps.VerifyTurnstile
+	if verify == nil {
+		verify = verifyTurnstile
+	}
+	metadata, _ := requestmeta.From(ctx)
+	ok, err := verify(ctx, policy.Secret, token, metadata.ClientIP)
+	if err != nil {
+		return errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed: %v", err)
+	}
+	if !ok {
+		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed")
+	}
+	return nil
+}
+
+func verifyTurnstile(ctx context.Context, secret, token, remoteIP string) (bool, error) {
+	return challenge.New(challenge.Config{Secret: secret, Timeout: 3 * time.Second}).Verify(ctx, token, remoteIP)
+}
+
 // Purchase creates a guest pre-order: the billing transaction reserves the
 // coupon and creates the pending order, then plan inventory is reserved in
 // its own subscription-domain transaction (ADR-001 step 2).
 func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) (*dto.PortalPurchaseResponse, error) {
 	log := logger.WithContext(ctx)
+	authType, guestIdentifier, err := NormalizeGuestIdentity(req.AuthType, req.Identifier)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.verifyGuestHuman(ctx, req.TurnstileToken); err != nil {
+		return nil, err
+	}
 	// find user auth
-	userAuth, err := s.deps.UserAuths.FindUserAuthMethodByOpenID(ctx, req.AuthType, req.Identifier)
+	userAuth, err := s.deps.UserAuths.FindUserAuthMethodByOpenID(ctx, authType, guestIdentifier)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user auth error: %v", err.Error())
 	}
-	if userAuth.UserId != 0 {
+	if userAuth != nil && userAuth.UserId != 0 {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "user already exists")
+	}
+	// The cap is best effort under concurrent requests for one identity;
+	// the Turnstile check is the rate control.
+	pending, err := s.deps.Orders.CountPendingGuestOrders(ctx, authType, guestIdentifier)
+	if err != nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count pending guest orders error: %v", err.Error())
+	}
+	if pending >= maxPendingGuestOrders {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "too many pending guest orders")
 	}
 	// find subscribe plan
 	sub, err := s.deps.Plans.FindOne(ctx, req.SubscribeId)
@@ -128,8 +216,8 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 		Status:                 1,
 		IsNew:                  true,
 		SubscribeId:            req.SubscribeId,
-		GuestAuthType:          req.AuthType,
-		GuestIdentifier:        req.Identifier,
+		GuestAuthType:          authType,
+		GuestIdentifier:        guestIdentifier,
 		GuestPasswordHash:      password.EncodePassWord(req.Password),
 		GuestInviteCode:        req.InviteCode,
 		GuestCheckoutTokenHash: order.CheckoutTokenHash(checkoutToken),

@@ -3,7 +3,6 @@ package adminuser
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -31,8 +30,12 @@ func (l *UpdateUserNotifySettingLogic) UpdateUserNotifySetting(req *dto.UpdateUs
 		l.Errorw("[UpdateUserNotifySettingLogic] Find User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Error")
 	}
-	mapping.DeepCopy(userInfo, req)
-	err = l.deps.Users.Update(l.ctx, userInfo)
+	err = l.deps.Users.UpdateColumns(l.ctx, userInfo.Id, map[string]interface{}{
+		"enable_balance_notify":   req.EnableBalanceNotify,
+		"enable_login_notify":     req.EnableLoginNotify,
+		"enable_subscribe_notify": req.EnableSubscribeNotify,
+		"enable_trade_notify":     req.EnableTradeNotify,
+	})
 	if err != nil {
 		l.Errorw("[UpdateUserNotifySettingLogic] Update User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update User Error")

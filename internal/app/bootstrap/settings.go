@@ -84,12 +84,30 @@ func Verify(svc *Dependencies) {
 
 	logger.Debug("Verify code config initialization")
 
-	var verifyCodeConfig config.VerifyCode
 	cfg, err := svc.Store.System().GetVerifyCodeConfig(context.Background())
 	if err != nil {
 		logger.Errorf("[Init Verify Config] Get Verify Code Config Error: %s", err.Error())
 		return
 	}
-	config.SystemConfigSliceReflectToStruct(cfg, &verifyCodeConfig)
-	svc.updateConfig(func(current *config.Config) { current.VerifyCode = verifyCodeConfig })
+	verifyCode := verifyCodeFromSettings(cfg)
+	svc.updateConfig(func(current *config.Config) { current.VerifyCode = verifyCode })
+}
+
+// verifyCodeSettings mirrors the stored keys, which carry a VerifyCode prefix
+// that the runtime config's field names do not; reflecting straight into
+// config.VerifyCode matched nothing and silently ignored the admin settings.
+type verifyCodeSettings struct {
+	VerifyCodeExpireTime int64
+	VerifyCodeLimit      int64
+	VerifyCodeInterval   int64
+}
+
+func verifyCodeFromSettings[T config.SystemConfigEntry](settings []T) config.VerifyCode {
+	var stored verifyCodeSettings
+	config.SystemConfigSliceReflectToStruct(settings, &stored)
+	return config.VerifyCode{
+		ExpireTime: stored.VerifyCodeExpireTime,
+		Limit:      stored.VerifyCodeLimit,
+		Interval:   stored.VerifyCodeInterval,
+	}
 }

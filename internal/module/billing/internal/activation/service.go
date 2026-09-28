@@ -188,16 +188,27 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 		return err
 	}
 	percentage := refererProfile.ReferralPercentage
-	if percentage != 0 {
-		if refererProfile.OnlyFirstPurchase != nil && *refererProfile.OnlyFirstPurchase && !orderInfo.IsNew {
+	onlyFirst := refererProfile.OnlyFirstPurchase != nil && *refererProfile.OnlyFirstPurchase
+	if percentage == 0 {
+		percentage, onlyFirst = s.deps.InvitePolicy()
+		if percentage == 0 {
 			return nil
 		}
-	} else {
-		fallbackPercentage, onlyFirst := s.deps.InvitePolicy()
-		if fallbackPercentage == 0 || (onlyFirst && !orderInfo.IsNew) {
+	}
+	if onlyFirst {
+		if !orderInfo.IsNew {
 			return nil
 		}
-		percentage = fallbackPercentage
+		// IsNew is fixed when the order is created, so every order opened
+		// before the first payment claims it. The referrer's wallet lock above
+		// serializes this check, leaving exactly one of them commissioned.
+		commissioned, err := store.Order().HasCommissionedOrder(ctx, buyerID, orderInfo.OrderNo)
+		if err != nil {
+			return err
+		}
+		if commissioned {
+			return nil
+		}
 	}
 	amount := calculateCommission(orderInfo.Amount-orderInfo.FeeAmount, percentage)
 	if amount <= 0 {
@@ -205,6 +216,10 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 	}
 	referer.Commission += amount
 	if err := store.Wallet().UpdateCommission(ctx, referer); err != nil {
+		return err
+	}
+	// The order keeps what it earned so a refund can take it back.
+	if err := store.Order().SetCommission(ctx, orderInfo.OrderNo, amount); err != nil {
 		return err
 	}
 	commissionType := log.CommissionTypePurchase

@@ -120,9 +120,24 @@ type Client struct {
 	Params         map[string]string // Additional parameters
 }
 
+// templateFuncs is sprig's text function map without the functions that
+// reach outside the template: env and expandenv read the server process
+// environment (env-based deployments keep the database and Redis
+// credentials there) and getHostByName performs DNS lookups. Templates are
+// admin-authored and their output goes to every subscriber, so none of these
+// may be reachable. The other non-hermetic helpers stay: the seeded
+// templates call now and date.
+var templateFuncs = func() template.FuncMap {
+	funcs := sprig.TxtFuncMap()
+	for _, name := range []string{"env", "expandenv", "getHostByName"} {
+		delete(funcs, name)
+	}
+	return funcs
+}()
+
 func (c *Client) Build() ([]byte, error) {
 	var buf bytes.Buffer
-	tmpl, err := template.New("client").Funcs(sprig.TxtFuncMap()).Parse(c.ClientTemplate)
+	tmpl, err := template.New("client").Funcs(templateFuncs).Parse(c.ClientTemplate)
 	if err != nil {
 		return nil, err
 	}

@@ -27,6 +27,20 @@ func (l *StatLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	// 获取统计时间范围
 	start := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, timeutil.Location())
 	end := start.Add(24 * time.Hour)
+	date := start.Format(time.DateOnly)
+
+	// The day's rows are written in one atomic batch ending with the stat row,
+	// so finding that row means the day is already recorded: a duplicate or
+	// replayed run must not insert the rows twice.
+	recorded, err := l.deps.Store.Log().FindFirstByDateType(ctx, date, log.TypeTrafficStat.Uint8())
+	if err != nil {
+		logger.Errorf("[Traffic Stat Queue] Query recorded stat failed: %v", err.Error())
+		return err
+	}
+	if recorded != nil {
+		logger.Infof("[Traffic Stat Queue] Traffic of %s already recorded, skipping", date)
+		return nil
+	}
 
 	// Historical traffic is read outside the write transaction. Once the two
 	// aggregate result sets are ready, all daily log rows are persisted with a
@@ -42,7 +56,6 @@ func (l *StatLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 		return err
 	}
 
-	date := start.Format(time.DateOnly)
 	logs := make([]*log.SystemLog, 0, len(userTraffic)+len(serverTraffic)+3)
 	userTop10 := log.UserTrafficRank{Rank: make(map[uint8]log.UserTraffic)}
 	stat := log.TrafficStat{}

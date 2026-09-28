@@ -29,8 +29,9 @@ import (
 type Service interface {
 	CreateOrder(ctx context.Context, req *dto.CreateOrderRequest) error
 	GetOrderList(ctx context.Context, req *dto.GetOrderListRequest) (*dto.GetOrderListResponse, error)
-	// UpdateOrderStatus applies the admin's Pending->Paid/Closed transition
-	// and enqueues activation for paid orders.
+	// UpdateOrderStatus applies the admin's Pending->Paid transition and
+	// enqueues activation, or closes the order through the same close flow
+	// as owner and expiry closes.
 	UpdateOrderStatus(ctx context.Context, req *dto.UpdateOrderStatusRequest) error
 
 	CreatePaymentMethod(ctx context.Context, req *dto.CreatePaymentMethodRequest) (*dto.PaymentConfig, error)
@@ -156,6 +157,7 @@ type (
 	ActivationTaskQueue = portal.ActivationQueue
 	ExchangeRateCache   = portal.ExchangeRateCache
 	PortalConfig        = portal.Config
+	GuestVerification   = portal.GuestVerification
 )
 
 // AffiliateReader and AuthMethodReader re-export the wallet subdomain's
@@ -287,7 +289,7 @@ func New(deps Deps) Service {
 	workflowDeps.Orders = deps.Orders
 	workflowDeps.Profiles = deps.UserProfiles
 	return &service{
-		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue, deps.Plans),
+		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue, deps.Plans, checkoutSvc),
 		payments:   adminpayment.NewService(deps.Payments, deps.Orders, deps.Tx, deps.Host),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders, deps.Plans),

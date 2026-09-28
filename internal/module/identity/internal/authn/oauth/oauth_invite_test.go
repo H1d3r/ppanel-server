@@ -14,12 +14,11 @@ import (
 
 type oauthInviteUserRepo struct {
 	repository.UserRepo
-	referer     *user.User
-	foundUser   *user.User
-	findErr     error
-	wantInvite  string
-	inserted    *user.User
-	updatedUser *user.User
+	referer    *user.User
+	foundUser  *user.User
+	findErr    error
+	wantInvite string
+	inserted   *user.User
 }
 
 func (r *oauthInviteUserRepo) FindOne(_ context.Context, _ int64) (*user.User, error) {
@@ -40,9 +39,7 @@ func (r *oauthInviteUserRepo) Insert(_ context.Context, data *user.User, _ ...*g
 	return nil
 }
 
-func (r *oauthInviteUserRepo) Update(_ context.Context, data *user.User, _ ...*gorm.DB) error {
-	copy := *data
-	r.updatedUser = &copy
+func (r *oauthInviteUserRepo) UpdateColumns(_ context.Context, _ int64, _ map[string]interface{}, _ ...*gorm.DB) error {
 	return nil
 }
 
@@ -121,7 +118,7 @@ func TestExistingOAuthLoginDoesNotRequireInvite(t *testing.T) {
 		Store: oauthInviteStore{
 			users: &oauthInviteUserRepo{foundUser: existing},
 			userAuth: oauthInviteUserAuthRepo{
-				found: &user.AuthMethods{UserId: existing.Id},
+				found: &user.AuthMethods{UserId: existing.Id, Verified: true},
 			},
 		},
 		Config: OAuthLoginConfig{InviteForced: true},
@@ -133,6 +130,27 @@ func TestExistingOAuthLoginDoesNotRequireInvite(t *testing.T) {
 	}
 	if found != existing {
 		t.Fatalf("found user = %#v, want existing user %#v", found, existing)
+	}
+}
+
+// A guest checkout could name someone's provider id before they ever signed
+// in. Such a binding is unverified, and proving the identity later must not
+// open the account that claimed it.
+func TestOAuthLoginRefusesUnverifiedBinding(t *testing.T) {
+	enabled := true
+	planted := &user.User{Id: 9, Enable: &enabled}
+	logic := NewOAuthLoginGetTokenLogic(context.Background(), OAuthLoginDependencies{
+		Store: oauthInviteStore{
+			users: &oauthInviteUserRepo{foundUser: planted},
+			userAuth: oauthInviteUserAuthRepo{
+				found: &user.AuthMethods{UserId: planted.Id, AuthType: OAuthGithub, AuthIdentifier: "583231"},
+			},
+		},
+	})
+
+	found, err := logic.findOrRegisterUser(OAuthGithub, "583231", "", "", "", "request-id", "192.0.2.1", "test-agent")
+	if err == nil || found != nil {
+		t.Fatalf("findOrRegisterUser() = (%#v, %v), want a refusal", found, err)
 	}
 }
 

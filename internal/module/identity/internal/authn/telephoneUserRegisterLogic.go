@@ -112,7 +112,7 @@ func (l *TelephoneUserRegisterLogic) TelephoneUserRegister(req *dto.TelephoneReg
 		// Generate ReferCode
 		userInfo.ReferCode = user.GenerateInviteCode(userInfo.Id)
 		// Update ReferCode
-		if err := store.User().Update(l.ctx, userInfo); err != nil {
+		if err := store.User().UpdateColumns(l.ctx, userInfo.Id, map[string]interface{}{"refer_code": userInfo.ReferCode}); err != nil {
 			return err
 		}
 		// Registration emits the domain event; the subscription module

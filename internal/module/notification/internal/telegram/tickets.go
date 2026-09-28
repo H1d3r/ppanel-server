@@ -48,7 +48,7 @@ func (s *TopicService) TicketReplied(m TelegramMessenger, ticketID int64, from, 
 		return err
 	}
 	label := "💻 网站回复（管理员）"
-	if from == "user" || from == "" {
+	if ticket.IsFromUser(from) {
 		label = "👤 用户回复"
 	}
 	_, err = s.PostText(m, topic, label+"：\n"+content)

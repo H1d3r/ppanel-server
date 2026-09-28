@@ -55,8 +55,8 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 	if userSubscribe.EntitlementSource != "" {
 		return nil, usersub.ErrProviderManaged
 	}
-	if userSubscribe.Status == usersub.SubscribeStatusDeducted {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "deducted subscription cannot be renewed")
+	if usersub.OnHold(userSubscribe.Status) {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "refunded or stopped subscription cannot be renewed")
 	}
 	// find subscription
 	sub, err := s.deps.Plans.FindOne(ctx, userSubscribe.SubscribeId)
@@ -89,6 +89,7 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 	}
 
 	var coupon int64 = 0
+	var couponUserLimit int64
 	if req.Coupon != "" {
 		couponInfo, err := s.deps.Coupons.FindOneByCode(ctx, req.Coupon)
 		if err != nil {
@@ -115,6 +116,7 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 		if couponInfo.UserLimit > 0 && count >= couponInfo.UserLimit {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon limit exceeded")
 		}
+		couponUserLimit = couponInfo.UserLimit
 		coupon = calculateCoupon(amount, couponInfo)
 	}
 	payment, err := s.deps.Payments.FindOne(ctx, req.Payment)
@@ -153,6 +155,9 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 	err = s.deps.Store.InBillingTx(ctx, func(txStore repository.BillingStore) error {
 		lockedUser, e := txStore.Wallet().FindOneForUpdate(ctx, u.Id)
 		if e != nil {
+			return e
+		}
+		if e := ensureCouponUserLimit(ctx, txStore.Order(), u.Id, orderInfo.Coupon, couponUserLimit); e != nil {
 			return e
 		}
 		if lockedUser.GiftAmount > 0 && orderInfo.Amount > 0 {

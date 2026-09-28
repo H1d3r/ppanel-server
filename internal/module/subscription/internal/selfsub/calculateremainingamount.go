@@ -2,6 +2,8 @@ package selfsub
 
 import (
 	"context"
+
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
 	"github.com/perfect-panel/server/pkg/logger"
@@ -10,6 +12,26 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 )
+
+// orderTypeRenewal is the billing order type of a paid renewal.
+const orderTypeRenewal = 2
+
+// refundBasis is what was paid for the subscription term: the original order
+// plus paid renewals. Traffic resets buy traffic, not time, and are not
+// refunded.
+func refundBasis(details *order.Details) int64 {
+	basis := details.Amount + details.GiftAmount
+	for _, subOrder := range details.SubOrders {
+		if isPaidRenewal(subOrder) {
+			basis += subOrder.Amount + subOrder.GiftAmount
+		}
+	}
+	return basis
+}
+
+func isPaidRenewal(o *order.Order) bool {
+	return o.Type == orderTypeRenewal && (o.Status == 2 || o.Status == 5)
+}
 
 func CalculateRemainingAmount(ctx context.Context, deps Deps, userSubscribeId int64) (int64, error) {
 	// Find User Subscribe
@@ -37,19 +59,6 @@ func CalculateRemainingAmount(ctx context.Context, deps Deps, userSubscribeId in
 		logger.WithContext(ctx).Error("[PreUnsubscribe] FindOneDetails", logger.Field("err", err.Error()), logger.Field("id", userSubscribe.OrderId))
 		return 0, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneDetails failed, id: %d", userSubscribe.OrderId)
 	}
-	// Calculate Order Quantity
-	orderQuantity := orderDetails.Quantity
-	// Calculate Order Amount
-	orderAmount := orderDetails.Amount + orderDetails.GiftAmount
-
-	if len(orderDetails.SubOrders) > 0 {
-		for _, subOrder := range orderDetails.SubOrders {
-			if subOrder.Status == 2 || subOrder.Status == 5 {
-				orderAmount += subOrder.Amount + subOrder.GiftAmount
-				orderQuantity += subOrder.Quantity
-			}
-		}
-	}
 	// Calculate Remaining Amount
 	remainingAmount, err := deduction.CalculateRemainingAmount(
 		deduction.Subscribe{
@@ -59,14 +68,10 @@ func CalculateRemainingAmount(ctx context.Context, deps Deps, userSubscribeId in
 			Download:       userSubscribe.Download,
 			Upload:         userSubscribe.Upload,
 			UnitTime:       userSubscribe.Subscribe.UnitTime,
-			UnitPrice:      userSubscribe.Subscribe.UnitPrice,
 			ResetCycle:     userSubscribe.Subscribe.ResetCycle,
 			DeductionRatio: userSubscribe.Subscribe.DeductionRatio,
 		},
-		deduction.Order{
-			Amount:   orderAmount,
-			Quantity: orderQuantity,
-		},
+		deduction.Order{Amount: refundBasis(orderDetails)},
 	)
 	if err != nil {
 		return 0, errors.Wrapf(xerr.NewErrCode(500), "CalculateRemainingAmount failed, userSubscribeId: %d, err: %v", userSubscribeId, err)

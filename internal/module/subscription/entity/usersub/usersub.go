@@ -12,6 +12,17 @@ import (
 
 var ErrProviderManaged = errors.New("subscription is managed by its payment provider")
 
+// ErrSubscriptionOnHold rejects a renewal or traffic reset that would bring
+// back a refunded or administrator-stopped subscription.
+var ErrSubscriptionOnHold = errors.New("subscription is refunded or stopped")
+
+// OnHold reports whether the subscription was refunded (Deducted) or stopped
+// by an administrator. Only an administrator may bring it back; a user
+// purchase must not.
+func OnHold(status uint8) bool {
+	return status == SubscribeStatusDeducted || status == SubscribeStatusStopped
+}
+
 // Cache key prefixes for the user-subscription cache.
 const (
 	cacheTokenPrefix = "cache:user:subscribe:token:"

@@ -2,13 +2,11 @@ package plan
 
 import (
 	"context"
-	"strconv"
 	"uuid"
 
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 
@@ -40,7 +38,7 @@ func (l *ResetAllSubscribeTokenLogic) ResetAllSubscribeToken() (resp *dto.ResetA
 			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Failed to fetch subscribe list: %v", err.Error())
 		}
 		for _, sub := range list {
-			sub.Token = usersub.TokenFromOrder(strconv.FormatInt(timeutil.Now().UnixMilli(), 10) + strconv.FormatInt(sub.Id, 10))
+			sub.Token = usersub.NewToken()
 			sub.UUID = uuid.NewV7().String()
 			if updateErr := store.UserSubscription().UpdateSubscribe(l.ctx, sub); updateErr != nil {
 				logger.Errorf("[ResetAllSubscribeToken] Failed to update subscribe token for ID %d: %v", sub.Id, updateErr.Error())

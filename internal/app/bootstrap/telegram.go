@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,30 @@ func swapTelegramPoller(start func(ctx context.Context)) {
 		ctx, cancel := context.WithCancel(context.Background())
 		telegramPoll.cancel = cancel
 		go start(ctx)
+	}
+}
+
+// telegramUpdateHandler handles the updates the long-polling loop receives.
+// The bot library calls handlers without recover, so a panic in any update
+// handler would take down the whole API process; it is logged with its
+// stack and the update dropped instead. Webhook updates arrive through the
+// HTTP server, whose default recovery middleware already contains panics.
+func telegramUpdateHandler(svc *Dependencies) tgbot.HandlerFunc {
+	return func(ctx context.Context, _ *tgbot.Bot, update *models.Update) {
+		if update.Message == nil {
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("[Telegram Bot] update handler panicked",
+					logger.Field("panic", fmt.Sprint(r)),
+					logger.Field("update_id", update.ID),
+					logger.Field("stack", string(debug.Stack())))
+			}
+		}()
+		// Detach from the poller's lifetime: cancelling the poller on
+		// re-initialisation must not abort an update mid-handling.
+		svc.Notification.HandleTelegramUpdate(context.WithoutCancel(ctx), update)
 	}
 }
 
@@ -84,13 +109,7 @@ func Telegram(svc *Dependencies) {
 		tgbot.WithErrorsHandler(func(err error) {
 			logger.Error("[Telegram Bot] update transport error", logger.Field("error", err.Error()))
 		}),
-		tgbot.WithDefaultHandler(func(ctx context.Context, _ *tgbot.Bot, update *models.Update) {
-			if update.Message != nil {
-				// Detach from the poller's lifetime: cancelling the poller on
-				// re-initialisation must not abort an update mid-handling.
-				svc.Notification.HandleTelegramUpdate(context.WithoutCancel(ctx), update)
-			}
-		}),
+		tgbot.WithDefaultHandler(telegramUpdateHandler(svc)),
 	)
 	if err != nil {
 		logger.Error("[Init Telegram Config] New Bot API Error: ", logger.Field("error", err.Error()))

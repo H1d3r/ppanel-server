@@ -2,7 +2,6 @@ package usersub
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"uuid"
@@ -64,7 +63,7 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		Traffic:     req.Traffic,
 		Download:    0,
 		Upload:      0,
-		Token:       usersub.TokenFromOrder(fmt.Sprintf("adminCreate:%d", timeutil.Now().UnixMilli())),
+		Token:       usersub.NewToken(),
 		UUID:        uuid.NewV4().String(),
 		Status:      usersub.SubscribeStatusActive,
 	}

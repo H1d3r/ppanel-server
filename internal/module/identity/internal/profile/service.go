@@ -23,6 +23,10 @@ func (s *Service) UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPas
 	return newUpdateUserPasswordLogic(ctx, s.deps).UpdateUserPassword(req)
 }
 
+func (s *Service) Logout(ctx context.Context) error {
+	return newLogoutLogic(ctx, s.deps).Logout()
+}
+
 func (s *Service) UpdateUserNotify(ctx context.Context, req *dto.UpdateUserNotifyRequest) error {
 	return newUpdateUserNotifyLogic(ctx, s.deps).UpdateUserNotify(req)
 }

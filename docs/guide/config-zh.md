@@ -49,9 +49,9 @@ Redis: # Redis 配置
   Host: "localhost:6379"            # Redis 地址
   Pass: ""                          # Redis 密码
   DB: 0                             # Redis 数据库索引
-Administer: # 管理员登录配置
+Administrator: # 首位管理员，仅在首次启动时创建
   Email: "admin@ppanel.dev"         # 管理员登录邮箱
-  Password: "password"              # 管理员登录密码
+  Password: ""                      # 管理员登录密码，留空则自动生成
 ```
 
 ## 3. 配置项说明
@@ -138,12 +138,15 @@ Administer: # 管理员登录配置
 - **`DB`**：Redis 数据库索引。
   - 默认：`0`。
 
-### 3.6 管理员登录 (`Administer`)
+### 3.6 管理员登录 (`Administrator`)
+
+仅在数据库中还没有任何用户时使用一次，用来创建首位管理员。
 
 - **`Email`**：管理员登录邮箱。
   - 默认：`admin@ppanel.dev`。
 - **`Password`**：管理员登录密码。
-  - 默认：`password`。
+  - 默认：空。留空时会生成随机密码并在启动日志（`docker logs`）中打印一次，请用它登录后立即修改；
+    填写了则按填写的值使用。
 
 ## 4. 环境变量
 
@@ -156,7 +159,7 @@ Administer: # 管理员登录配置
 
 ## 5. 最佳实践
 
-- **安全性**：生产环境中避免使用默认的 `Administer` 凭据，更新 `Email` 和 `Password` 为安全值。
+- **安全性**：首次登录后请修改首位管理员的密码。只要还有管理员在使用旧默认密码 `password`，服务启动时都会记录错误日志。
 - **日志**：生产环境中建议使用 `file` 或 `volume` 模式持久化日志，将 `Level` 设置为 `error` 或 `severe` 以减少日志量。
 - **数据库**：确保 `Database` 和 `Redis` 凭据安全，避免在版本控制中暴露。
 - **JWT**：为 `JwtAuth` 的 `AccessSecret` 设置强密钥以增强安全性。
