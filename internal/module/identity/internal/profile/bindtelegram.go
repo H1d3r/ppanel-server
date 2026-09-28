@@ -6,14 +6,12 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // telegramBindTokenTTL bounds how long a deep link stays usable. The value is
@@ -36,14 +34,13 @@ func newBindTelegramLogic(ctx context.Context, deps Deps) *BindTelegramLogic {
 }
 
 func (l *BindTelegramLogic) BindTelegram() (resp *dto.BindTelegramResponse, err error) {
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
-	if !ok || u == nil {
-		l.Errorw("bind telegram failed: user missing from context")
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+	u, ok := user.FromContext(l.ctx)
+	if !ok {
+		return nil, fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	if l.deps.TelegramBotName() == "" {
 		l.Errorw("bind telegram failed: telegram bot is not initialized")
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "telegram bot is not configured")
+		return nil, fmt.Errorf("telegram bot is not configured: %w", xerr.NewErrCode(xerr.TelegramBotUnavailable))
 	}
 
 	// The deep link carries a dedicated single-use token rather than the
@@ -54,11 +51,7 @@ func (l *BindTelegramLogic) BindTelegram() (resp *dto.BindTelegramResponse, err 
 	expiredAt := timeutil.Now().Add(telegramBindTokenTTL)
 	key := fmt.Sprintf("%s:%s", config.TelegramBindKey, token)
 	if err := l.deps.Redis.Set(l.ctx, key, u.Id, telegramBindTokenTTL).Err(); err != nil {
-		l.Errorw("bind telegram failed: cannot store bind token",
-			logger.Field("user_id", u.Id),
-			logger.Field("error", err.Error()),
-		)
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "store telegram bind token failed: %v", err)
+		return nil, xerr.Wrapf(err, xerr.ERROR, "store telegram bind token of user %d", u.Id)
 	}
 
 	return &dto.BindTelegramResponse{

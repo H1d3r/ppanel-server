@@ -42,7 +42,11 @@ func (l *GetSubscribeDetailsLogic) GetSubscribeDetails(req *dto.GetSubscribeDeta
 			l.Logger.Error("[GetSubscribeDetailsLogic] JSON unmarshal failed: ", logger.Field("error", err.Error()), logger.Field("discount", sub.Discount))
 		}
 	}
-	resp.Nodes = dto.StringInt64Slice(slicesx.StringToInt64Slice(sub.Nodes))
+	nodes, err := slicesx.ParseInt64CSV(sub.Nodes)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "plan %d nodes: %v", sub.Id, err)
+	}
+	resp.Nodes = dto.StringInt64Slice(nodes)
 	resp.NodeTags = strings.Split(sub.NodeTags, ",")
 	return resp, nil
 }

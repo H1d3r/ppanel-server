@@ -45,7 +45,7 @@ func (l *AppleAuthConfig) Marshal() string {
 }
 
 func (l *AppleAuthConfig) Unmarshal(data string) error {
-	return json.Unmarshal([]byte(data), &l)
+	return json.Unmarshal([]byte(data), l)
 }
 
 type GoogleAuthConfig struct {
@@ -63,7 +63,7 @@ func (l *GoogleAuthConfig) Marshal() string {
 }
 
 func (l *GoogleAuthConfig) Unmarshal(data string) error {
-	return json.Unmarshal([]byte(data), &l)
+	return json.Unmarshal([]byte(data), l)
 }
 
 type GithubAuthConfig struct {
@@ -81,7 +81,7 @@ func (l *GithubAuthConfig) Marshal() string {
 }
 
 func (l *GithubAuthConfig) Unmarshal(data string) error {
-	return json.Unmarshal([]byte(data), &l)
+	return json.Unmarshal([]byte(data), l)
 }
 
 type FacebookAuthConfig struct {
@@ -99,7 +99,7 @@ func (l *FacebookAuthConfig) Marshal() string {
 }
 
 func (l *FacebookAuthConfig) Unmarshal(data string) error {
-	return json.Unmarshal([]byte(data), &l)
+	return json.Unmarshal([]byte(data), l)
 }
 
 type TelegramAuthConfig struct {
@@ -121,7 +121,7 @@ func (l *TelegramAuthConfig) Marshal() string {
 }
 
 func (l *TelegramAuthConfig) Unmarshal(data string) error {
-	return json.Unmarshal([]byte(data), &l)
+	return json.Unmarshal([]byte(data), l)
 }
 
 type EmailAuthConfig struct {
@@ -171,49 +171,42 @@ func (l *EmailAuthConfig) Marshal() string {
 	}
 	bytes, err := json.Marshal(l)
 	if err != nil {
-		config := &EmailAuthConfig{
-			Platform:                   "smtp",
-			PlatformConfig:             new(SMTPConfig),
-			EnableVerify:               true,
-			EnableNotify:               true,
-			EnableDomainSuffix:         false,
-			DomainSuffixList:           "",
-			VerifyEmailTemplate:        mail.DefaultEmailVerifyTemplate,
-			ExpirationEmailTemplate:    mail.DefaultExpirationEmailTemplate,
-			MaintenanceEmailTemplate:   mail.DefaultMaintenanceEmailTemplate,
-			TrafficExceedEmailTemplate: mail.DefaultTrafficExceedEmailTemplate,
-			VerifyEmailSubject:         mail.DefaultEmailVerifySubject,
-			ExpirationEmailSubject:     mail.DefaultExpirationEmailSubject,
-			MaintenanceEmailSubject:    mail.DefaultMaintenanceEmailSubject,
-			TrafficExceedEmailSubject:  mail.DefaultTrafficExceedEmailSubject,
-		}
-
-		bytes, _ = json.Marshal(config)
+		bytes, _ = json.Marshal(defaultEmailAuthConfig())
 	}
 	return string(bytes)
 }
 
-func (l *EmailAuthConfig) Unmarshal(data string) {
-	err := json.Unmarshal([]byte(data), &l)
-	if err != nil {
-		config := &EmailAuthConfig{
-			Platform:                   "smtp",
-			PlatformConfig:             new(SMTPConfig),
-			EnableVerify:               true,
-			EnableNotify:               true,
-			EnableDomainSuffix:         false,
-			DomainSuffixList:           "",
-			VerifyEmailTemplate:        mail.DefaultEmailVerifyTemplate,
-			ExpirationEmailTemplate:    mail.DefaultExpirationEmailTemplate,
-			MaintenanceEmailTemplate:   mail.DefaultMaintenanceEmailTemplate,
-			TrafficExceedEmailTemplate: mail.DefaultTrafficExceedEmailTemplate,
-			VerifyEmailSubject:         mail.DefaultEmailVerifySubject,
-			ExpirationEmailSubject:     mail.DefaultExpirationEmailSubject,
-			MaintenanceEmailSubject:    mail.DefaultMaintenanceEmailSubject,
-			TrafficExceedEmailSubject:  mail.DefaultTrafficExceedEmailSubject,
-		}
-		_ = json.Unmarshal([]byte(config.Marshal()), &l)
+// defaultEmailAuthConfig is the configuration of a fresh installation: SMTP
+// with verification and notification on and the built-in templates.
+func defaultEmailAuthConfig() *EmailAuthConfig {
+	return &EmailAuthConfig{
+		Platform:                   "smtp",
+		PlatformConfig:             new(SMTPConfig),
+		EnableVerify:               true,
+		EnableNotify:               true,
+		EnableDomainSuffix:         false,
+		DomainSuffixList:           "",
+		VerifyEmailTemplate:        mail.DefaultEmailVerifyTemplate,
+		ExpirationEmailTemplate:    mail.DefaultExpirationEmailTemplate,
+		MaintenanceEmailTemplate:   mail.DefaultMaintenanceEmailTemplate,
+		TrafficExceedEmailTemplate: mail.DefaultTrafficExceedEmailTemplate,
+		VerifyEmailSubject:         mail.DefaultEmailVerifySubject,
+		ExpirationEmailSubject:     mail.DefaultExpirationEmailSubject,
+		MaintenanceEmailSubject:    mail.DefaultMaintenanceEmailSubject,
+		TrafficExceedEmailSubject:  mail.DefaultTrafficExceedEmailSubject,
 	}
+}
+
+// Unmarshal decodes data into l. When data does not parse it returns the
+// error and leaves l at the defaults, so a caller that has to keep running
+// still holds a usable configuration.
+func (l *EmailAuthConfig) Unmarshal(data string) error {
+	if err := json.Unmarshal([]byte(data), l); err != nil {
+		*l = EmailAuthConfig{}
+		_ = json.Unmarshal([]byte(defaultEmailAuthConfig().Marshal()), l)
+		return err
+	}
+	return nil
 }
 
 // SMTPConfig Email SMTP configuration
@@ -235,7 +228,7 @@ func (l *SMTPConfig) Marshal() string {
 }
 
 func (l *SMTPConfig) Unmarshal(data string) error {
-	return json.Unmarshal([]byte(data), &l)
+	return json.Unmarshal([]byte(data), l)
 }
 
 type MobileAuthConfig struct {
@@ -248,27 +241,30 @@ type MobileAuthConfig struct {
 func (l *MobileAuthConfig) Marshal() string {
 	bytes, err := json.Marshal(l)
 	if err != nil {
-		config := &MobileAuthConfig{
-			Platform:        "alibaba_cloud",
-			PlatformConfig:  new(AlibabaCloudConfig),
-			EnableWhitelist: false,
-			Whitelist:       []string{},
-		}
-		bytes, _ = json.Marshal(config)
+		bytes, _ = json.Marshal(defaultMobileAuthConfig())
 	}
 	return string(bytes)
 }
 
-func (l *MobileAuthConfig) Unmarshal(data string) {
-	err := json.Unmarshal([]byte(data), &l)
-	if err != nil {
-		config := &MobileAuthConfig{
-			Platform:        "alibaba_cloud",
-			PlatformConfig:  new(AlibabaCloudConfig),
-			EnableWhitelist: false,
-			Whitelist:       []string{},
-		}
-		_ = json.Unmarshal([]byte(config.Marshal()), &l)
+// Unmarshal decodes data into l. When data does not parse it returns the
+// error and leaves l at the defaults, so a caller that has to keep running
+// still holds a usable configuration.
+func (l *MobileAuthConfig) Unmarshal(data string) error {
+	if err := json.Unmarshal([]byte(data), l); err != nil {
+		*l = MobileAuthConfig{}
+		_ = json.Unmarshal([]byte(defaultMobileAuthConfig().Marshal()), l)
+		return err
+	}
+	return nil
+}
+
+// defaultMobileAuthConfig is the configuration of a fresh installation.
+func defaultMobileAuthConfig() *MobileAuthConfig {
+	return &MobileAuthConfig{
+		Platform:        "alibaba_cloud",
+		PlatformConfig:  new(AlibabaCloudConfig),
+		EnableWhitelist: false,
+		Whitelist:       []string{},
 	}
 }
 

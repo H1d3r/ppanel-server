@@ -1,189 +1,213 @@
 package publicinfo
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"net"
-	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/oschwald/geoip2-golang"
 	"github.com/perfect-panel/server/internal/config"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
+	"github.com/redis/go-redis/v9"
 )
 
-type GetStatLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
+const (
+	statCacheTTL = time.Hour
+	// statRefreshTimeout bounds one refresh of the statistics, which runs
+	// on behalf of every caller waiting for it rather than of one request.
+	statRefreshTimeout = 30 * time.Second
+	// statLookupTimeout bounds the DNS lookup of one node hostname.
+	statLookupTimeout = 5 * time.Second
+	statLookupWorkers = 8
+)
+
+// GetStat returns the public site statistics: the enabled users (rounded
+// down), the enabled nodes, the number of countries the nodes are in and the
+// protocols they offer. The statistics are cached for an hour. Concurrent
+// cache misses share one refresh, and a caller may stop waiting for it
+// without cancelling it for the others.
+func (s *Service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
+	if cached := s.cachedStat(ctx); cached != nil {
+		return cached, nil
+	}
+	refresh := s.statRefresh.DoChan(config.CommonStatCacheKey, func() (any, error) {
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statRefreshTimeout)
+		defer cancel()
+		// A refresh that finished while this one was being scheduled has
+		// already done the work.
+		if cached := s.cachedStat(refreshCtx); cached != nil {
+			return cached, nil
+		}
+		return s.refreshStat(refreshCtx)
+	})
+	select {
+	case result := <-refresh:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		// Every waiting caller gets its own copy of the shared result.
+		stat := *result.Val.(*dto.GetStatResponse)
+		stat.Protocol = slices.Clone(stat.Protocol)
+		return &stat, nil
+	case <-ctx.Done():
+		return nil, xerr.Wrapf(ctx.Err(), xerr.ERROR, "wait for the site statistics: %v", ctx.Err())
+	}
 }
 
-var (
-	statHTTPClient = &http.Client{Timeout: 8 * time.Second}
-	statRefreshMu  sync.Mutex
-)
-
-func (l *GetStatLogic) cachedStat() *dto.GetStatResponse {
-	respJSON, err := l.deps.Redis.Get(l.ctx, config.CommonStatCacheKey).Result()
+func (s *Service) cachedStat(ctx context.Context) *dto.GetStatResponse {
+	data, err := s.deps.Redis.Get(ctx, config.CommonStatCacheKey).Result()
 	if err != nil {
+		if !errors.Is(err, redis.Nil) && ctx.Err() == nil {
+			logger.WithContext(ctx).Errorw("[GetStat] read the cached statistics", logger.Field("error", err.Error()))
+		}
 		return nil
 	}
 	var cached dto.GetStatResponse
-	if json.Unmarshal([]byte(respJSON), &cached) != nil {
+	if json.Unmarshal([]byte(data), &cached) != nil {
 		return nil
 	}
 	return &cached
 }
 
-// Get Tos
-func newGetStatLogic(ctx context.Context, deps Deps) *GetStatLogic {
-	return &GetStatLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
+func (s *Service) refreshStat(ctx context.Context) (*dto.GetStatResponse, error) {
+	nodes := s.deps.Store.Node()
+	users, err := s.deps.Store.User().CountEnabledUsers(ctx)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "count enabled users: %v", err)
+	}
+	nodeCount, err := nodes.CountEnabledNodes(ctx)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "count enabled nodes: %v", err)
+	}
+	addresses, err := nodes.QueryServerAddresses(ctx)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list node addresses: %v", err)
+	}
+	protocols, err := nodes.QueryEnabledNodeProtocols(ctx)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list node protocols: %v", err)
+	}
+
+	stat := &dto.GetStatResponse{
+		User:     roundUserCount(users),
+		Node:     nodeCount,
+		Country:  int64(s.countCountries(ctx, addresses)),
+		Protocol: distinctProtocols(protocols),
+	}
+	data, err := json.Marshal(stat)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "encode the site statistics: %v", err)
+	}
+	if err := s.deps.Redis.Set(ctx, config.CommonStatCacheKey, string(data), statCacheTTL).Err(); err != nil {
+		logger.WithContext(ctx).Errorw("[GetStat] cache the statistics", logger.Field("error", err.Error()))
+	}
+	return stat, nil
+}
+
+// roundUserCount publishes the user count rounded down to a multiple of 100
+// above 100 users and of 10 above 10; smaller sites show 1.
+func roundUserCount(users int64) int64 {
+	switch {
+	case users > 100:
+		return users - users%100
+	case users > 10:
+		return users - users%10
+	default:
+		return 1
 	}
 }
 
-func (l *GetStatLogic) GetStat() (resp *dto.GetStatResponse, err error) {
-	if cached := l.cachedStat(); cached != nil {
-		return cached, nil
-	}
-	// Collapse concurrent hourly cache misses inside one process. The second
-	// read prevents queued requests from repeating DNS and geolocation work.
-	statRefreshMu.Lock()
-	defer statRefreshMu.Unlock()
-	if cached := l.cachedStat(); cached != nil {
-		return cached, nil
-	}
-	userStore := l.deps.Store.User()
-	nodeStore := l.deps.Store.Node()
-	u, err := userStore.CountEnabledUsers(l.ctx)
-	if err != nil {
-		l.Logger.Error("[GetStatLogic] get user count failed: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get user count failed: %v", err.Error())
-	}
-	if u > 100 {
-		u -= u % 100
-	} else if u > 10 {
-		u -= u % 10
-	} else {
-		u = 1
-	}
-	n, err := nodeStore.CountEnabledNodes(l.ctx)
-	if err != nil {
-		l.Logger.Error("[GetStatLogic] get server count failed: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get server count failed: %v", err.Error())
-	}
-	nodeaddr, err := nodeStore.QueryServerAddresses(l.ctx)
-	if err != nil {
-		l.Logger.Error("[GetStatLogic] get server_addr failed: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get server_addr failed: %v", err.Error())
-	}
-	type apireq struct {
-		Query  string `json:"query"`
-		Fields string `json:"fields"`
-	}
-	type apiret struct {
-		CountryCode string `json:"countryCode"`
-	}
-	//map as dict
-	type void struct{}
-	var v void
-	country := make(map[string]void)
-	for c := range slices.Chunk(nodeaddr, 100) {
-		resolved := make([]string, len(c))
-		resolveCtx, cancelResolve := context.WithTimeout(l.ctx, 5*time.Second)
-		var resolveWG sync.WaitGroup
-		resolveSlots := make(chan struct{}, 8)
-		for index, addr := range c {
-			if parsed := net.ParseIP(addr); parsed != nil {
-				resolved[index] = parsed.String()
-				continue
-			}
-			resolveWG.Add(1)
-			go func(index int, host string) {
-				defer resolveWG.Done()
-				select {
-				case resolveSlots <- struct{}{}:
-					defer func() { <-resolveSlots }()
-				case <-resolveCtx.Done():
-					return
-				}
-				addresses, lookupErr := net.DefaultResolver.LookupIPAddr(resolveCtx, host)
-				if lookupErr == nil && len(addresses) > 0 {
-					resolved[index] = addresses[0].IP.String()
-				}
-			}(index, addr)
+func distinctProtocols(protocols []string) []string {
+	var distinct []string
+	for _, protocol := range protocols {
+		if protocol != "" && !slices.Contains(distinct, protocol) {
+			distinct = append(distinct, protocol)
 		}
-		resolveWG.Wait()
-		cancelResolve()
-		var batchreq []apireq
-		for _, addr := range resolved {
-			if addr != "" {
-				batchreq = append(batchreq, apireq{Query: addr, Fields: "countryCode"})
-			}
-		}
-		if len(batchreq) == 0 {
-			continue
-		}
-		reqBody, _ := json.Marshal(batchreq)
-		requestCtx, cancel := context.WithTimeout(l.ctx, 8*time.Second)
-		httpReq, requestErr := http.NewRequestWithContext(requestCtx, http.MethodPost, "http://ip-api.com/batch", bytes.NewReader(reqBody))
-		if requestErr == nil {
-			httpReq.Header.Set("Content-Type", "application/json")
-		}
-		var ret *http.Response
-		if requestErr == nil {
-			ret, requestErr = statHTTPClient.Do(httpReq)
-		}
-		err := requestErr
-		if err == nil {
-			retBytes, err := io.ReadAll(io.LimitReader(ret.Body, 1<<20))
-			_ = ret.Body.Close()
-			if err == nil && ret.StatusCode >= http.StatusOK && ret.StatusCode < http.StatusMultipleChoices {
-				var retStruct []apiret
-				err := json.Unmarshal(retBytes, &retStruct)
-				if err == nil {
-					for _, dat := range retStruct {
-						if dat.CountryCode != "" {
-							country[dat.CountryCode] = v
-						}
-					}
-				}
-			}
-		}
-		cancel()
 	}
-	protocolDict := make(map[string]void)
-	protocol, err := nodeStore.QueryEnabledNodeProtocols(l.ctx)
-	if err != nil {
-		l.Logger.Error("[GetStatLogic] get protocol failed: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get protocol failed: %v", err.Error())
-	}
+	slices.Sort(distinct)
+	return distinct
+}
 
-	for _, p := range protocol {
-		if p == "" {
+// countCountries counts the countries the local GeoIP database places the
+// node addresses in. An address that does not resolve, or that the database
+// has no country for, is left out.
+func (s *Service) countCountries(ctx context.Context, addresses []string) int {
+	if len(addresses) == 0 {
+		return 0
+	}
+	var db *geoip2.Reader
+	if s.deps.GeoIP != nil {
+		db = s.deps.GeoIP()
+	}
+	if db == nil {
+		logger.WithContext(ctx).Infow("[GetStat] no GeoIP database: the node countries are not counted")
+		return 0
+	}
+	countries := map[string]struct{}{}
+	failed := 0
+	for _, ip := range s.resolve(ctx, addresses) {
+		record, err := db.Country(ip)
+		if err != nil {
+			failed++
 			continue
 		}
-		protocolDict[p] = v
+		if code := record.Country.IsoCode; code != "" {
+			countries[code] = struct{}{}
+		}
 	}
-	protocol = nil
-	for p := range protocolDict {
-		protocol = append(protocol, p)
+	if failed > 0 {
+		logger.WithContext(ctx).Errorw("[GetStat] locate node addresses",
+			logger.Field("failed", failed), logger.Field("addresses", len(addresses)))
 	}
-	resp = &dto.GetStatResponse{
-		User:     u,
-		Node:     n,
-		Country:  int64(len(country)),
-		Protocol: protocol,
+	return len(countries)
+}
+
+// resolve returns the IPs of the node addresses, looking hostnames up with
+// bounded concurrency; the addresses that do not resolve are left out.
+func (s *Service) resolve(ctx context.Context, addresses []string) []net.IP {
+	resolver := s.deps.Resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
 	}
-	val, _ := json.Marshal(*resp)
-	_ = l.deps.Redis.Set(l.ctx, config.CommonStatCacheKey, string(val), time.Duration(3600)*time.Second).Err()
-	return resp, nil
+	ips := make([]net.IP, len(addresses))
+	slots := make(chan struct{}, statLookupWorkers)
+	var (
+		wg     sync.WaitGroup
+		failed atomic.Int64
+	)
+	for i, address := range addresses {
+		if ip := net.ParseIP(address); ip != nil {
+			ips[i] = ip
+			continue
+		}
+		wg.Go(func() {
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				failed.Add(1)
+				return
+			}
+			lookupCtx, cancel := context.WithTimeout(ctx, statLookupTimeout)
+			defer cancel()
+			resolved, err := resolver.LookupIPAddr(lookupCtx, address)
+			if err != nil || len(resolved) == 0 {
+				failed.Add(1)
+				return
+			}
+			ips[i] = resolved[0].IP
+		})
+	}
+	wg.Wait()
+	if n := failed.Load(); n > 0 {
+		logger.WithContext(ctx).Errorw("[GetStat] resolve node hostnames", logger.Field("failed", n))
+	}
+	return slices.DeleteFunc(ips, func(ip net.IP) bool { return ip == nil })
 }

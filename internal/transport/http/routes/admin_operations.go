@@ -12,8 +12,7 @@ import (
 )
 
 func registerAdminAuthMethodRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/auth-method")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/auth-method")
 	group.GET("/config", adminAuthMethod.GetAuthMethodConfigHandler(deps.Identity))
 	group.PUT("/config", adminAuthMethod.UpdateAuthMethodConfigHandler(deps.Identity))
 	group.GET("/email_platform", adminAuthMethod.GetEmailPlatformHandler(deps.Identity))
@@ -24,8 +23,7 @@ func registerAdminAuthMethodRoutes(router *server.Hertz, deps Dependencies) {
 }
 
 func registerAdminConsoleRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/console")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/console")
 	group.GET("/revenue", adminConsole.QueryRevenueStatisticsHandler(deps.Platform))
 	group.GET("/server", adminConsole.QueryServerTotalDataHandler(deps.Platform))
 	group.GET("/ticket", adminConsole.QueryTicketWaitReplyHandler(deps.Platform))
@@ -33,8 +31,7 @@ func registerAdminConsoleRoutes(router *server.Hertz, deps Dependencies) {
 }
 
 func registerAdminLogRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/log")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/log")
 	group.GET("/balance/list", adminLog.FilterBalanceLogHandler(deps.Platform))
 	group.GET("/commission/list", adminLog.FilterCommissionLogHandler(deps.Platform))
 	group.GET("/email/list", adminLog.FilterEmailLogHandler(deps.Platform))
@@ -54,8 +51,7 @@ func registerAdminLogRoutes(router *server.Hertz, deps Dependencies) {
 }
 
 func registerAdminServerRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/server")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/server")
 	group.POST("/create", adminServer.CreateServerHandler(deps.Network))
 	group.POST("/delete", adminServer.DeleteServerHandler(deps.Network))
 	group.GET("/list", adminServer.FilterServerListHandler(deps.Network))
@@ -74,8 +70,7 @@ func registerAdminServerRoutes(router *server.Hertz, deps Dependencies) {
 }
 
 func registerAdminSystemRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/system")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/system")
 	group.GET("/currency_config", adminSystem.GetCurrencyConfigHandler(deps.Platform))
 	group.PUT("/currency_config", adminSystem.UpdateCurrencyConfigHandler(deps.Platform))
 	group.GET("/get_node_multiplier", adminSystem.GetNodeMultiplierHandler(deps.Platform))
@@ -103,8 +98,7 @@ func registerAdminSystemRoutes(router *server.Hertz, deps Dependencies) {
 }
 
 func registerAdminTicketRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/ticket")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/ticket")
 	group.PUT("/", adminTicket.UpdateTicketStatusHandler(deps.Support))
 	group.GET("/detail", adminTicket.GetTicketHandler(deps.Support))
 	group.POST("/follow", adminTicket.CreateTicketFollowHandler(deps.Support))
@@ -112,8 +106,7 @@ func registerAdminTicketRoutes(router *server.Hertz, deps Dependencies) {
 }
 
 func registerAdminToolRoutes(router *server.Hertz, deps Dependencies) {
-	group := router.Group("/v1/admin/tool")
-	group.Use(deps.authMiddleware())
+	group := deps.adminGroup(router, "/v1/admin/tool")
 	group.GET("/ip/location", adminTool.QueryIPLocationHandler(deps.Platform))
 	group.GET("/log", adminTool.GetSystemLogHandler(deps.Platform))
 	group.GET("/restart", adminTool.RestartSystemHandler(deps.Platform))

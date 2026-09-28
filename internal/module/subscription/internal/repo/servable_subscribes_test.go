@@ -34,7 +34,7 @@ func TestServableSubscribesSQL(t *testing.T) {
 			}),
 			want: []string{
 				"FROM `user_subscribe`",
-				"subscribe_id IN (?,?) AND status IN (?,?)",
+				"subscribe_id IN (?,?) AND (status IN (?,?) AND",
 				"(expire_time IS NULL OR expire_time = ? OR expire_time > ?)",
 				"(traffic > 0 AND upload + download >= traffic) IS NOT TRUE",
 				"ORDER BY subscribe_id ASC, id ASC",
@@ -48,7 +48,7 @@ func TestServableSubscribesSQL(t *testing.T) {
 			}),
 			want: []string{
 				`FROM "user_subscribe"`,
-				"subscribe_id IN ($1,$2) AND status IN ($3,$4)",
+				"subscribe_id IN ($1,$2) AND (status IN ($3,$4) AND",
 				"(expire_time IS NULL OR expire_time = $5 OR expire_time > $6)",
 				"(traffic > 0 AND upload + download >= traffic) IS NOT TRUE",
 				"ORDER BY subscribe_id ASC, id ASC",
@@ -101,7 +101,7 @@ func TestFindUsersSubscribeBySubscribeIdsDropsExpiredAndExhausted(t *testing.T) 
 	// equivalent of the production table.
 	if err := db.Exec(`CREATE TABLE user_subscribe (
  id INTEGER PRIMARY KEY, user_id BIGINT, order_id BIGINT, subscribe_id BIGINT,
- start_time TIMESTAMP, expire_time TIMESTAMP, finished_at TIMESTAMP,
+ start_time TIMESTAMP, expire_time TIMESTAMP, finished_at TIMESTAMP, traffic_reset_at TIMESTAMP,
  traffic BIGINT DEFAULT 0, download BIGINT DEFAULT 0, upload BIGINT DEFAULT 0,
  token VARCHAR(255) UNIQUE, uuid VARCHAR(255) UNIQUE, status INTEGER DEFAULT 0,
  note TEXT, entitlement_source VARCHAR(32) NOT NULL DEFAULT '', created_at TIMESTAMP, updated_at TIMESTAMP)`).Error; err != nil {

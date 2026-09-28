@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )
@@ -69,22 +70,19 @@ func (s *Service) EnsureGuestAccount(ctx context.Context, command Command) (int6
 	}
 	u := &user.User{Password: passwordHash, Algo: password.PasswordAlgoForHash(passwordHash)}
 	err := s.store.InIdentityTx(ctx, func(tx repository.IdentityStore) error {
-		if err := tx.User().Insert(ctx, u); err != nil {
-			return err
-		}
-		u.ReferCode = user.GenerateInviteCode(u.Id)
-		if err := tx.User().UpdateColumns(ctx, u.Id, map[string]interface{}{"refer_code": u.ReferCode}); err != nil {
-			return err
-		}
-		if err := tx.UserAuth().InsertUserAuthMethods(ctx, &user.AuthMethods{
-			UserId: u.Id, AuthType: command.AuthType, AuthIdentifier: command.Identifier,
+		// The identifier stays unverified: whoever proves it later takes
+		// the account over through a code. A guest account is not a
+		// registration, so it emits no registration event.
+		if err := account.Create(ctx, tx, account.New{
+			User:       u,
+			Identities: []user.AuthMethods{{AuthType: command.AuthType, AuthIdentifier: command.Identifier}},
 		}); err != nil {
 			return err
 		}
 		if command.InviteCode != "" {
 			if referer, err := tx.User().FindOneByReferCode(ctx, command.InviteCode); err == nil {
 				u.RefererId = referer.Id
-				if err := tx.User().UpdateColumns(ctx, u.Id, map[string]interface{}{"referer_id": u.RefererId}); err != nil {
+				if err := tx.User().UpdateColumns(ctx, u.Id, map[string]any{"referer_id": u.RefererId}); err != nil {
 					return err
 				}
 			} else {

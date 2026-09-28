@@ -32,7 +32,7 @@ func OAuthLoginGetTokenHandler(service identity.Service) app.HandlerFunc {
 			return
 		}
 
-		resp, err := service.OAuthLoginGetToken(ctx, &req, c.ClientIP(), string(c.UserAgent()))
+		resp, err := service.OAuthLoginGetToken(ctx, &req)
 		httpx.HttpResult(c, resp, err)
 	}
 }

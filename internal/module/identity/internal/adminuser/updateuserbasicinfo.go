@@ -2,8 +2,7 @@ package adminuser
 
 import (
 	"context"
-	"os"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/perfect-panel/server/internal/auth/password"
@@ -11,29 +10,13 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type UpdateUserBasicInfoLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewUpdateUserBasicInfoLogic Update user basic info
-func newUpdateUserBasicInfoLogic(ctx context.Context, deps Deps) *UpdateUserBasicInfoLogic {
-	return &UpdateUserBasicInfoLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasiceInfoRequest) error {
-	isDemo := strings.ToLower(os.Getenv("PPANEL_MODE")) == "demo"
+// UpdateUserBasicInfo applies an administrator's edit of an account: its
+// profile columns and, in a billing transaction of its own, its wallet.
+func (s *Service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBasicInfoRequest) error {
 	// The admin edit spans two domains by design — identity profile fields
 	// and a billing money adjustment — so it runs as two sequential domain
 	// transactions. The identity transaction goes first because it carries
@@ -43,16 +26,16 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 	// partial-failure surface the flows will have as services.
 	accessStateChanged := false
 	passwordChanged := false
-	err := l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
-		userInfo, err := store.User().FindOneForUpdate(l.ctx, req.UserId)
+	err := s.deps.Store.InIdentityTx(ctx, func(store repository.IdentityStore) error {
+		userInfo, err := store.User().FindOneForUpdate(ctx, req.UserId)
 		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Error")
+			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find user %d", req.UserId)
 		}
 		if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
 			return err
 		}
 		accessStateChanged = userInfo.Enable == nil || *userInfo.Enable != req.Enable
-		columns := map[string]interface{}{
+		columns := map[string]any{
 			"avatar":              req.Avatar,
 			"refer_code":          req.ReferCode,
 			"referer_id":          req.RefererId,
@@ -62,8 +45,8 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 			"is_admin":            req.IsAdmin,
 		}
 		if req.Password != "" && req.Password != "***" {
-			if userInfo.Id == 2 && isDemo {
-				return errors.Wrapf(xerr.NewErrCodeMsg(503, "Demo mode does not allow modification of the admin user password"), "UpdateUserBasicInfo failed: cannot update admin user password in demo mode")
+			if userInfo.Id == demoAdminID && demoMode() {
+				return demoRestricted("modify the admin user's password")
 			}
 			for column, value := range password.UserColumns(req.Password) {
 				columns[column] = value
@@ -73,34 +56,37 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 		// Only these profile columns are written: the billing-owned money
 		// columns go through the admin's wallet adjustment in its own
 		// billing transaction below.
-		return store.User().UpdateColumns(l.ctx, userInfo.Id, columns)
+		if err := store.User().UpdateColumns(ctx, userInfo.Id, columns); err != nil {
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update user %d", userInfo.Id)
+		}
+		return nil
 	})
 	if err != nil {
-		l.Errorw("[UpdateUserBasicInfoLogic] Update User Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update User Error")
+		// The generic code keeps the validation's own (an invalid avatar,
+		// the demo-mode refusal).
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update user %d", req.UserId)
 	}
 	// Account state changes must invalidate both subscription-token caches and
 	// node-facing user lists. In particular, disabling a user takes effect at
 	// the service plane immediately instead of waiting for the five-minute TTL.
 	if accessStateChanged {
-		clearUserAccessCaches(l.ctx, l.deps, []int64{req.UserId})
+		clearUserAccessCaches(ctx, s.deps, []int64{req.UserId})
 	}
 	// An administrator sets a new password when the old one leaked; the
 	// sessions opened with it end too.
 	if passwordChanged {
-		if err := usersession.Revoke(l.ctx, l.deps.Redis, req.UserId); err != nil {
-			l.Errorw("[UpdateUserBasicInfoLogic] Revoke sessions error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
-			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Revoke user sessions error")
+		if err := usersession.Revoke(ctx, s.deps.Redis, req.UserId); err != nil {
+			return xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", req.UserId)
 		}
 	}
 
-	err = l.deps.Store.InBillingTx(l.ctx, func(store repository.BillingStore) error {
+	err = s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		// Financial adjustments must compare and write the latest values
 		// under the wallet lock, with their audit logs in the same
 		// transaction.
-		walletInfo, err := store.Wallet().FindOneForUpdate(l.ctx, req.UserId)
+		walletInfo, err := store.Wallet().FindOneForUpdate(ctx, req.UserId)
 		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Find User Wallet Error")
+			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find wallet of user %d", req.UserId)
 		}
 		if walletInfo.Balance == req.Balance &&
 			walletInfo.GiftAmount == req.GiftAmount &&
@@ -109,7 +95,7 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 		}
 		if walletInfo.Balance != req.Balance {
 			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: req.Balance - walletInfo.Balance, Balance: req.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
+			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
 				return err
 			}
 		}
@@ -119,29 +105,27 @@ func (l *UpdateUserBasicInfoLogic) UpdateUserBasicInfo(req *dto.UpdateUserBasice
 				changeType = log.GiftTypeIncrease
 			}
 			content, _ := (&log.Gift{Type: changeType, Amount: req.GiftAmount - walletInfo.GiftAmount, Balance: req.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
+			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
 				return err
 			}
 		}
 		if walletInfo.Commission != req.Commission {
 			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: req.Commission - walletInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
+			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
 				return err
 			}
 		}
 		walletInfo.Balance = req.Balance
 		walletInfo.GiftAmount = req.GiftAmount
 		walletInfo.Commission = req.Commission
-		if err := store.Wallet().UpdateBalanceFields(l.ctx, walletInfo); err != nil {
+		if err := store.Wallet().UpdateBalanceFields(ctx, walletInfo); err != nil {
 			return err
 		}
-		return store.Wallet().UpdateCommission(l.ctx, walletInfo)
+		return store.Wallet().UpdateCommission(ctx, walletInfo)
 	})
 	if err != nil {
-		l.Errorw("[UpdateUserBasicInfoLogic] Adjust User Wallet Error:", logger.Field("err", err.Error()), logger.Field("userId", req.UserId))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update User Error")
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "adjust wallet of user %d", req.UserId)
 	}
-
 	return nil
 }
 
@@ -155,7 +139,7 @@ func validateAvatarUpdate(currentAvatar, requestedAvatar string) error {
 	}
 
 	if !IsValidImageSize(requestedAvatar, 1024) {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "Invalid avatar")
+		return fmt.Errorf("invalid avatar: %w", xerr.NewErrCode(xerr.InvalidParams))
 	}
 
 	return nil

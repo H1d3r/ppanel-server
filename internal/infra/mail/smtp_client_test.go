@@ -2,50 +2,33 @@ package mail
 
 import (
 	"bufio"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math/big"
 	"net"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestEmailSend(t *testing.T) {
-	t.Skipf("Skip TestEmailSend")
-	config := &SMTPConfig{
-		Host:     "smtp.mail.me.com",
-		Port:     587,
-		User:     "support@ppanel.dev",
-		Pass:     "password",
-		From:     "support@ppanel.dev",
-		SSL:      true,
-		SiteName: "",
-	}
-	address := []string{"tension@sparkdance.dev"}
-	subject := "test"
-	body := "test"
-	email := NewSMTPClient(config)
-	err := email.Send(address, subject, body)
-	if err != nil {
-		t.Errorf("send email error: %v", err)
-	}
-}
-
 func TestSMTPClientVerifiesCertificatesByDefault(t *testing.T) {
 	client := NewSMTPClient(&SMTPConfig{Host: "smtp.example.test", Port: 587})
-	tlsConfig := client.dailer.TLSConfig
+	tlsConfig := client.tlsConfig
 	if tlsConfig == nil || tlsConfig.InsecureSkipVerify {
 		t.Fatalf("TLS config = %+v, want certificate verification", tlsConfig)
 	}
-	if tlsConfig.ServerName != "smtp.example.test" {
-		t.Fatalf("ServerName = %q, want the relay host", tlsConfig.ServerName)
+	if tlsConfig.ServerName != "smtp.example.test" || tlsConfig.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("TLS config = %+v, want the relay host and TLS 1.2 or later", tlsConfig)
 	}
 }
 
@@ -54,7 +37,7 @@ func TestSMTPSenderHonorsExplicitVerificationOptOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sender.(*SMTPClient).dailer.TLSConfig.InsecureSkipVerify {
+	if !sender.(*SMTPClient).tlsConfig.InsecureSkipVerify {
 		t.Fatal("insecure_skip_verify in the stored config was ignored")
 	}
 }
@@ -76,8 +59,8 @@ func TestSMTPClientImplicitTLSSelection(t *testing.T) {
 		{port: 25, ssl: true, want: false},
 	} {
 		client := NewSMTPClient(&SMTPConfig{Host: "smtp.example.test", Port: tt.port, SSL: tt.ssl})
-		if client.dailer.SSL != tt.want {
-			t.Errorf("port %d ssl=%v: implicit TLS = %v, want %v", tt.port, tt.ssl, client.dailer.SSL, tt.want)
+		if client.implicitTLS != tt.want {
+			t.Errorf("port %d ssl=%v: implicit TLS = %v, want %v", tt.port, tt.ssl, client.implicitTLS, tt.want)
 		}
 	}
 }
@@ -88,8 +71,8 @@ func TestSMTPClientRejectsUntrustedCertificate(t *testing.T) {
 	cert := selfSignedCertificate(t)
 	for name, implicit := range map[string]bool{"starttls": false, "implicit tls": true} {
 		t.Run(name, func(t *testing.T) {
-			addr := startFakeSMTP(t, &cert, implicit)
-			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: addr.Port, SSL: implicit, From: "panel@example.test"})
+			relay := startFakeSMTP(t, relayOptions{cert: &cert, implicit: implicit})
+			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, SSL: implicit, From: "panel@example.test"})
 
 			err := client.Send([]string{"user@example.test"}, "subject", "body")
 
@@ -103,21 +86,96 @@ func TestSMTPClientRejectsUntrustedCertificate(t *testing.T) {
 
 func TestSMTPClientOptOutAcceptsSelfSignedRelay(t *testing.T) {
 	cert := selfSignedCertificate(t)
-	addr := startFakeSMTP(t, &cert, false)
-	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: addr.Port, From: "panel@example.test", InsecureSkipVerify: true})
+	relay := startFakeSMTP(t, relayOptions{cert: &cert})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test", InsecureSkipVerify: true})
 
 	if err := client.Send([]string{"user@example.test"}, "subject", "body"); err != nil {
 		t.Fatalf("send through self-signed relay with explicit opt-out: %v", err)
+	}
+	if relay.session().data == "" {
+		t.Fatal("the message was not transferred")
 	}
 }
 
 // Relays without TLS keep working: STARTTLS stays opportunistic.
 func TestSMTPClientSendsThroughPlainRelay(t *testing.T) {
-	addr := startFakeSMTP(t, nil, false)
-	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: addr.Port, From: "panel@example.test"})
+	relay := startFakeSMTP(t, relayOptions{})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test"})
 
 	if err := client.Send([]string{"user@example.test"}, "subject", "body"); err != nil {
 		t.Fatalf("send through plain relay: %v", err)
+	}
+}
+
+func TestSMTPClientTransfersTheMessage(t *testing.T) {
+	relay := startFakeSMTP(t, relayOptions{})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test", ReplyTo: "help@example.test", SiteName: "PPanel"})
+
+	if err := client.SendContext(context.Background(), []string{"a@example.test", "b@example.test"}, "Welcome", "<p>hello</p>"); err != nil {
+		t.Fatalf("SendContext: %v", err)
+	}
+	session := relay.session()
+	if session.from != "<panel@example.test>" || strings.Join(session.rcpt, ",") != "<a@example.test>,<b@example.test>" {
+		t.Fatalf("envelope = %q -> %v", session.from, session.rcpt)
+	}
+	for _, want := range []string{`From: "PPanel" <panel@example.test>`, "Reply-To: help@example.test", "To: a@example.test, b@example.test", "Subject: Welcome", "Content-Type: text/html", "<p>hello</p>"} {
+		if !strings.Contains(session.data, want) {
+			t.Fatalf("message = %q, want %q", session.data, want)
+		}
+	}
+	if !session.quit {
+		t.Fatal("the session was not closed with QUIT")
+	}
+}
+
+// Configured credentials are presented with the mechanism the relay offers.
+func TestSMTPClientAuthenticates(t *testing.T) {
+	for name, mechanisms := range map[string]string{"plain": "PLAIN LOGIN", "login": "LOGIN"} {
+		t.Run(name, func(t *testing.T) {
+			relay := startFakeSMTP(t, relayOptions{auth: mechanisms})
+			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, User: "mailer", Pass: "s3cret", From: "panel@example.test"})
+
+			if err := client.Send([]string{"user@example.test"}, "subject", "body"); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if got := relay.session().credentials; got != "mailer:s3cret" {
+				t.Fatalf("credentials = %q, want mailer:s3cret over %s", got, name)
+			}
+		})
+	}
+}
+
+// A relay that stops answering must not hold the sender: the delivery gives
+// up at the client's deadline with an ordinary failure, which a batch
+// campaign records against the recipient instead of treating it as its own
+// cancellation.
+func TestSMTPClientGivesUpOnAStalledRelay(t *testing.T) {
+	relay := startFakeSMTP(t, relayOptions{stall: true})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test"})
+	client.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body")
+	if err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("error = %v after %s, want a prompt failure", err, time.Since(start))
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want an i/o timeout that is not a context error", err)
+	}
+}
+
+// Cancelling the caller's context ends a blocked conversation at once, and
+// the error says so.
+func TestSMTPClientStopsWhenTheContextEnds(t *testing.T) {
+	relay := startFakeSMTP(t, relayOptions{stall: true})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test"})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	start := time.Now()
+	err := client.SendContext(ctx, []string{"user@example.test"}, "subject", "body")
+	if !errors.Is(err, context.Canceled) || time.Since(start) > 3*time.Second {
+		t.Fatalf("error = %v after %s, want context.Canceled promptly", err, time.Since(start))
 	}
 }
 
@@ -144,20 +202,53 @@ func selfSignedCertificate(t *testing.T) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-// startFakeSMTP serves one SMTP session. With a certificate it either offers
-// STARTTLS or, when implicit, starts the session with the TLS handshake.
-func startFakeSMTP(t *testing.T, cert *tls.Certificate, implicit bool) *net.TCPAddr {
+type relayOptions struct {
+	// cert offers STARTTLS, or with implicit starts the session with TLS.
+	cert     *tls.Certificate
+	implicit bool
+	// auth lists the AUTH mechanisms to advertise.
+	auth string
+	// stall accepts the connection and never answers.
+	stall bool
+}
+
+type smtpSession struct {
+	from        string
+	rcpt        []string
+	data        string
+	credentials string
+	quit        bool
+}
+
+type fakeRelay struct {
+	port int
+	mu   sync.Mutex
+	got  smtpSession
+}
+
+func (r *fakeRelay) session() smtpSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.got
+}
+
+// startFakeSMTP serves one SMTP session.
+func startFakeSMTP(t *testing.T, opts relayOptions) *fakeRelay {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
+	relay := &fakeRelay{port: listener.Addr().(*net.TCPAddr).Port}
 	var tlsConfig *tls.Config
-	if cert != nil {
-		tlsConfig = &tls.Config{Certificates: []tls.Certificate{*cert}}
+	if opts.cert != nil {
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{*opts.cert}}
 	}
+	done := make(chan struct{})
+	t.Cleanup(func() { <-done })
 	go func() {
+		defer close(done)
 		conn, err := listener.Accept()
 		if err != nil {
 			return
@@ -165,7 +256,11 @@ func startFakeSMTP(t *testing.T, cert *tls.Certificate, implicit bool) *net.TCPA
 		defer func() { _ = conn.Close() }()
 		// A client that never speaks must not hang the test.
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-		if implicit {
+		if opts.stall {
+			_, _ = conn.Read(make([]byte, 1))
+			return
+		}
+		if opts.implicit {
 			tlsConn := tls.Server(conn, tlsConfig)
 			if tlsConn.Handshake() != nil {
 				return
@@ -173,30 +268,46 @@ func startFakeSMTP(t *testing.T, cert *tls.Certificate, implicit bool) *net.TCPA
 			conn = tlsConn
 			tlsConfig = nil
 		}
-		serveSMTP(conn, tlsConfig)
+		relay.serve(conn, tlsConfig, opts.auth)
 	}()
-	return listener.Addr().(*net.TCPAddr)
+	return relay
 }
 
-// serveSMTP speaks just enough SMTP for one message; a non-nil starttls
-// config is offered through the STARTTLS extension.
-func serveSMTP(conn net.Conn, starttls *tls.Config) {
+// serve speaks just enough SMTP for one message; a non-nil starttls config
+// is offered through the STARTTLS extension.
+func (r *fakeRelay) serve(conn net.Conn, starttls *tls.Config, auth string) {
 	reader := bufio.NewReader(conn)
 	reply := func(format string, args ...any) { _, _ = fmt.Fprintf(conn, format+"\r\n", args...) }
+	readLine := func() (string, bool) {
+		line, err := reader.ReadString('\n')
+		return strings.TrimRight(line, "\r\n"), err == nil
+	}
+	decode := func(value string) string {
+		decoded, _ := base64.StdEncoding.DecodeString(value)
+		return string(decoded)
+	}
 	reply("220 fake ESMTP")
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
+		line, ok := readLine()
+		if !ok {
 			return
 		}
-		command := strings.ToUpper(strings.TrimSpace(line))
+		command := strings.ToUpper(line)
 		switch {
 		case strings.HasPrefix(command, "EHLO"), strings.HasPrefix(command, "HELO"):
+			extensions := []string{"fake"}
 			if starttls != nil {
-				reply("250-fake")
-				reply("250 STARTTLS")
-			} else {
-				reply("250 fake")
+				extensions = append(extensions, "STARTTLS")
+			}
+			if auth != "" {
+				extensions = append(extensions, "AUTH "+auth)
+			}
+			for i, extension := range extensions {
+				separator := "-"
+				if i == len(extensions)-1 {
+					separator = " "
+				}
+				reply("250%s%s", separator, extension)
 			}
 		case command == "STARTTLS" && starttls != nil:
 			reply("220 ready")
@@ -205,22 +316,56 @@ func serveSMTP(conn net.Conn, starttls *tls.Config) {
 				return
 			}
 			conn, reader, starttls = tlsConn, bufio.NewReader(tlsConn), nil
-		case strings.HasPrefix(command, "MAIL FROM"), strings.HasPrefix(command, "RCPT TO"),
-			command == "RSET", command == "NOOP":
+		case strings.HasPrefix(command, "AUTH PLAIN"):
+			parts := strings.Split(decode(strings.TrimSpace(line[len("AUTH PLAIN"):])), "\x00")
+			if len(parts) == 3 {
+				r.mu.Lock()
+				r.got.credentials = parts[1] + ":" + parts[2]
+				r.mu.Unlock()
+			}
+			reply("235 ok")
+		case command == "AUTH LOGIN":
+			reply("334 %s", base64.StdEncoding.EncodeToString([]byte("Username:")))
+			username, _ := readLine()
+			reply("334 %s", base64.StdEncoding.EncodeToString([]byte("Password:")))
+			password, _ := readLine()
+			r.mu.Lock()
+			r.got.credentials = decode(username) + ":" + decode(password)
+			r.mu.Unlock()
+			reply("235 ok")
+		case strings.HasPrefix(command, "MAIL FROM:"):
+			r.mu.Lock()
+			r.got.from = line[len("MAIL FROM:"):]
+			r.mu.Unlock()
+			reply("250 ok")
+		case strings.HasPrefix(command, "RCPT TO:"):
+			r.mu.Lock()
+			r.got.rcpt = append(r.got.rcpt, line[len("RCPT TO:"):])
+			r.mu.Unlock()
+			reply("250 ok")
+		case command == "RSET", command == "NOOP":
 			reply("250 ok")
 		case command == "DATA":
 			reply("354 go ahead")
+			var data strings.Builder
 			for {
-				body, err := reader.ReadString('\n')
-				if err != nil {
+				body, ok := readLine()
+				if !ok {
 					return
 				}
-				if body == ".\r\n" {
+				if body == "." {
 					break
 				}
+				data.WriteString(body + "\n")
 			}
+			r.mu.Lock()
+			r.got.data = data.String()
+			r.mu.Unlock()
 			reply("250 queued")
 		case command == "QUIT":
+			r.mu.Lock()
+			r.got.quit = true
+			r.mu.Unlock()
 			reply("221 bye")
 			return
 		default:

@@ -2,8 +2,8 @@ package profile
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -27,13 +27,13 @@ func newUpdateUserNotifyLogic(ctx context.Context, deps Deps) *UpdateUserNotifyL
 }
 
 func (l *UpdateUserNotifyLogic) UpdateUserNotify(req *dto.UpdateUserNotifyRequest) error {
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
 		logger.Error("current user is not found in context")
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 	if u.Id == 0 {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "user not login")
+		return fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	columns := map[string]interface{}{}
 	for column, value := range map[string]*bool{
@@ -47,7 +47,7 @@ func (l *UpdateUserNotifyLogic) UpdateUserNotify(req *dto.UpdateUserNotifyReques
 		}
 	}
 	if err := l.deps.Users.UpdateColumns(l.ctx, u.Id, columns); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "update user notify error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update notification settings of user %d", u.Id)
 	}
 	return nil
 }

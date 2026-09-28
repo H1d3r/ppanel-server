@@ -1,5 +1,5 @@
-// Package support is the facade of the support module (announcements and,
-// as migration proceeds, documents, tickets and ads). Admin and public
+// Package support is the facade of the support module: tickets,
+// announcements, documents, ads and marketing tasks. Admin and public
 // handlers call the same service; access-plane concerns such as auth and
 // field trimming stay in the handlers. See docs/design/adr-001-modular-monolith.md.
 package support
@@ -63,6 +63,12 @@ type Service interface {
 	GetUserTicketDetails(ctx context.Context, req *dto.GetUserTicketDetailRequest) (*dto.Ticket, error)
 	GetUserTicketList(ctx context.Context, req *dto.GetUserTicketListRequest) (*dto.GetUserTicketListResponse, error)
 	UpdateUserTicketStatus(ctx context.Context, req *dto.UpdateUserTicketStatusRequest) error
+	// UpdateTicketAsStaff applies a ticket change staff made outside the
+	// admin panel (the Telegram bot): a reply, or a status change. It runs
+	// the same use case as the admin panel's reply and status endpoints, so
+	// the change is mirrored the same way, except back into the channel it
+	// came from.
+	UpdateTicketAsStaff(ctx context.Context, cmd *dto.StaffTicketUpdateCommand) (*dto.StaffTicketUpdateResult, error)
 
 	CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateBatchSendEmailTaskRequest) error
 	GetPreSendEmailCount(ctx context.Context, req *dto.GetPreSendEmailCountRequest) (*dto.GetPreSendEmailCountResponse, error)
@@ -76,15 +82,14 @@ type Service interface {
 }
 
 // SubscriptionReader is the support module's port onto the subscription
-// domain (dependency inversion: the consumer owns the interface). The
-// composition root wraps the legacy repository today; the subscription module
-// facade will implement it once that module exists.
+// domain (dependency inversion: the consumer owns the interface); the
+// composition root adapts the subscription domain's repository to it.
 type SubscriptionReader interface {
 	HasActiveSubscription(ctx context.Context, userID int64) (bool, error)
 }
 
 // EmailRecipientReader is the module's port onto the identity domain for
-// selecting campaign recipients; the legacy user repository satisfies it
+// selecting campaign recipients; the identity user repository satisfies it
 // structurally.
 type EmailRecipientReader interface {
 	QueryEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) ([]string, error)
@@ -92,8 +97,8 @@ type EmailRecipientReader interface {
 }
 
 // SubscriptionSelector is the module's port onto the subscription domain for
-// selecting quota-task targets; the legacy user-subscription repository
-// satisfies it structurally.
+// selecting quota-task targets; the subscription domain's user-subscription
+// repository satisfies it structurally.
 type SubscriptionSelector interface {
 	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
 	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)
@@ -113,9 +118,9 @@ type BatchEmailStopper interface {
 }
 
 // Deps declares everything the module needs; the composition root
-// (internal/app) provides them. The module wraps legacy repositories during
-// migration and will own its persistence once the domain data moves in
-// (ADR-001 step 5).
+// (internal/app) provides them. The ticket, announcement, ads and document
+// repositories are the module's own (see NewRepoBuilder); the rest are ports
+// onto other domains.
 type Deps struct {
 	Announcements repository.AnnouncementRepo
 	Ads           repository.AdsRepo
@@ -276,6 +281,10 @@ func (s *service) GetUserTicketList(ctx context.Context, req *dto.GetUserTicketL
 
 func (s *service) UpdateUserTicketStatus(ctx context.Context, req *dto.UpdateUserTicketStatusRequest) error {
 	return s.tickets.UpdateUserStatus(ctx, req)
+}
+
+func (s *service) UpdateTicketAsStaff(ctx context.Context, cmd *dto.StaffTicketUpdateCommand) (*dto.StaffTicketUpdateResult, error) {
+	return s.tickets.UpdateAsStaff(ctx, cmd)
 }
 
 func (s *service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateBatchSendEmailTaskRequest) error {

@@ -2,18 +2,16 @@ package profile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
-	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -39,34 +37,33 @@ func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) 
 	domainList, restrict := l.deps.EmailDomains()
 	email, err := identifier.ValidateEmail(req.Email, domainList, restrict)
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid email: %v", err)
+		return xerr.Wrapf(err, xerr.InvalidParams, "invalid email")
 	}
 	req.Email = email
 	// The new address becomes a login identifier, so its owner must prove
 	// control of it first, as binding a mobile number does.
-	cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Register, email)
+	cacheKey := verification.EmailCodeKey(auth.Register, email)
 	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+		return xerr.Wrapf(err, xerr.VerifyCodeError, "check verification code")
 	}
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
-		logger.Error("current user is not found in context")
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	method, err := l.deps.UserAuth.FindUserAuthMethodByUserId(l.ctx, "email", u.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindUserAuthMethodByOpenID error")
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find identity")
 	}
 	m, err := l.deps.UserAuth.FindUserAuthMethodByOpenID(l.ctx, "email", req.Email)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindUserAuthMethodByOpenID error")
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find identity")
 	}
 	// email already bind
 	if m.Id > 0 {
-		return errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "email already bind")
+		return fmt.Errorf("the email is bound to an account: %w", xerr.NewErrCode(xerr.UserExist))
 	}
 	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+		return xerr.Wrapf(err, xerr.VerifyCodeError, "check verification code")
 	}
 	if method.Id == 0 {
 		method = &user.AuthMethods{
@@ -76,13 +73,13 @@ func (l *UpdateBindEmailLogic) UpdateBindEmail(req *dto.UpdateBindEmailRequest) 
 			Verified:       true,
 		}
 		if err := l.deps.UserAuth.InsertUserAuthMethods(l.ctx, method); err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "InsertUserAuthMethods error")
+			return xerr.Wrapf(err, xerr.DatabaseInsertError, "bind identity")
 		}
 	} else {
 		method.Verified = true
 		method.AuthIdentifier = req.Email
 		if err := l.deps.UserAuth.UpdateUserAuthMethods(l.ctx, method); err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "UpdateUserAuthMethods error")
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update identity")
 		}
 	}
 	return nil

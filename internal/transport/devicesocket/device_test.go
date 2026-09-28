@@ -81,7 +81,7 @@ func TestDevice(t *testing.T) {
 	}
 
 	time.Sleep(time.Second * 20)
-	conn.Close()
+	_ = conn.Close()
 	time.Sleep(time.Second * 5)
 
 }

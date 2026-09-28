@@ -15,6 +15,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // telegramPoll tracks the long-polling loop across re-initialisations. The
@@ -69,16 +70,20 @@ func telegramUpdateHandler(svc *Dependencies) tgbot.HandlerFunc {
 // Telegram (re)initialises the bot from the stored configuration. On failure
 // it returns without touching the running state, so a transient error during
 // re-initialisation leaves the previous bot working instead of none at all.
-func Telegram(svc *Dependencies) {
-	method, err := svc.Store.Auth().FindOneByMethod(context.Background(), "telegram")
+//
+// Reading and decoding the stored configuration fail the load like every
+// other subsystem. Failures talking to the Telegram API are only logged: the
+// panel has to start and reload while Telegram is unreachable.
+func Telegram(svc *Dependencies) error {
+	method, err := findAuthMethod(svc, "telegram")
 	if err != nil {
 		logger.Errorf("[Init Telegram Config] Get Telegram Config Error: %s", err.Error())
-		return
+		return err
 	}
 	tgConfig := new(auth.TelegramAuthConfig)
 	if err = tgConfig.Unmarshal(method.Config); err != nil {
 		logger.Errorf("[Init Telegram Config] Unmarshal Telegram Config Error: %s", err.Error())
-		return
+		return wrapf(err, xerr.ERROR, "decode the telegram auth method config")
 	}
 
 	if tgConfig.BotToken == "" {
@@ -92,7 +97,7 @@ func Telegram(svc *Dependencies) {
 		}
 		svc.updateConfig(func(current *config.Config) { current.Telegram = config.Telegram{} })
 		logger.Debug("[Init Telegram Config] Telegram Token is empty")
-		return
+		return nil
 	}
 
 	bot, err := tgbot.New(tgConfig.BotToken,
@@ -113,7 +118,7 @@ func Telegram(svc *Dependencies) {
 	)
 	if err != nil {
 		logger.Error("[Init Telegram Config] New Bot API Error: ", logger.Field("error", err.Error()))
-		return
+		return nil
 	}
 
 	// This runs synchronously inside startup and the admin settings request,
@@ -123,7 +128,7 @@ func Telegram(svc *Dependencies) {
 	cancelGetMe()
 	if err != nil {
 		logger.Error("[Init Telegram Config] Get Bot Info Error: ", logger.Field("error", err.Error()))
-		return
+		return nil
 	}
 
 	// The group id is parsed leniently: a malformed value logs and behaves
@@ -139,7 +144,7 @@ func Telegram(svc *Dependencies) {
 	}
 
 	newConfig := config.Telegram{
-		Enable:        method.Enabled != nil && *method.Enabled,
+		Enable:        authMethodEnabled(method),
 		BotID:         user.ID,
 		BotName:       user.Username,
 		BotToken:      tgConfig.BotToken,
@@ -164,7 +169,7 @@ func Telegram(svc *Dependencies) {
 			AllowedUpdates: []string{models.AllowedUpdateMessage},
 		}); err != nil {
 			logger.Errorf("[Init Telegram Config] Request Webhook Error: %s", err.Error())
-			return
+			return nil
 		}
 		swapTelegramPoller(nil)
 		svc.updateConfig(func(current *config.Config) { current.Telegram = newConfig })
@@ -216,4 +221,5 @@ func Telegram(svc *Dependencies) {
 	}
 
 	logger.Info("[Init Telegram Config] Telegram init success")
+	return nil
 }

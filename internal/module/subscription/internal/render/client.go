@@ -3,7 +3,6 @@ package render
 import (
 	"bytes"
 	"encoding/base64"
-	"reflect"
 	"text/template"
 	"time"
 
@@ -137,17 +136,17 @@ var templateFuncs = func() template.FuncMap {
 
 func (c *Client) Build() ([]byte, error) {
 	var buf bytes.Buffer
-	tmpl, err := template.New("client").Funcs(templateFuncs).Parse(c.ClientTemplate)
+	tmpl, err := parsedTemplates.get(c.ClientTemplate)
 	if err != nil {
 		return nil, err
 	}
 
-	proxies := make([]map[string]interface{}, len(c.Proxies))
+	proxies := make([]map[string]any, len(c.Proxies))
 	for i, p := range c.Proxies {
-		proxies[i] = StructToMap(p)
+		proxies[i] = p.templateData()
 	}
 
-	err = tmpl.Execute(&buf, map[string]interface{}{
+	err = tmpl.Execute(&buf, map[string]any{
 		"SiteName":      c.SiteName,
 		"SubscribeName": c.SubscribeName,
 		"OutputFormat":  c.OutputFormat,
@@ -166,16 +165,4 @@ func (c *Client) Build() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-func StructToMap(obj interface{}) map[string]interface{} {
-	m := make(map[string]interface{})
-	v := reflect.ValueOf(obj)
-	t := reflect.TypeOf(obj)
-
-	for i := 0; i < v.NumField(); i++ {
-		field := t.Field(i)
-		m[field.Name] = v.Field(i).Interface()
-	}
-	return m
 }

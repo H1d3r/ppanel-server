@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
@@ -28,7 +27,7 @@ func TestQueryUserCommissionLogHidesRefereeOrderNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &commissionLogRepo{logs: []*log.SystemLog{{Type: log.TypeCommission.Uint8(), ObjectID: 3, Content: string(content)}}}
-	ctx := context.WithValue(context.Background(), requestctx.CtxKeyUser, &user.User{Id: 3})
+	ctx := user.NewContext(context.Background(), &user.User{Id: 3})
 
 	resp, err := newQueryUserCommissionLogLogic(ctx, Deps{Logs: repo}).QueryUserCommissionLog(&dto.QueryUserCommissionLogListRequest{Page: 1, Size: 10})
 	if err != nil {

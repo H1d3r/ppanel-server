@@ -48,23 +48,14 @@ func (l *FilterBalanceLogLogic) FilterBalanceLog(req *dto.FilterBalanceLogReques
 			l.Errorf("[QueryUserBalanceLog] unmarshal balance log content failed: %v", err.Error())
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt balance log %d: %v", datum.Id, err)
 		}
-		list = append(list, dto.BalanceLog{
-			UserId:           datum.ObjectID,
-			Amount:           content.Amount,
-			Type:             content.Type,
-			OrderNo:          content.OrderNo,
-			Balance:          content.Balance,
-			Timestamp:        content.Timestamp,
-			ClientIP:         content.ClientIP,
-			UserAgent:        content.UserAgent,
-			ActorID:          content.ActorID,
-			IPCountryCode:    content.IPCountryCode,
-			IPCountry:        content.IPCountry,
-			IPRegion:         content.IPRegion,
-			IPCity:           content.IPCity,
-			IPASN:            content.IPASN,
-			IPASOrganization: content.IPASOrganization,
-		})
+		list = append(list, withRequestMetadata(&dto.BalanceLog{
+			UserId:    datum.ObjectID,
+			Amount:    content.Amount,
+			Type:      content.Type,
+			OrderNo:   content.OrderNo,
+			Balance:   content.Balance,
+			Timestamp: content.Timestamp,
+		}, content.Metadata))
 	}
 
 	return &dto.FilterBalanceLogResponse{

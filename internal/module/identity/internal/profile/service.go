@@ -51,14 +51,6 @@ func (s *Service) GetOAuthMethods(ctx context.Context) (*dto.GetOAuthMethodsResp
 	return newGetOAuthMethodsLogic(ctx, s.deps).GetOAuthMethods()
 }
 
-func (s *Service) BindOAuth(ctx context.Context, req *dto.BindOAuthRequest) (*dto.BindOAuthResponse, error) {
-	return newBindOAuthLogic(ctx, s.deps).BindOAuth(req)
-}
-
-func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallbackRequest) error {
-	return newBindOAuthCallbackLogic(ctx, s.deps).BindOAuthCallback(req)
-}
-
 func (s *Service) UnbindOAuth(ctx context.Context, req *dto.UnbindOAuthRequest) error {
 	return newUnbindOAuthLogic(ctx, s.deps).UnbindOAuth(req)
 }

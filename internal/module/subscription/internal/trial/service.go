@@ -10,9 +10,11 @@ import (
 	"uuid"
 
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/period"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 const inboxTrialGrant = "subscription.trial_grant"
@@ -70,12 +72,23 @@ func (s *Service) GrantTrial(ctx context.Context, userID int64) error {
 				return err
 			}
 			now := timeutil.Now()
+			// A misconfigured trial unit fails the grant, and the event is
+			// retried once the setting is fixed, instead of granting a
+			// trial that ends where it starts.
+			unit, err := period.ParseUnit(policy.TimeUnit)
+			if err != nil {
+				return xerr.Wrapf(err, xerr.ERROR, "trial time unit")
+			}
+			expireTime, err := period.App().TermEnd(unit, policy.Duration, now)
+			if err != nil {
+				return xerr.Wrapf(err, xerr.ERROR, "trial term")
+			}
 			granted = &usersub.Subscribe{
 				UserId:      userID,
 				OrderId:     0,
 				SubscribeId: plan.Id,
 				StartTime:   now,
-				ExpireTime:  timeutil.AddTime(policy.TimeUnit, policy.Duration, now),
+				ExpireTime:  expireTime,
 				Traffic:     plan.Traffic,
 				Token:       usersub.NewToken(),
 				UUID:        uuid.NewV7().String(),

@@ -2,8 +2,6 @@ package portal
 
 import (
 	"context"
-	"encoding/json"
-	"slices"
 	"strings"
 	"time"
 
@@ -12,16 +10,16 @@ import (
 	"github.com/perfect-panel/server/internal/auth/password"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 	"github.com/perfect-panel/server/internal/module/billing/internal/orderaudit"
 	"github.com/perfect-panel/server/internal/module/billing/internal/ordercontext"
-	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/pricing"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/requestmeta"
-	"github.com/perfect-panel/server/pkg/slicesx"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
@@ -44,7 +42,7 @@ func NormalizeGuestIdentity(authType, value string) (string, string, error) {
 	case identifier.Email:
 		email, err := identifier.ValidateEmail(value, "", false)
 		if err != nil {
-			return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid guest email: %v", err)
+			return "", "", xerr.Wrapf(err, xerr.InvalidParams, "invalid guest email")
 		}
 		return identifier.Email, email, nil
 	case identifier.Mobile:
@@ -54,7 +52,7 @@ func NormalizeGuestIdentity(authType, value string) (string, string, error) {
 		}
 		e164, err := identifier.FormatToE164("", number)
 		if err != nil {
-			return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid guest mobile number: %v", err)
+			return "", "", xerr.Wrapf(err, xerr.InvalidParams, "invalid guest mobile number")
 		}
 		return identifier.Mobile, e164, nil
 	default:
@@ -82,7 +80,7 @@ func (s *Service) verifyGuestHuman(ctx context.Context, token string) error {
 	metadata, _ := requestmeta.From(ctx)
 	ok, err := verify(ctx, policy.Secret, token, metadata.ClientIP)
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed: %v", err)
+		return xerr.Wrapf(err, xerr.TooManyRequests, "guest purchase verification failed")
 	}
 	if !ok {
 		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed")
@@ -96,9 +94,9 @@ func verifyTurnstile(ctx context.Context, secret, token, remoteIP string) (bool,
 
 // Purchase creates a guest pre-order: the billing transaction reserves the
 // coupon and creates the pending order, then plan inventory is reserved in
-// its own subscription-domain transaction (ADR-001 step 2).
+// its own subscription-domain transaction (ADR-001 step 2). A guest holds no
+// gift credit, so the order is priced exactly like PrePurchase previews it.
 func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) (*dto.PortalPurchaseResponse, error) {
-	log := logger.WithContext(ctx)
 	authType, guestIdentifier, err := NormalizeGuestIdentity(req.AuthType, req.Identifier)
 	if err != nil {
 		return nil, err
@@ -106,10 +104,9 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	if err := s.verifyGuestHuman(ctx, req.TurnstileToken); err != nil {
 		return nil, err
 	}
-	// find user auth
 	userAuth, err := s.deps.UserAuths.FindUserAuthMethodByOpenID(ctx, authType, guestIdentifier)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user auth error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user auth")
 	}
 	if userAuth != nil && userAuth.UserId != 0 {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "user already exists")
@@ -118,102 +115,43 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	// the Turnstile check is the rate control.
 	pending, err := s.deps.Orders.CountPendingGuestOrders(ctx, authType, guestIdentifier)
 	if err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count pending guest orders error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "count pending guest orders")
 	}
 	if pending >= maxPendingGuestOrders {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "too many pending guest orders")
 	}
-	// find subscribe plan
-	sub, err := s.deps.Plans.FindOne(ctx, req.SubscribeId)
+	plan, err := s.deps.Plans.FindOne(ctx, req.SubscribeId)
 	if err != nil {
-		log.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("subscribe_id", req.SubscribeId))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find subscribe error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find subscribe %d", req.SubscribeId)
 	}
-
-	// check subscribe plan stock
-	if sub.Inventory == 0 {
+	if plan.Inventory == 0 {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
 	}
-
-	// check subscribe plan status
-	if !*sub.Sell {
+	if plan.Sell == nil || !*plan.Sell {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "subscribe not sell")
 	}
-	var discount float64 = 1
-	if sub.Discount != "" {
-		var dis []dto.BillingSubscribeDiscount
-		_ = json.Unmarshal([]byte(sub.Discount), &dis)
-		discount = getDiscount(dis, req.Quantity)
-	}
-	price := sub.UnitPrice * req.Quantity
-	// discount amount
-	amount := int64(float64(price) * discount)
-	discountAmount := price - amount
-
-	var couponAmount int64 = 0
-	// Calculate the coupon deduction
-	if req.Coupon != "" {
-		couponInfo, err := s.deps.Coupons.FindOneByCode(ctx, req.Coupon)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponNotExist), "coupon not found")
-			}
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find coupon error: %v", err.Error())
-		}
-		if err := ensureCouponEnabled(couponInfo); err != nil {
-			return nil, err
-		}
-		if couponInfo.Count != 0 && couponInfo.Count <= couponInfo.UsedCount {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used")
-		}
-		couponSub := slicesx.StringToInt64Slice(couponInfo.Subscribe)
-		if len(couponSub) > 0 && !slices.Contains(couponSub, req.SubscribeId) {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.CouponNotApplicable), "coupon not match")
-		}
-
-		couponAmount = calculateCoupon(amount, couponInfo)
-	}
-	// Calculate the handling fee
-	amount -= couponAmount
-	// find payment method
-	paymentConfig, err := s.deps.Payments.FindOne(ctx, req.Payment)
+	terms, err := checkout.ResolvePlanTerms(ctx, s.deps.Coupons, s.deps.Payments, plan, req.Quantity, req.Coupon, req.Payment)
 	if err != nil {
-		log.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "find payment method error: %v", err.Error())
-	}
-	if err := ensurePaymentAvailable(paymentConfig); err != nil {
 		return nil, err
 	}
-
-	if payment.ParsePlatform(paymentConfig.Platform) == payment.Balance {
+	if terms.Method == nil {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method is required")
+	}
+	if gateway.IsBalance(terms.Method) {
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance error")
 	}
-
-	var feeAmount int64
-	// Calculate the handling fee
-	if amount > 0 {
-		feeAmount = calculateFee(amount, paymentConfig)
-	}
-	amount += feeAmount
-	// create order
 	checkoutToken := ordercontext.GuestCheckoutToken(ctx)
 	if checkoutToken == "" {
 		checkoutToken = random.KeyNew(32, 1)
 	}
 	orderInfo := &order.Order{
 		OrderNo:                order.GenerateTradeNo(),
-		Type:                   1,
+		Type:                   order.TypeSubscribe,
 		Quantity:               req.Quantity,
-		Price:                  price,
-		Amount:                 amount,
-		Discount:               discountAmount,
-		GiftAmount:             0,
 		Coupon:                 req.Coupon,
-		CouponDiscount:         couponAmount,
-		PaymentId:              req.Payment,
-		Method:                 paymentConfig.Platform,
-		FeeAmount:              feeAmount,
-		Status:                 1,
+		PaymentId:              terms.Method.Id,
+		Method:                 terms.Method.Platform,
+		Status:                 order.StatusPending,
 		IsNew:                  true,
 		SubscribeId:            req.SubscribeId,
 		GuestAuthType:          authType,
@@ -222,58 +160,51 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 		GuestInviteCode:        req.InviteCode,
 		GuestCheckoutTokenHash: order.CheckoutTokenHash(checkoutToken),
 	}
+	checkout.ApplyQuote(orderInfo, pricing.Compute(terms.Input(0)))
 	ordercontext.ApplyIdempotency(ctx, orderInfo)
 	// Billing-domain transaction: coupon reservation and order creation
 	// settle together.
-	err = s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
-		if orderInfo.Coupon != "" {
-			reserved, reserveErr := store.Coupon().ReserveUsage(ctx, orderInfo.Coupon, timeutil.Now().UnixMilli())
-			if reserveErr != nil {
-				return reserveErr
-			}
-			if !reserved {
-				return errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used or expired")
-			}
-			orderInfo.CouponReserved = true
-		}
-
-		// save guest order
-		if err = store.Order().Insert(ctx, orderInfo); err != nil {
+	err = s.deps.Tx.InBillingTx(ctx, func(tx repository.BillingStore) error {
+		if err := checkout.ReserveCoupon(ctx, tx, orderInfo); err != nil {
 			return err
 		}
-		return orderaudit.InsertCreated(ctx, store.Log(), orderInfo, orderaudit.SourceGuest)
+		return checkout.InsertOrder(ctx, tx, orderInfo, orderaudit.SourceGuest)
 	})
 	if err != nil {
-		log.Errorw("[Purchase] Database transaction error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "transaction error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.ERROR, "create guest order")
 	}
 	// Reserve plan inventory in its own subscription-domain transaction
 	// (ADR-001 step 2). On failure the guest order is closed inline; guest
 	// pre-orders only hold a coupon reservation.
-	if err := s.deps.Inventory.Reserve(ctx, orderInfo.OrderNo, sub.Id); err != nil {
-		closeErr := s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
-			closed, e := store.Order().UpdateOrderStatusFrom(ctx, orderInfo.OrderNo, 1, 3)
-			if e != nil {
-				return e
-			}
-			if closed && orderInfo.CouponReserved {
-				return store.Coupon().ReleaseUsage(ctx, orderInfo.Coupon)
-			}
-			return nil
-		})
-		if closeErr != nil {
-			log.Errorw("[Purchase] Close order after reservation failure failed", logger.Field("error", closeErr.Error()), logger.Field("orderNo", orderInfo.OrderNo))
-		}
+	if err := s.deps.Inventory.Reserve(ctx, orderInfo.OrderNo, plan.Id); err != nil {
+		s.closeUnreservedOrder(ctx, orderInfo)
 		if errors.Is(err, subscription.ErrOutOfStock) {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
 		}
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "reserve inventory error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.ERROR, "reserve inventory")
 	}
-	// Deferred task
 	if err := s.deps.Queue.EnqueueDeferredClose(ctx, orderInfo.OrderNo); err != nil {
-		log.Errorw("[CloseOrder Task] Enqueue task error", logger.Field("error", err.Error()), logger.Field("orderNo", orderInfo.OrderNo))
+		logger.WithContext(ctx).Errorw("[CloseOrder Task] Enqueue task error", logger.Field("error", err.Error()), logger.Field("orderNo", orderInfo.OrderNo))
 	} else {
-		log.Infow("[CloseOrder Task] Enqueue task success", logger.Field("orderNo", orderInfo.OrderNo))
+		logger.WithContext(ctx).Infow("[CloseOrder Task] Enqueue task success", logger.Field("orderNo", orderInfo.OrderNo))
 	}
 	return &dto.PortalPurchaseResponse{OrderNo: orderInfo.OrderNo, CheckoutToken: checkoutToken}, nil
+}
+
+// closeUnreservedOrder closes a guest order whose inventory could not be
+// reserved and releases its coupon use.
+func (s *Service) closeUnreservedOrder(ctx context.Context, orderInfo *order.Order) {
+	err := s.deps.Tx.InBillingTx(ctx, func(tx repository.BillingStore) error {
+		closed, err := tx.Order().UpdateOrderStatusFrom(ctx, orderInfo.OrderNo, order.StatusPending, order.StatusClosed)
+		if err != nil {
+			return err
+		}
+		if closed && orderInfo.CouponReserved {
+			return tx.Coupon().ReleaseUsage(ctx, orderInfo.Coupon)
+		}
+		return nil
+	})
+	if err != nil {
+		logger.WithContext(ctx).Errorw("[Purchase] Close order after reservation failure failed", logger.Field("error", err.Error()), logger.Field("orderNo", orderInfo.OrderNo))
+	}
 }

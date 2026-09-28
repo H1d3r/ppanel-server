@@ -129,7 +129,7 @@ func TestUniqueFormValuesRejectsDuplicateCallbackParameters(t *testing.T) {
 	}
 }
 
-func TestStripePayload_acceptsHistoricalLimitAndRejectsLargerPayload(t *testing.T) {
+func TestNotifyPayload_acceptsHistoricalLimitAndRejectsLargerPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		size    int
@@ -145,7 +145,7 @@ func TestStripePayload_acceptsHistoricalLimitAndRejectsLargerPayload(t *testing.
 			payload := bytes.Repeat([]byte("x"), test.size)
 
 			// When
-			got, err := stripePayload(payload)
+			got, err := notifyPayload(payload)
 
 			// Then
 			if (err != nil) != test.wantErr {

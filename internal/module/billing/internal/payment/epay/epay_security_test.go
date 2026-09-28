@@ -1,6 +1,7 @@
 package epay
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -36,35 +37,6 @@ func TestVerifySignRejectsMissingAndInvalidSignatures(t *testing.T) {
 	params["money"] = "0.01"
 	if client.VerifySign(params) {
 		t.Fatal("changing a signed parameter must invalidate the signature")
-	}
-}
-
-func TestParseMoneyUsesExactMinorUnits(t *testing.T) {
-	tests := []struct {
-		value   string
-		want    int64
-		wantErr bool
-	}{
-		{value: "0", want: 0},
-		{value: "10", want: 1000},
-		{value: "10.1", want: 1010},
-		{value: "10.01", want: 1001},
-		{value: "1.001", wantErr: true},
-		{value: "-1.00", wantErr: true},
-		{value: "1e2", wantErr: true},
-		{value: " 1.00", wantErr: true},
-		{value: "", wantErr: true},
-	}
-	for _, test := range tests {
-		t.Run(test.value, func(t *testing.T) {
-			got, err := ParseMoney(test.value)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("ParseMoney(%q) error=%v", test.value, err)
-			}
-			if err == nil && got != test.want {
-				t.Fatalf("ParseMoney(%q)=%d, want %d", test.value, got, test.want)
-			}
-		})
 	}
 }
 
@@ -113,7 +85,7 @@ func TestQueryOrderReturnsAuthoritativeGatewayFields(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("1001", server.URL+"/gateway", "secret", "alipay")
-	result, err := client.QueryOrder("order-1")
+	result, err := client.QueryOrder(context.Background(), "order-1")
 	if err != nil {
 		t.Fatalf("QueryOrder: %v", err)
 	}
@@ -159,7 +131,7 @@ func TestQueryOrderFallsBackToEasyPayStatusQuery(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("1001", server.URL+"/gateway", "secret", "alipay")
-	result, err := client.QueryOrder("order-1")
+	result, err := client.QueryOrder(context.Background(), "order-1")
 	if err != nil {
 		t.Fatalf("QueryOrder: %v", err)
 	}
@@ -183,7 +155,7 @@ func TestQueryOrderEasyPayFallbackReportsUnpaid(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := NewClient("1001", server.URL, "secret", "alipay").QueryOrder("order-1")
+	result, err := NewClient("1001", server.URL, "secret", "alipay").QueryOrder(context.Background(), "order-1")
 	if err != nil {
 		t.Fatalf("QueryOrder: %v", err)
 	}
@@ -211,7 +183,7 @@ func TestQueryOrderReportsExplicitAwaitingPayment(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer server.Close()
-			result, err := NewClient("1001", server.URL, "secret", "alipay").QueryOrder("order-1")
+			result, err := NewClient("1001", server.URL, "secret", "alipay").QueryOrder(context.Background(), "order-1")
 			if err != nil {
 				t.Fatalf("QueryOrder: %v", err)
 			}
@@ -229,7 +201,7 @@ func TestQueryOrderReportsExplicitAwaitingPayment(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":1,"data":{"status":"pending"}}`))
 	}))
 	defer statusOnly.Close()
-	result, err := NewClient("1001", statusOnly.URL, "secret", "alipay").QueryOrder("order-1")
+	result, err := NewClient("1001", statusOnly.URL, "secret", "alipay").QueryOrder(context.Background(), "order-1")
 	if err != nil {
 		t.Fatalf("QueryOrder: %v", err)
 	}
@@ -245,7 +217,7 @@ func TestQueryOrderRejectsUnsuccessfulLookup(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("1001", server.URL, "secret", "alipay")
-	if _, err := client.QueryOrder("order-1"); err == nil {
+	if _, err := client.QueryOrder(context.Background(), "order-1"); err == nil {
 		t.Fatal("unsuccessful gateway lookup must be rejected")
 	}
 }
@@ -257,7 +229,7 @@ func TestQueryOrderReportsUnsupportedWhenGatewayReturnsNotFound(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("1001", server.URL, "secret", "alipay")
-	if _, err := client.QueryOrder("order-1"); !errors.Is(err, ErrQueryNotSupported) {
+	if _, err := client.QueryOrder(context.Background(), "order-1"); !errors.Is(err, ErrQueryNotSupported) {
 		t.Fatalf("QueryOrder error=%v, want ErrQueryNotSupported", err)
 	}
 }
@@ -273,7 +245,7 @@ func TestQueryOrderTreatsNonJSONResponseAsUnsupported(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("1001", server.URL+"/gateway", "secret", "alipay")
-	_, err := client.QueryOrder("order-1")
+	_, err := client.QueryOrder(context.Background(), "order-1")
 	if !errors.Is(err, ErrQueryNotSupported) {
 		t.Fatalf("QueryOrder error = %v, want ErrQueryNotSupported", err)
 	}
@@ -286,7 +258,7 @@ func TestQueryOrderDoesNotTreatOtherHTTPFailuresAsUnsupported(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("1001", server.URL, "secret", "alipay")
-	if _, err := client.QueryOrder("order-1"); errors.Is(err, ErrQueryNotSupported) {
+	if _, err := client.QueryOrder(context.Background(), "order-1"); errors.Is(err, ErrQueryNotSupported) {
 		t.Fatal("only a 404 response may be treated as an unsupported query API")
 	}
 }

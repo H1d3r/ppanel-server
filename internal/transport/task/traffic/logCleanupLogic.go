@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 type cleanupStore interface {
@@ -17,21 +18,34 @@ type cleanupStore interface {
 	Log() repository.LogRepo
 }
 
+// batchDeleter deletes the rows older than a threshold, one batch per call.
+type batchDeleter interface {
+	DeleteBeforeBatch(ctx context.Context, end time.Time, limit int) (int64, error)
+}
+
 const cleanupBatchSize = 5000
 
 // LogCleanupLogic owns retention independently from traffic aggregation so a
 // failed statistics run cannot silently disable log cleanup (or vice versa).
 type LogCleanupLogic struct {
-	store cleanupStore
-	log   func() config.Log
+	traffic batchDeleter
+	logs    batchDeleter
+	log     func() config.Log
 }
 
 func NewLogCleanupLogic(store cleanupStore, logConfig func() config.Log) *LogCleanupLogic {
-	return &LogCleanupLogic{store: store, log: logConfig}
+	if store == nil {
+		return &LogCleanupLogic{log: logConfig}
+	}
+	return newLogCleanupLogic(store.TrafficLog(), store.Log(), logConfig)
+}
+
+func newLogCleanupLogic(traffic, logs batchDeleter, logConfig func() config.Log) *LogCleanupLogic {
+	return &LogCleanupLogic{traffic: traffic, logs: logs, log: logConfig}
 }
 
 func (l *LogCleanupLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
-	if l.store == nil || l.log == nil {
+	if l.traffic == nil || l.logs == nil || l.log == nil {
 		return nil
 	}
 	settings := l.log()
@@ -45,32 +59,20 @@ func (l *LogCleanupLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error 
 	now := timeutil.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	threshold := today.AddDate(0, 0, -int(settings.ClearDays))
-	trafficDeleted, err := deleteTrafficBefore(ctx, l.store.TrafficLog(), threshold)
+	trafficDeleted, err := deleteBefore(ctx, l.traffic, threshold)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[Log Cleanup] cleanup failed", logger.Field("error", err.Error()))
-		return err
+		return xerr.Wrapf(err, xerr.ERROR, "delete the traffic logs before %s", threshold.Format(time.DateOnly))
 	}
-	logsDeleted, err := deleteLogsBefore(ctx, l.store.Log(), threshold)
+	logsDeleted, err := deleteBefore(ctx, l.logs, threshold)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[Log Cleanup] cleanup failed", logger.Field("error", err.Error()))
-		return err
+		return xerr.Wrapf(err, xerr.ERROR, "delete the system logs before %s", threshold.Format(time.DateOnly))
 	}
 	logger.WithContext(ctx).Infow("[Log Cleanup] cleanup completed", logger.Field("threshold", threshold.Format(time.DateOnly)), logger.Field("traffic_deleted", trafficDeleted), logger.Field("logs_deleted", logsDeleted))
 	return nil
 }
 
-func deleteTrafficBefore(ctx context.Context, repo repository.TrafficRepo, threshold time.Time) (int64, error) {
-	var total int64
-	for {
-		deleted, err := repo.DeleteBeforeBatch(ctx, threshold, cleanupBatchSize)
-		total += deleted
-		if err != nil || deleted < cleanupBatchSize {
-			return total, err
-		}
-	}
-}
-
-func deleteLogsBefore(ctx context.Context, repo repository.LogRepo, threshold time.Time) (int64, error) {
+// deleteBefore deletes the rows older than threshold batch by batch.
+func deleteBefore(ctx context.Context, repo batchDeleter, threshold time.Time) (int64, error) {
 	var total int64
 	for {
 		deleted, err := repo.DeleteBeforeBatch(ctx, threshold, cleanupBatchSize)

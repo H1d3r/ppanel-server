@@ -11781,7 +11781,8 @@
                         "google",
                         "apple",
                         "telegram",
-                        "github"
+                        "github",
+                        "facebook"
                     ]
                 }
             }
@@ -11799,7 +11800,8 @@
                         "google",
                         "apple",
                         "telegram",
-                        "github"
+                        "github",
+                        "facebook"
                     ]
                 },
                 "redirect": {

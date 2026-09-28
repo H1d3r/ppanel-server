@@ -7,13 +7,14 @@ import (
 
 	trafficEntity "github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
 )
 
+// statTrafficRepo ranks one subscription and one server.
 type statTrafficRepo struct {
-	repository.TrafficRepo
 	queries int
 }
+
+var _ trafficRankings = (*statTrafficRepo)(nil)
 
 func (r *statTrafficRepo) QueryUserTrafficRanking(context.Context, time.Time, time.Time) ([]trafficEntity.UserTrafficRanking, error) {
 	r.queries++
@@ -24,10 +25,12 @@ func (r *statTrafficRepo) QueryServerTrafficRanking(context.Context, time.Time, 
 	return []trafficEntity.ServerTrafficRanking{{ServerId: 4, Upload: 5, Download: 7, Total: 12}}, nil
 }
 
+// statLogRepo holds the recorded rows.
 type statLogRepo struct {
-	repository.LogRepo
 	rows []*log.SystemLog
 }
+
+var _ statLogs = (*statLogRepo)(nil)
 
 func (r *statLogRepo) InsertBatch(_ context.Context, rows []*log.SystemLog, _ int) error {
 	r.rows = append(r.rows, rows...)
@@ -43,27 +46,18 @@ func (r *statLogRepo) FindFirstByDateType(_ context.Context, date string, typ ui
 	return nil, nil
 }
 
-type statStore struct {
-	repository.Store
-	traffic *statTrafficRepo
-	logs    *statLogRepo
-}
-
-func (s statStore) TrafficLog() repository.TrafficRepo { return s.traffic }
-func (s statStore) Log() repository.LogRepo            { return s.logs }
-
 // A second run for the same day (another replica's tick, or a replay) must
 // not insert the day's statistics again.
 func TestStatLogicRecordsEachDayOnce(t *testing.T) {
-	store := statStore{traffic: &statTrafficRepo{}, logs: &statLogRepo{}}
-	logic := NewStatLogic(Dependencies{Store: store})
+	rankings, logs := &statTrafficRepo{}, &statLogRepo{}
+	logic := newStatLogic(logs, rankings)
 	for range 2 {
 		if err := logic.ProcessTask(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// One subscriber row, one server row and the three daily summaries.
-	if len(store.logs.rows) != 5 || store.traffic.queries != 1 {
-		t.Fatalf("rows = %d, ranking queries = %d; want one day's 5 rows from one run", len(store.logs.rows), store.traffic.queries)
+	if len(logs.rows) != 5 || rankings.queries != 1 {
+		t.Fatalf("rows = %d, ranking queries = %d; want one day's 5 rows from one run", len(logs.rows), rankings.queries)
 	}
 }

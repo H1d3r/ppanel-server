@@ -5,25 +5,44 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	trafficEntity "github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 type StatLogic struct {
-	deps Dependencies
+	logs    statLogs
+	traffic trafficRankings
+}
+
+// statLogs is where the daily statistics are recorded.
+type statLogs interface {
+	FindFirstByDateType(ctx context.Context, date string, typ uint8) (*log.SystemLog, error)
+	InsertBatch(ctx context.Context, data []*log.SystemLog, batchSize int) error
+}
+
+// trafficRankings reads a day's traffic per subscription and per server.
+type trafficRankings interface {
+	QueryUserTrafficRanking(ctx context.Context, start, end time.Time) ([]trafficEntity.UserTrafficRanking, error)
+	QueryServerTrafficRanking(ctx context.Context, start, end time.Time) ([]trafficEntity.ServerTrafficRanking, error)
 }
 
 func NewStatLogic(deps Dependencies) *StatLogic {
-	return &StatLogic{
-		deps: deps,
+	if deps.Store == nil {
+		return &StatLogic{}
 	}
+	return newStatLogic(deps.Store.Log(), deps.Store.TrafficLog())
+}
+
+func newStatLogic(logs statLogs, rankings trafficRankings) *StatLogic {
+	return &StatLogic{logs: logs, traffic: rankings}
 }
 
 func (l *StatLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	now := timeutil.Now()
 
-	// 获取全部有效订阅
 	// 获取统计时间范围
 	start := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, timeutil.Location())
 	end := start.Add(24 * time.Hour)
@@ -32,28 +51,25 @@ func (l *StatLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	// The day's rows are written in one atomic batch ending with the stat row,
 	// so finding that row means the day is already recorded: a duplicate or
 	// replayed run must not insert the rows twice.
-	recorded, err := l.deps.Store.Log().FindFirstByDateType(ctx, date, log.TypeTrafficStat.Uint8())
+	recorded, err := l.logs.FindFirstByDateType(ctx, date, log.TypeTrafficStat.Uint8())
 	if err != nil {
-		logger.Errorf("[Traffic Stat Queue] Query recorded stat failed: %v", err.Error())
-		return err
+		return xerr.Wrapf(err, xerr.ERROR, "query the recorded traffic stat of %s", date)
 	}
 	if recorded != nil {
-		logger.Infof("[Traffic Stat Queue] Traffic of %s already recorded, skipping", date)
+		logger.WithContext(ctx).Infof("[Traffic Stat Queue] Traffic of %s already recorded, skipping", date)
 		return nil
 	}
 
 	// Historical traffic is read outside the write transaction. Once the two
 	// aggregate result sets are ready, all daily log rows are persisted with a
 	// batched INSERT instead of one INSERT per user/server.
-	userTraffic, err := l.deps.Store.TrafficLog().QueryUserTrafficRanking(ctx, start, end)
+	userTraffic, err := l.traffic.QueryUserTrafficRanking(ctx, start, end)
 	if err != nil {
-		logger.Errorf("[Traffic Stat Queue] Query user traffic failed: %v", err.Error())
-		return err
+		return xerr.Wrapf(err, xerr.ERROR, "query the user traffic of %s", date)
 	}
-	serverTraffic, err := l.deps.Store.TrafficLog().QueryServerTrafficRanking(ctx, start, end)
+	serverTraffic, err := l.traffic.QueryServerTrafficRanking(ctx, start, end)
 	if err != nil {
-		logger.Errorf("[Traffic Stat Queue] Query server traffic failed: %v", err.Error())
-		return err
+		return xerr.Wrapf(err, xerr.ERROR, "query the server traffic of %s", date)
 	}
 
 	logs := make([]*log.SystemLog, 0, len(userTraffic)+len(serverTraffic)+3)
@@ -87,11 +103,9 @@ func (l *StatLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	statContent, _ := stat.Marshal()
 	logs = append(logs, &log.SystemLog{Type: log.TypeTrafficStat.Uint8(), Date: date, Content: string(statContent)})
 
-	err = l.deps.Store.Log().InsertBatch(ctx, logs, 1000)
-	if err != nil {
-		logger.Errorf("[Traffic Stat Queue] Process task failed: %v", err.Error())
-		return err
+	if err := l.logs.InsertBatch(ctx, logs, 1000); err != nil {
+		return xerr.Wrapf(err, xerr.ERROR, "record the traffic stat of %s", date)
 	}
-	logger.Infof("[Traffic Stat Queue] Process task completed successfully, consuming: %s", time.Since(now).String())
+	logger.WithContext(ctx).Infof("[Traffic Stat Queue] Process task completed successfully, consuming: %s", time.Since(now).String())
 	return nil
 }

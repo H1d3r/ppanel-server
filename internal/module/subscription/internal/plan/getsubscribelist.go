@@ -54,7 +54,11 @@ func (l *GetSubscribeListLogic) GetSubscribeList(req *dto.GetSubscribeListReques
 				l.Logger.Error("[GetSubscribeListLogic] JSON unmarshal failed: ", logger.Field("error", err.Error()), logger.Field("discount", item.Discount))
 			}
 		}
-		sub.Nodes = dto.StringInt64Slice(slicesx.StringToInt64Slice(item.Nodes))
+		nodes, parseErr := slicesx.ParseInt64CSV(item.Nodes)
+		if parseErr != nil {
+			return nil, xerr.Wrapf(parseErr, xerr.ERROR, "plan %d nodes: %v", item.Id, parseErr)
+		}
+		sub.Nodes = dto.StringInt64Slice(nodes)
 		sub.NodeTags = strings.Split(item.NodeTags, ",")
 		resultList = append(resultList, sub)
 	}

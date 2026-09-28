@@ -42,13 +42,13 @@ type guestUsers struct {
 	s *guestStore
 }
 
-func (r guestUsers) Insert(_ context.Context, u *user.User, _ ...*gorm.DB) error {
+func (r guestUsers) Insert(_ context.Context, u *user.User) error {
 	u.Id = 11
 	copy := *u
 	r.s.account = &copy
 	return nil
 }
-func (r guestUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]interface{}, _ ...*gorm.DB) error {
+func (r guestUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]interface{}) error {
 	if r.s.fail == "user" {
 		return errGuestWrite
 	}
@@ -74,7 +74,7 @@ type guestAuth struct {
 	s *guestStore
 }
 
-func (r guestAuth) InsertUserAuthMethods(_ context.Context, a *user.AuthMethods, _ ...*gorm.DB) error {
+func (r guestAuth) InsertUserAuthMethods(_ context.Context, a *user.AuthMethods) error {
 	if r.s.fail == "auth" {
 		return errGuestWrite
 	}

@@ -21,6 +21,9 @@ type SmsSendCount struct {
 
 type SendSmsLogic struct {
 	deps Dependencies
+	// senders keeps the provider client between messages; it is rebuilt
+	// when the mobile configuration changes.
+	senders sms.Senders
 }
 
 func newSMSMessageLog(platform string, messageType uint8, metadata ...requestmeta.Metadata) *log.Message {
@@ -53,7 +56,7 @@ func (l *SendSmsLogic) ProcessTask(ctx context.Context, task *asynq.Task) error 
 	}
 	ctx = requestmeta.With(ctx, payload.Metadata)
 	ctx = logger.ContextWithRequestMetadata(ctx, payload.Metadata)
-	client, err := sms.NewSender(l.deps.Mobile().Platform, l.deps.Mobile().PlatformConfig)
+	client, err := l.senders.Get(l.deps.Mobile().Platform, l.deps.Mobile().PlatformConfig)
 	if err != nil {
 		logger.WithContext(ctx).Error("[SendSmsLogic] New send sms client failed", logger.Field("error", err.Error()), logger.Field("payload", payload))
 		return err
@@ -75,7 +78,7 @@ func (l *SendSmsLogic) ProcessTask(ctx context.Context, task *asynq.Task) error 
 		logger.WithContext(ctx).Error("[SendSmsLogic] Insert sms log failed", logger.Field("error", err.Error()))
 		return err
 	}
-	err = client.SendCode(payload.TelephoneArea, payload.Telephone, payload.Content)
+	err = client.Send(ctx, sms.CodeMessage(payload.TelephoneArea, payload.Telephone, payload.Content))
 
 	if err != nil {
 		logger.WithContext(ctx).Error("[SendSmsLogic] Send sms failed", logger.Field("error", err.Error()), logger.Field("payload", payload))

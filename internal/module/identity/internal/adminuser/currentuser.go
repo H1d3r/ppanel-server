@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -28,7 +27,7 @@ func newCurrentUserLogic(ctx context.Context, deps Deps) *CurrentUserLogic {
 
 func (l *CurrentUserLogic) CurrentUser() (*dto.User, error) {
 	resp := &dto.User{}
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
 		logger.Error("current user is not found in context")
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")

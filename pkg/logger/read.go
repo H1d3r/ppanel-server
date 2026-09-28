@@ -9,10 +9,6 @@ import (
 	"path/filepath"
 )
 
-func ReadLastNLines(path string, n int) ([]string, error) {
-	return readLastNLinesFromFile(filepath.Join(path, accessFilename), n)
-}
-
 // ReadLastNLogLines returns recent entries from every active file sink. A
 // missing level file is normal (for example, a service may have no severe
 // events yet); an error is returned only when no current log file is readable.

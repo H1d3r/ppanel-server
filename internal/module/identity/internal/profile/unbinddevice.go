@@ -2,14 +2,15 @@ package profile
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/identity/internal/devicestate"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 type UnbindDeviceLogic struct {
@@ -28,19 +29,25 @@ func newUnbindDeviceLogic(ctx context.Context, deps Deps) *UnbindDeviceLogic {
 }
 
 func (l *UnbindDeviceLogic) UnbindDevice(req *dto.UnbindDeviceRequest) error {
-	userInfo := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	userInfo, ok := user.FromContext(l.ctx)
+	if !ok {
+		return fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
+	}
 	device, err := l.deps.Devices.FindDeviceForAuth(l.ctx, req.Id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("device %d does not exist: %w", req.Id, xerr.NewErrCode(xerr.DeviceNotExist))
+	}
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DeviceNotExist), "find device")
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find device %d", req.Id)
 	}
 
 	if device.UserId != userInfo.Id {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "device not belong to user")
+		return fmt.Errorf("device does not belong to the user: %w", xerr.NewErrCode(xerr.InvalidParams))
 	}
 
 	removed, err := devicestate.Delete(l.ctx, l.deps.Store, l.deps.Redis, req.Id, userInfo.Id)
 	if err != nil {
-		return err
+		return xerr.Wrapf(err, xerr.DatabaseDeletedError, "remove device %d", req.Id)
 	}
 	if removed != nil && l.deps.KickDevice != nil {
 		l.deps.KickDevice(removed.UserId, removed.Identifier)

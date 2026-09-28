@@ -1,27 +1,32 @@
-// Package billing is the facade of the billing module. It starts with the
-// admin-side order and payment-method management; the public checkout flows
-// join as migration proceeds (ADR-001 step 4). Admin and public handlers call
-// the same service; access-plane concerns stay in the handlers.
+// Package billing is the facade of the billing module: orders and their
+// checkout, payment methods and gateway callbacks, coupons, the V2 order
+// orchestration with its event stream, the wallet and the paid-order
+// activation workflow (ADR-001). Admin and public handlers call the same
+// service; access-plane concerns stay in the handlers.
 package billing
 
 import (
 	"context"
-	"net/url"
 	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
+	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/billing/internal/activation"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminorder"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminpayment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/callbacks"
 	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/internal/module/billing/internal/coupon"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
+	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/module/billing/internal/repo"
 	"github.com/perfect-panel/server/internal/module/billing/internal/userorder"
 	v2orch "github.com/perfect-panel/server/internal/module/billing/internal/v2"
 	"github.com/perfect-panel/server/internal/module/billing/internal/wallet"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Service is the only surface other code may depend on; the implementation
@@ -73,12 +78,13 @@ type Service interface {
 	// authenticated session.
 	IssuePortalSession(ctx context.Context, userID int64) (string, error)
 
-	// The gateway callback flows read the authenticated payment configuration
-	// from the request context (set by the notify handler's token lookup).
-	EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error
-	StripeNotify(ctx context.Context, payload []byte, signature string) error
-	AlipayNotify(ctx context.Context, form url.Values) error
-	CryptomusNotify(ctx context.Context, payload []byte) error
+	// PaymentNotify authenticates and settles a gateway callback. It reads
+	// the payment method the notify middleware resolved from the request
+	// context; every gateway goes through the same verification.
+	PaymentNotify(ctx context.Context, notification PaymentNotification) error
+	// PaymentCallbackStyle reports how a platform delivers its callbacks and
+	// expects them answered; false for a platform without a gateway.
+	PaymentCallbackStyle(platform string) (PaymentCallbackStyle, bool)
 
 	// The V2 orchestration: idempotent create-and-checkout, guest checkout
 	// capabilities and SSE event-stream tickets.
@@ -87,9 +93,12 @@ type Service interface {
 	V2GetOrder(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderResponse, error)
 	V2EventTicket(ctx context.Context, orderNo, checkoutToken string) (*dto.V2EventTicketResponse, error)
 	V2Session(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderSessionResponse, error)
-	// V2AuthorizeEventStream validates the stream ticket and returns the
-	// initial snapshot with the ticket expiry.
-	V2AuthorizeEventStream(ctx context.Context, orderNo, ticket string) (dto.V2OrderSnapshot, time.Time, error)
+	// V2StreamOrderEvents serves an order's event stream to sink until ctx
+	// ends or the ticket expires: the snapshot, the events after the replay
+	// cursor, then live events. It returns an error only when the stream is
+	// refused, before anything reached the sink (ErrTooManyEventStreams
+	// when the ticket holds its maximum of concurrent streams).
+	V2StreamOrderEvents(ctx context.Context, req V2EventStreamRequest, sink V2EventSink) error
 
 	// The wallet flows resolve the current user from the request context:
 	// commission withdrawal, balance/commission statements and the affiliate
@@ -126,18 +135,36 @@ type (
 // distinct transport condition: the original order remains intact.
 var ErrIdempotencyKeyReused = v2orch.ErrIdempotencyKeyReused
 
-// EPayNotifyMeta re-exports the callback subdomain's raw transport details.
-type EPayNotifyMeta = callbacks.EPayNotifyMeta
+// ErrTooManyEventStreams refuses an order event stream whose ticket already
+// holds its maximum of concurrent streams.
+var ErrTooManyEventStreams = v2orch.ErrTooManyStreams
+
+// PaymentNotification is a gateway callback as the notify endpoint received
+// it, and PaymentCallbackStyle how a gateway delivers and answers callbacks.
+type (
+	PaymentNotification  = gateway.Notification
+	PaymentCallbackStyle = gateway.CallbackStyle
+)
+
+// V2EventStreamRequest names an order event stream and V2EventSink receives
+// its events.
+type (
+	V2EventStreamRequest = v2orch.StreamRequest
+	V2EventSink          = v2orch.EventSink
+)
 
 // ErrGatewayUnconfirmed marks a refused close whose order stays pending until
 // the gateway confirms payment; schedulers treat it as an expected outcome.
 var ErrGatewayUnconfirmed = checkout.ErrGatewayUnconfirmed
 
-// Order lifecycle constants shared with the V2 orchestration layer.
-const (
-	CloseOrderTimeMinutes = checkout.CloseOrderTimeMinutes
-	MaxQuantity           = checkout.MaxQuantity
-)
+// CloseOrderTimeMinutes is the payment window of a pending order; the
+// composition root schedules the deferred close after it.
+const CloseOrderTimeMinutes = checkout.CloseOrderTimeMinutes
+
+// FormatAmount renders an amount in minor units with two decimal places
+// (1990 → "19.90"). It is the one money formatter of the module, shared with
+// the gateways, so reports and notifications show what was charged.
+func FormatAmount(minor int64) string { return payment.FormatAmount(minor) }
 
 // PlanReader re-exports the checkout subdomain's port onto the subscription
 // domain's plan catalogue.
@@ -150,14 +177,13 @@ type UserSubscriptionReader = checkout.UserSubscriptionReader
 // Portal re-exports the guest storefront subdomain's ports and configuration
 // for the composition root.
 type (
-	PortalPlanReader    = portal.PlanReader
-	GuestAccountReader  = portal.GuestAccountReader
-	SessionStore        = portal.SessionStore
-	GuestCheckoutCache  = portal.GuestCheckoutCache
-	ActivationTaskQueue = portal.ActivationQueue
-	ExchangeRateCache   = portal.ExchangeRateCache
-	PortalConfig        = portal.Config
-	GuestVerification   = portal.GuestVerification
+	PortalPlanReader   = portal.PlanReader
+	GuestAccountReader = portal.GuestAccountReader
+	SessionStore       = portal.SessionStore
+	GuestCheckoutCache = portal.GuestCheckoutCache
+	ExchangeRateCache  = portal.ExchangeRateCache
+	PortalConfig       = portal.Config
+	GuestVerification  = portal.GuestVerification
 )
 
 // AffiliateReader and AuthMethodReader re-export the wallet subdomain's
@@ -187,22 +213,29 @@ type OrderQueue interface {
 	EnqueueDeferredClose(ctx context.Context, orderNo string) error
 }
 
+// OrderEventReader reads the durable order events an event stream replays.
+type OrderEventReader = v2orch.EventReader
+
 // Deps declares everything the module needs; the composition root
 // (internal/app) provides them; each field is scoped to the use cases it serves.
 type Deps struct {
 	PaidOrders  PaidOrderDependencies
 	Orders      repository.OrderRepo
+	OrderEvents OrderEventReader
 	Payments    repository.PaymentRepo
 	Coupons     repository.CouponRepo
 	Withdrawals repository.UserWithdrawalRepo
 	Plans       PlanReader
 	UserSubs    UserSubscriptionReader
-	// Store composes billing persistence and the checkout's identity reads.
-	// Subscription writes are exposed only by the Inventory capability.
+	// Store carries the billing-scoped transactions of the order flows, the
+	// wallet view, the inbox markers and the user cache. Subscription writes
+	// are exposed only by the Inventory capability.
 	Store     Store
 	Inventory checkout.Inventory
 	Tx        Transactor
 	Queue     OrderQueue
+	// Redis wakes the order event streams and bounds their concurrency.
+	Redis *redis.Client
 	// SingleModel forbids holding more than one blocking subscription;
 	// runtime-mutable, read per request.
 	SingleModel func() bool
@@ -230,7 +263,6 @@ type Deps struct {
 	GuestAccounts      GuestAccountReader
 	Sessions           SessionStore
 	GuestCheckoutCache GuestCheckoutCache
-	ActivationQueue    ActivationTaskQueue
 	ExchangeRate       ExchangeRateCache
 	Portal             PortalConfig
 }
@@ -238,48 +270,39 @@ type Deps struct {
 // NewRepoBuilder exports the module-owned repository implementations for
 // store assembly (ADR-001 step-6 preparation).
 func NewRepoBuilder() repository.BillingBuilder {
-	return func(c repository.ModuleConn) repository.BillingRepos {
-		conn := c.Conn()
-		wallets := repo.NewWalletRepo(conn)
-		orders := repo.NewOrderRepo(conn)
-		return repository.BillingRepos{
-			Orders:      orders,
-			OrderEvents: repo.NewOrderEventRepo(c.DB),
-			Payments:    repo.NewPaymentRepo(conn),
-			Coupons:     repo.NewCouponRepo(conn),
-			Withdrawals: wallets,
-			Wallets:     wallets,
-			OrderStats:  orders.(repository.OrderStatsBridge),
-		}
-	}
+	return repo.NewBuilder()
 }
 
 func New(deps Deps) Service {
+	gateways := gateway.NewRegistry()
 	checkoutSvc := checkout.NewService(checkout.Deps{
-		Inventory:    deps.Inventory,
 		Orders:       deps.Orders,
 		Coupons:      deps.Coupons,
 		Payments:     deps.Payments,
 		Plans:        deps.Plans,
 		UserSubs:     deps.UserSubs,
-		Store:        deps.Store,
+		Wallets:      storeWallets{store: deps.Store},
+		Tx:           deps.Store,
+		Inventory:    deps.Inventory,
 		Queue:        deps.Queue,
+		Gateways:     gateways,
 		SingleModel:  deps.SingleModel,
 		CurrencyUnit: deps.CurrencyUnit,
 	})
 	portalSvc := portal.NewService(portal.Deps{
-		Inventory:          deps.Inventory,
 		Orders:             deps.Orders,
 		Coupons:            deps.Coupons,
 		Payments:           deps.Payments,
 		UserAuths:          deps.GuestAccounts,
 		Plans:              deps.PortalPlans,
-		Store:              deps.Store,
+		Tx:                 deps.Store,
+		UserCache:          storeUserCache{store: deps.Store},
+		Inventory:          deps.Inventory,
 		Sessions:           deps.Sessions,
 		Queue:              deps.Queue,
 		GuestCheckoutCache: deps.GuestCheckoutCache,
-		ActivationQueue:    deps.ActivationQueue,
 		ExchangeRate:       deps.ExchangeRate,
+		Gateways:           gateways,
 		Config:             deps.Portal,
 	})
 	activationSvc := activation.NewService(activation.Deps{
@@ -289,11 +312,23 @@ func New(deps Deps) Service {
 	workflowDeps.Orders = deps.Orders
 	workflowDeps.Profiles = deps.UserProfiles
 	return &service{
-		orders:     adminorder.NewService(deps.Orders, deps.Payments, deps.Tx, deps.Queue, deps.Plans, checkoutSvc),
-		payments:   adminpayment.NewService(deps.Payments, deps.Orders, deps.Tx, deps.Host),
+		orders: adminorder.NewService(adminorder.Deps{
+			Orders: deps.Orders, Payments: deps.Payments, Tx: deps.Tx, Queue: deps.Queue, Plans: deps.Plans, Closer: checkoutSvc,
+		}),
+		payments: adminpayment.NewService(adminpayment.Deps{
+			Payments: deps.Payments, Orders: deps.Orders, Gateways: gateways,
+			NotifyHosts: func() gateway.NotifyHosts {
+				hosts := gateway.NotifyHosts{Host: deps.Host}
+				if deps.Portal.SiteHost != nil {
+					hosts.SiteHost = deps.Portal.SiteHost()
+				}
+				return hosts
+			},
+		}),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders, deps.Plans),
-		callbacks:  callbacks.NewService(deps.Orders, deps.Queue),
+		callbacks:  callbacks.NewService(deps.Orders, deps.Queue, gateways),
+		gateways:   gateways,
 		portal:     portalSvc,
 		checkout:   checkoutSvc,
 		activation: activationSvc,
@@ -312,6 +347,11 @@ func New(deps Deps) Service {
 			Portal:       portalSvc,
 			JwtSecret:    deps.Portal.JwtSecret,
 			CurrencyUnit: deps.CurrencyUnit,
+			Stream: v2orch.StreamDeps{
+				Events:  deps.OrderEvents,
+				Broker:  v2orch.RedisBroker{Client: deps.Redis},
+				Limiter: v2orch.RedisLimiter{Client: deps.Redis},
+			},
 		}),
 	}
 }
@@ -325,6 +365,7 @@ type service struct {
 	checkout   *checkout.Service
 	portal     *portal.Service
 	callbacks  *callbacks.Service
+	gateways   *gateway.Registry
 	v2         *v2orch.Service
 	wallet     *wallet.Service
 	activation *activation.Service
@@ -442,20 +483,12 @@ func (s *service) IssuePortalSession(ctx context.Context, userID int64) (string,
 	return s.portal.IssueSession(ctx, userID)
 }
 
-func (s *service) EPayNotify(ctx context.Context, meta EPayNotifyMeta, req *dto.EPayNotifyRequest) error {
-	return s.callbacks.EPayNotify(ctx, meta, req)
+func (s *service) PaymentNotify(ctx context.Context, notification PaymentNotification) error {
+	return s.callbacks.Notify(ctx, notification)
 }
 
-func (s *service) StripeNotify(ctx context.Context, payload []byte, signature string) error {
-	return s.callbacks.StripeNotify(ctx, payload, signature)
-}
-
-func (s *service) AlipayNotify(ctx context.Context, form url.Values) error {
-	return s.callbacks.AlipayNotify(ctx, form)
-}
-
-func (s *service) CryptomusNotify(ctx context.Context, payload []byte) error {
-	return s.callbacks.CryptomusNotify(ctx, payload)
+func (s *service) PaymentCallbackStyle(platform string) (PaymentCallbackStyle, bool) {
+	return s.gateways.CallbackStyle(platform)
 }
 
 func (s *service) V2CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderRequest, idempotencyKey string) (*dto.V2OrderResponse, error) {
@@ -478,8 +511,8 @@ func (s *service) V2Session(ctx context.Context, orderNo, checkoutToken string) 
 	return s.v2.Session(ctx, orderNo, checkoutToken)
 }
 
-func (s *service) V2AuthorizeEventStream(ctx context.Context, orderNo, ticket string) (dto.V2OrderSnapshot, time.Time, error) {
-	return s.v2.AuthorizeEventStream(ctx, orderNo, ticket)
+func (s *service) V2StreamOrderEvents(ctx context.Context, req V2EventStreamRequest, sink V2EventSink) error {
+	return s.v2.StreamEvents(ctx, req, sink)
 }
 
 func (s *service) CommissionWithdraw(ctx context.Context, req *dto.CommissionWithdrawRequest) (*dto.WithdrawalLog, error) {
@@ -534,10 +567,34 @@ func (s *service) DailyOrderReport(ctx context.Context, date time.Time) (*DailyO
 	return s.orders.DailyReport(ctx, date)
 }
 
-// Store is the persistence capability required by this package. It excludes
-// unrelated repositories and application-wide transactions.
+// Store is the persistence capability the order flows need beyond their
+// repositories: billing-scoped transactions, the wallet view, the inbox and
+// the user cache. It excludes unrelated repositories and application-wide
+// transactions.
 type Store interface {
-	checkout.Store
-	portal.Store
-	activation.Store
+	InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error
+	Inbox() repository.InboxRepo
+	Wallet() repository.WalletRepo
+	UserCache() repository.UserCacheRepo
+}
+
+// storeWallets reads wallets through the store, which may be absent in a
+// facade built for a subset of the flows.
+type storeWallets struct{ store Store }
+
+func (w storeWallets) FindWallet(ctx context.Context, userID int64) (*walletEntity.Wallet, error) {
+	if w.store == nil {
+		return nil, nil
+	}
+	return w.store.Wallet().FindWallet(ctx, userID)
+}
+
+// storeUserCache clears user cache entries through the store.
+type storeUserCache struct{ store Store }
+
+func (c storeUserCache) ClearUserCache(ctx context.Context, users ...*user.User) error {
+	if c.store == nil {
+		return nil
+	}
+	return c.store.UserCache().ClearUserCache(ctx, users...)
 }

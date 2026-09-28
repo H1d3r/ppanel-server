@@ -20,7 +20,7 @@ func ConvertValueToString(value reflect.Value) string {
 		return strconv.FormatFloat(value.Float(), 'f', -1, 64)
 	case reflect.Bool:
 		return strconv.FormatBool(value.Bool())
-	case reflect.Ptr:
+	case reflect.Pointer:
 		switch value.Type().Elem().Kind() {
 		case reflect.Bool:
 			return fmt.Sprintf("%v", value.Elem().Bool())

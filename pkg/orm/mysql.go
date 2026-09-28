@@ -20,6 +20,12 @@ const (
 	DriverPostgres  = "postgres"
 	DriverPostgres2 = "postgresql"
 
+	// DefaultLocation is the time zone the default connection parameters
+	// use when the caller names none.
+	DefaultLocation = "Asia/Shanghai"
+	// DefaultMySQLConfig and DefaultPostgresConfig are the default
+	// connection parameters for DefaultLocation, the values
+	// DefaultMySQLQuery and DefaultPostgresQuery return for it.
 	DefaultMySQLConfig             = "charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true"
 	legacyDefaultMySQLConfig       = "charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai"
 	DefaultPostgresConfig          = "sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel"
@@ -28,6 +34,44 @@ const (
 	DefaultConnMaxIdleTimeSeconds  = 300
 	defaultPostgresApplicationName = "perfect-panel"
 )
+
+func locationOrDefault(location string) string {
+	if location == "" {
+		return DefaultLocation
+	}
+	return location
+}
+
+// DefaultMySQLQuery returns the default MySQL connection parameters, reading
+// DATETIME values in location (DefaultLocation when empty).
+func DefaultMySQLQuery(location string) string {
+	return legacyMySQLQuery(location) + "&interpolateParams=true"
+}
+
+// legacyMySQLQuery is the default MySQL parameters before interpolation was
+// enabled by default.
+func legacyMySQLQuery(location string) string {
+	return "charset=utf8mb4&parseTime=true&loc=" + url.QueryEscape(locationOrDefault(location))
+}
+
+// DefaultPostgresQuery returns the default PostgreSQL connection parameters,
+// with the session time zone set to location (DefaultLocation when empty).
+// The zone's slashes stay visible; see encodePostgresParams.
+func DefaultPostgresQuery(location string) string {
+	zone := strings.ReplaceAll(url.QueryEscape(locationOrDefault(location)), "%2F", "/")
+	return "sslmode=disable&TimeZone=" + zone + "&application_name=" + defaultPostgresApplicationName
+}
+
+// isDefaultMySQLQuery reports whether query is a default MySQL parameter set
+// written for location or for DefaultLocation, which a PostgreSQL
+// connection replaces with its own defaults.
+func isDefaultMySQLQuery(query, location string) bool {
+	switch query {
+	case DefaultMySQLConfig, legacyDefaultMySQLConfig, DefaultMySQLQuery(location), legacyMySQLQuery(location):
+		return true
+	}
+	return false
+}
 
 type Config struct {
 	Driver          string `yaml:"Driver" default:"mysql"`
@@ -45,6 +89,10 @@ type Config struct {
 
 type Mysql struct {
 	Config Config
+	// Location is the IANA time zone of the default connection parameters,
+	// used when Config.Config is empty or, for PostgreSQL, still a MySQL
+	// default. Empty keeps DefaultLocation.
+	Location string
 }
 
 func NormalizeDriver(driver string) string {
@@ -78,7 +126,7 @@ func (m Mysql) MigrationDsn() string {
 func (m Mysql) mysqlDsn() string {
 	query := m.Config.Config
 	if query == "" {
-		query = DefaultMySQLConfig
+		query = DefaultMySQLQuery(m.Location)
 	} else {
 		query = withDefaultMySQLParams(query)
 	}
@@ -112,8 +160,8 @@ func withDefaultMySQLParams(query string) string {
 
 func (m Mysql) postgresDsn() string {
 	query := m.Config.Config
-	if query == "" || query == DefaultMySQLConfig || query == legacyDefaultMySQLConfig {
-		query = DefaultPostgresConfig
+	if query == "" || isDefaultMySQLQuery(query, m.Location) {
+		query = DefaultPostgresQuery(m.Location)
 	}
 	u := url.URL{
 		Scheme: DriverPostgres,
@@ -161,6 +209,21 @@ func encodePostgresParams(params url.Values) string {
 	return query
 }
 
+// gormConfig is the GORM configuration of the application's connection.
+// TranslateError makes the dialector report driver errors such as a
+// unique-key violation as GORM's portable errors (gorm.ErrDuplicatedKey),
+// which callers test with errors.Is: without it those checks never match on
+// MySQL or PostgreSQL.
+func (m *Mysql) gormConfig() *gorm.Config {
+	return &gorm.Config{
+		Logger: &logger.GormLogger{SlowThreshold: m.GetSlowThreshold()},
+		NamingStrategy: schema.NamingStrategy{
+			SingularTable: true,
+		},
+		TranslateError: true,
+	}
+}
+
 func (m *Mysql) GetSlowThreshold() time.Duration {
 	return time.Duration(m.Config.SlowThreshold) * time.Millisecond
 }
@@ -185,12 +248,7 @@ func ConnectDatabase(m Mysql) (*gorm.DB, error) {
 	default:
 		return nil, fmt.Errorf("unsupported database driver: %s", m.Config.Driver)
 	}
-	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger: &logger.GormLogger{SlowThreshold: m.GetSlowThreshold()},
-		NamingStrategy: schema.NamingStrategy{
-			SingularTable: true,
-		},
-	})
+	db, err := gorm.Open(dialector, m.gormConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -207,33 +265,4 @@ func ConnectDatabase(m Mysql) (*gorm.DB, error) {
 		sqldb.SetConnMaxIdleTime(time.Duration(m.Config.ConnMaxIdleTime) * time.Second)
 	}
 	return db, nil
-}
-
-func Ping(dsn string) bool {
-	return PingDatabase(DriverMySQL, dsn)
-}
-
-func PingDatabase(driver, dsn string) bool {
-	var dialector gorm.Dialector
-	switch NormalizeDriver(driver) {
-	case DriverMySQL:
-		dialector = mysql.Open(dsn)
-	case DriverPostgres:
-		dialector = postgres.Open(dsn)
-	default:
-		fmt.Printf("unsupported database driver: %s\n", driver)
-		return false
-	}
-	db, err := gorm.Open(dialector, &gorm.Config{})
-	if err != nil {
-		fmt.Printf("connect database failed, err: %v\n", err.Error())
-		return false
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		fmt.Printf("get database connection failed, err: %v\n", err)
-		return false
-	}
-	defer sqlDB.Close()
-	return sqlDB.Ping() == nil
 }

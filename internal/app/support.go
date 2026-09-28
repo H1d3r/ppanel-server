@@ -9,6 +9,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support"
 	ticket "github.com/perfect-panel/server/internal/module/support/entity/ticket"
 	"github.com/perfect-panel/server/internal/repository"
@@ -16,9 +17,9 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-// newSupportModule wires the support module against the legacy store. The
-// adapters below satisfy the module's ports until the owning modules exist
-// (ADR-001).
+// newSupportModule wires the support module against the application store.
+// The adapters below bridge its remaining ports to the task queue, the email
+// worker manager, the Telegram ticket topics and the user subscriptions.
 func newSupportModule(store repository.Store, queue *taskqueue.Client, srv *Application) support.Service {
 	return support.New(support.Deps{
 		Announcements: store.Announcement(),
@@ -132,15 +133,14 @@ func (emailWorkerStopper) StopBatchEmail(taskID int64) {
 	email.Manager.RemoveWorker(taskID)
 }
 
-// subscriptionReader adapts the legacy user-subscription repository to the
-// support module's SubscriptionReader port.
+// subscriptionReader adapts the subscription module's user-subscription
+// repository to the support module's SubscriptionReader port.
 type subscriptionReader struct {
 	store repository.Store
 }
 
 func (r subscriptionReader) HasActiveSubscription(ctx context.Context, userID int64) (bool, error) {
-	// status 1 = active
-	subs, err := r.store.UserSubscription().QueryUserSubscribe(ctx, userID, 1)
+	subs, err := r.store.UserSubscription().QueryUserSubscribe(ctx, userID, int64(usersub.SubscribeStatusActive))
 	if err != nil {
 		return false, err
 	}

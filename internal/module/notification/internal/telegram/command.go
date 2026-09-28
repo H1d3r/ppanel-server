@@ -44,3 +44,22 @@ func commandArguments(msg *models.Message) string {
 	}
 	return msg.Text[entity.Length+1:]
 }
+
+// shortcutCommands are the ticket commands the listings offer as
+// "/<command>_<id>" shortcuts: a Telegram command cannot contain a space, so
+// the id rides in the command name to make it a single tap.
+var shortcutCommands = map[string]bool{"tk": true, "rp": true, "close": true, "reopen": true}
+
+// expandShortcut turns the shortcut "/tk_12" into the command "tk" with the
+// arguments "12"; arguments after the shortcut ("/rp_12 text") follow the id.
+// Anything else is returned unchanged.
+func expandShortcut(command, args string) (string, string) {
+	name, id, ok := strings.Cut(command, "_")
+	if !ok || !shortcutCommands[name] || id == "" || strings.Trim(id, "0123456789") != "" {
+		return command, args
+	}
+	if args == "" {
+		return name, id
+	}
+	return name, id + " " + args
+}

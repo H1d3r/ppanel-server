@@ -7,7 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/billing/transport/http/admin/coupon"
 	"github.com/perfect-panel/server/internal/module/identity"
-	"github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod"
+	authMethod "github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod"
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/platform/transport/http/admin/console"
 	adminlog "github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log"

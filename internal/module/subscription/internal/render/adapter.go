@@ -110,87 +110,93 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 			continue
 		}
 		for _, protocol := range protocols {
-			protocolType := canonicalProtocolType(protocol.Type)
-			if protocolType == itemProtocol {
+			if protocolType := canonicalProtocolType(protocol.Type); protocolType == itemProtocol {
 				protocol.Type = protocolType
-				plugin, pluginOptions := clientPluginConfig(protocol, item.Address)
-				// 证书锚定与跳过验证互斥：客户端一旦跳过校验，下发的指纹便形同虚设。
-				allowInsecure := protocol.AllowInsecure && protocol.CertPinSHA256 == ""
-				proxies = append(
-					proxies,
-					Proxy{
-						Sort:                    item.Sort,
-						Name:                    item.Name,
-						Server:                  item.Address,
-						Port:                    item.Port,
-						Type:                    protocolType,
-						Tags:                    strings.Split(item.Tags, ","),
-						Version:                 protocol.Version,
-						Mode:                    protocol.Mode,
-						Network:                 protocol.Network,
-						Security:                protocol.Security,
-						SNI:                     protocol.SNI,
-						ALPN:                    protocol.ALPN,
-						AllowInsecure:           allowInsecure,
-						Fingerprint:             protocol.Fingerprint,
-						RealityServerAddr:       protocol.RealityServerAddr,
-						RealityServerPort:       protocol.RealityServerPort,
-						RealityPublicKey:        protocol.RealityPublicKey,
-						RealityShortId:          protocol.RealityShortId,
-						Transport:               protocol.Transport,
-						Host:                    protocol.Host,
-						Path:                    protocol.Path,
-						ServiceName:             protocol.ServiceName,
-						Method:                  protocol.Cipher,
-						ServerKey:               protocol.ServerKey,
-						Plugin:                  plugin,
-						PluginOptions:           pluginOptions,
-						UoT:                     protocol.UoT,
-						UoTVersion:              protocol.UoTVersion,
-						AcceptProxyProtocol:     protocol.AcceptProxyProtocol,
-						Flow:                    protocol.Flow,
-						HopPorts:                protocol.HopPorts,
-						HopInterval:             protocol.HopInterval,
-						ObfsPassword:            protocol.ObfsPassword,
-						UpMbps:                  protocol.UpMbps,
-						DownMbps:                protocol.DownMbps,
-						DisableSNI:              protocol.DisableSNI,
-						ReduceRtt:               protocol.ReduceRtt,
-						Heartbeat:               protocol.Heartbeat,
-						UDPRelayMode:            protocol.UDPRelayMode,
-						CongestionController:    protocol.CongestionController,
-						QUICCongestionControl:   protocol.QUICCongestionControl,
-						PaddingScheme:           protocol.PaddingScheme,
-						Multiplex:               protocol.Multiplex,
-						TrafficPattern:          protocol.TrafficPattern,
-						UserHintIsMandatory:     protocol.UserHintIsMandatory,
-						Obfs:                    protocol.Obfs,
-						SSRProtocol:             protocol.SSRProtocol,
-						ProtocolParam:           protocol.ProtocolParam,
-						ObfsParam:               protocol.ObfsParam,
-						ObfsHost:                protocol.ObfsHost,
-						ObfsPath:                protocol.ObfsPath,
-						XhttpMode:               protocol.XhttpMode,
-						XhttpExtra:              protocol.XhttpExtra,
-						Encryption:              protocol.Encryption,
-						EncryptionMode:          protocol.EncryptionMode,
-						EncryptionRtt:           protocol.EncryptionRtt,
-						EncryptionClientPadding: protocol.EncryptionClientPadding,
-						EncryptionPassword:      protocol.EncryptionPassword,
-						EchEnable:               protocol.EchEnable,
-						EchServerName:           protocol.EchServerName,
-						Ratio:                   protocol.Ratio,
-						CertMode:                protocol.CertMode,
-						CertDNSProvider:         protocol.CertDNSProvider,
-						CertDNSEnv:              protocol.CertDNSEnv,
-						CertPinSHA256:           protocol.CertPinSHA256,
-					},
-				)
+				proxies = append(proxies, newProxy(item, protocol))
 			}
 		}
 	}
 
 	return proxies, nil
+}
+
+// newProxy is the one mapping from a node and its server protocol to the
+// proxy a client template renders. It lists the client-facing settings one by
+// one on purpose: the protocol also holds server secrets (the REALITY private
+// key, the VLESS encryption ticket, padding and private key) that must never
+// reach a subscriber. TestNewProxyMapsEveryClientField keeps the list
+// complete.
+func newProxy(item *node.Node, protocol node.Protocol) Proxy {
+	plugin, pluginOptions := clientPluginConfig(protocol, item.Address)
+	return Proxy{
+		Sort:     item.Sort,
+		Name:     item.Name,
+		Server:   item.Address,
+		Port:     item.Port,
+		Type:     protocol.Type,
+		Tags:     strings.Split(item.Tags, ","),
+		Version:  protocol.Version,
+		Mode:     protocol.Mode,
+		Network:  protocol.Network,
+		Security: protocol.Security,
+		SNI:      protocol.SNI,
+		ALPN:     protocol.ALPN,
+		// Certificate pinning and skipping verification exclude each other:
+		// a client that skips verification makes the pin meaningless.
+		AllowInsecure:           protocol.AllowInsecure && protocol.CertPinSHA256 == "",
+		Fingerprint:             protocol.Fingerprint,
+		RealityServerAddr:       protocol.RealityServerAddr,
+		RealityServerPort:       protocol.RealityServerPort,
+		RealityPublicKey:        protocol.RealityPublicKey,
+		RealityShortId:          protocol.RealityShortId,
+		Transport:               protocol.Transport,
+		Host:                    protocol.Host,
+		Path:                    protocol.Path,
+		ServiceName:             protocol.ServiceName,
+		Method:                  protocol.Cipher,
+		ServerKey:               protocol.ServerKey,
+		Plugin:                  plugin,
+		PluginOptions:           pluginOptions,
+		UoT:                     protocol.UoT,
+		UoTVersion:              protocol.UoTVersion,
+		AcceptProxyProtocol:     protocol.AcceptProxyProtocol,
+		Flow:                    protocol.Flow,
+		HopPorts:                protocol.HopPorts,
+		HopInterval:             protocol.HopInterval,
+		ObfsPassword:            protocol.ObfsPassword,
+		UpMbps:                  protocol.UpMbps,
+		DownMbps:                protocol.DownMbps,
+		DisableSNI:              protocol.DisableSNI,
+		ReduceRtt:               protocol.ReduceRtt,
+		Heartbeat:               protocol.Heartbeat,
+		UDPRelayMode:            protocol.UDPRelayMode,
+		CongestionController:    protocol.CongestionController,
+		QUICCongestionControl:   protocol.QUICCongestionControl,
+		PaddingScheme:           protocol.PaddingScheme,
+		Multiplex:               protocol.Multiplex,
+		TrafficPattern:          protocol.TrafficPattern,
+		UserHintIsMandatory:     protocol.UserHintIsMandatory,
+		Obfs:                    protocol.Obfs,
+		SSRProtocol:             protocol.SSRProtocol,
+		ProtocolParam:           protocol.ProtocolParam,
+		ObfsParam:               protocol.ObfsParam,
+		ObfsHost:                protocol.ObfsHost,
+		ObfsPath:                protocol.ObfsPath,
+		XhttpMode:               protocol.XhttpMode,
+		XhttpExtra:              protocol.XhttpExtra,
+		Encryption:              protocol.Encryption,
+		EncryptionMode:          protocol.EncryptionMode,
+		EncryptionRtt:           protocol.EncryptionRtt,
+		EncryptionClientPadding: protocol.EncryptionClientPadding,
+		EncryptionPassword:      protocol.EncryptionPassword,
+		EchEnable:               protocol.EchEnable,
+		EchServerName:           protocol.EchServerName,
+		Ratio:                   protocol.Ratio,
+		CertMode:                protocol.CertMode,
+		CertDNSProvider:         protocol.CertDNSProvider,
+		CertDNSEnv:              protocol.CertDNSEnv,
+		CertPinSHA256:           protocol.CertPinSHA256,
+	}
 }
 
 func canonicalProtocolType(raw string) string {

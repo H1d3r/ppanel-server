@@ -163,7 +163,7 @@ func newConsoleWriter() Writer {
 
 func newFileWriter(c LogConf) (Writer, error) {
 	var err error
-	var opts []LogOption
+	var opts []logOption
 	var infoLog io.WriteCloser
 	var errorLog io.WriteCloser
 	var severeLog io.WriteCloser
@@ -175,21 +175,21 @@ func newFileWriter(c LogConf) (Writer, error) {
 		return nil, ErrLogPathNotSet
 	}
 
-	opts = append(opts, WithCooldownMillis(c.StackCooldownMillis))
+	opts = append(opts, withCooldownMillis(c.StackCooldownMillis))
 	if c.Compress {
-		opts = append(opts, WithGzip())
+		opts = append(opts, withGzip())
 	}
 	if c.KeepDays > 0 {
-		opts = append(opts, WithKeepDays(c.KeepDays))
+		opts = append(opts, withKeepDays(c.KeepDays))
 	}
 	if c.MaxBackups > 0 {
-		opts = append(opts, WithMaxBackups(c.MaxBackups))
+		opts = append(opts, withMaxBackups(c.MaxBackups))
 	}
 	if c.MaxSize > 0 {
-		opts = append(opts, WithMaxSize(c.MaxSize))
+		opts = append(opts, withMaxSize(c.MaxSize))
 	}
 
-	opts = append(opts, WithRotation(c.Rotation))
+	opts = append(opts, withRotation(c.Rotation))
 
 	accessFile := path.Join(c.Path, accessFilename)
 	errorFile := path.Join(c.Path, errorFilename)
@@ -331,20 +331,6 @@ func buildPlainFields(fields logEntry) []string {
 	return items
 }
 
-func combineGlobalFields(fields []LogField) []LogField {
-	globals := globalFields.Load()
-	if globals == nil {
-		return fields
-	}
-
-	gf := globals.([]LogField)
-	ret := make([]LogField, 0, len(gf)+len(fields))
-	ret = append(ret, gf...)
-	ret = append(ret, fields...)
-
-	return ret
-}
-
 func marshalJson(t interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
@@ -361,7 +347,7 @@ func marshalJson(t interface{}) ([]byte, error) {
 
 func output(writer io.Writer, level string, val any, fields ...LogField) {
 	val = redactValue(val)
-	fields = redactFields(combineGlobalFields(fields))
+	fields = redactFields(fields)
 	maxLen := atomic.LoadUint32(&maxContentLength)
 	var truncated bool
 	val, truncated = limitValue(val, maxLen, 0)

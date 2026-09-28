@@ -46,11 +46,8 @@ func (m *paymentRepo) getCacheKeys(data *payment.Payment) []string {
 	}
 }
 
-func (m *paymentRepo) Insert(ctx context.Context, data *payment.Payment, tx ...*gorm.DB) error {
+func (m *paymentRepo) Insert(ctx context.Context, data *payment.Payment) error {
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Create(&data).Error
 	}, m.getCacheKeys(data)...)
 }
@@ -68,20 +65,17 @@ func (m *paymentRepo) FindOne(ctx context.Context, id int64) (*payment.Payment, 
 	}
 }
 
-func (m *paymentRepo) Update(ctx context.Context, data *payment.Payment, tx ...*gorm.DB) error {
+func (m *paymentRepo) Update(ctx context.Context, data *payment.Payment) error {
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Save(data).Error
 	}, m.getCacheKeys(old)...)
 }
 
-func (m *paymentRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *paymentRepo) Delete(ctx context.Context, id int64) error {
 	data, err := m.FindOne(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -90,10 +84,9 @@ func (m *paymentRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) erro
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
-		return conn.Delete(&payment.Payment{}, id).Error
+		// Delete the loaded row, not a zero value: the entity's BeforeDelete
+		// guard inspects the id of the method being deleted.
+		return conn.Delete(data).Error
 	}, m.getCacheKeys(data)...)
 }
 

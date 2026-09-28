@@ -3,10 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
-	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/transport/devicesocket"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -80,24 +79,22 @@ func NewDeviceManager(srv *Application) *devicesocket.DeviceManager {
 	}
 
 	manager.OnDeviceKicked = func(userID int64, deviceID, session string, operator devicesocket.Operator) {
-		//管理员踢下线
-		if operator == devicesocket.Admin {
-			message := DeviceMessage{Method: DeviceKickedAdmin}
-			_ = manager.SendToDevice(userID, deviceID, message.Json())
-			//将登陆凭证从缓存中删除
-			srv.Redis.Del(ctx, fmt.Sprintf("%v:%v", config.SessionIdKey, session))
+		var message DeviceMessage
+		switch operator {
+		case devicesocket.Admin:
+			// An administrator kicked the device.
+			message = DeviceMessage{Method: DeviceKickedAdmin}
+		case devicesocket.MaxDevices:
+			// The user signed in on more devices than the limit.
+			message = DeviceMessage{Method: DeviceKickedMax}
+		default:
 			return
 		}
-
-		//登陆设备超过限制踢下线
-		if operator == devicesocket.MaxDevices {
-			message := DeviceMessage{Method: DeviceKickedMax}
-			_ = manager.SendToDevice(userID, deviceID, message.Json())
-			//将登陆凭证从缓存中删除
-			srv.Redis.Del(ctx, fmt.Sprintf("%v:%v", config.SessionIdKey, session))
-			return
+		_ = manager.SendToDevice(userID, deviceID, message.Json())
+		// The kicked session ends; the user's other sessions stay.
+		if err := usersession.End(ctx, srv.Redis, session); err != nil {
+			logger.Errorw("[DeviceManager] end kicked session failed", logger.Field("error", err.Error()), logger.Field("device_id", deviceID))
 		}
-
 	}
 
 	manager.OnMessage = func(userID int64, deviceID, session string, message string) {

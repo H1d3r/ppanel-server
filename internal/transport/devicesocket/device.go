@@ -173,10 +173,14 @@ func (dm *DeviceManager) AddDevice(w http.ResponseWriter, r *http.Request, sessi
 		devices = devices[1:]
 	}
 
-	// Add new device
+	// Add new device. A reconnect only swaps sockets, so the online count is
+	// settled here, under the lock, before anyone can observe the old socket
+	// closing.
 	devices = append(devices, newDevice)
 	dm.userDevices.Store(userID, devices)
-	atomic.AddInt32(&dm.totalOnline, 1)
+	if replaced == nil {
+		atomic.AddInt32(&dm.totalOnline, 1)
+	}
 	mu.Unlock()
 
 	// Side effects run outside the user lock: the kick callback calls back
@@ -190,8 +194,7 @@ func (dm *DeviceManager) AddDevice(w http.ResponseWriter, r *http.Request, sessi
 		dm.removeDevice(userID, kicked)
 	}
 	if replaced != nil {
-		replaced.Conn.Close()
-		atomic.AddInt32(&dm.totalOnline, -1)
+		_ = replaced.Conn.Close()
 	}
 
 	// Trigger online event
@@ -220,8 +223,8 @@ func (dm *DeviceManager) removeDevice(userID int64, device *Device) {
 				continue
 			}
 			devices = append(devices[:i], devices[i+1:]...)
-			d.Conn.Close()
 			atomic.AddInt32(&dm.totalOnline, -1)
+			_ = d.Conn.Close()
 
 			if dm.OnDeviceOffline != nil {
 				go dm.OnDeviceOffline(userID, d.DeviceID, d.Session, d.CreatedAt)
@@ -294,8 +297,8 @@ func (dm *DeviceManager) checkHeartbeats() {
 		for _, d := range devices {
 			if now.Sub(d.LastPingTime) > time.Duration(dm.heartbeatTimeout)*time.Second {
 				logger.Infow("device heartbeat timed out", logger.Field("device_id", d.DeviceID), logger.Field("user_id", uid))
-				d.Conn.Close()
 				atomic.AddInt32(&dm.totalOnline, -1)
+				_ = d.Conn.Close()
 
 				if dm.OnDeviceOffline != nil {
 					go dm.OnDeviceOffline(uid, d.DeviceID, d.Session, d.CreatedAt)

@@ -2,144 +2,91 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"strings"
 	"time"
 
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 const consoleRevenueStatisticsCacheKey = "console:revenue_statistics"
 const consoleRevenueStatisticsCacheTTL = 60 * time.Second
 
-type QueryRevenueStatisticsLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewQueryRevenueStatisticsLogic Query revenue statistics
-func newQueryRevenueStatisticsLogic(ctx context.Context, deps Deps) *QueryRevenueStatisticsLogic {
-	return &QueryRevenueStatisticsLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
+// QueryRevenueStatistics summarizes order revenue for today, this month (with
+// its daily breakdown) and all time (with the last months' breakdown). The
+// totals are required; a breakdown that cannot be read is left out. The
+// summary is cached for a minute.
+func (s *Service) QueryRevenueStatistics(ctx context.Context) (*dto.RevenueStatisticsResponse, error) {
+	if demoMode() {
+		return mockRevenueStatistics(), nil
 	}
-}
-
-func (l *QueryRevenueStatisticsLogic) QueryRevenueStatistics() (resp *dto.RevenueStatisticsResponse, err error) {
-	if strings.ToLower(os.Getenv("PPANEL_MODE")) == "demo" {
-		return l.mockRevenueStatistics(), nil
+	if cached, ok := readSnapshot[dto.RevenueStatisticsResponse](ctx, s.deps.Cache, consoleRevenueStatisticsCacheKey); ok {
+		return cached, nil
 	}
 
-	// Try cache first
-	cached, cacheErr := l.deps.Cache.Get(l.ctx, consoleRevenueStatisticsCacheKey).Result()
-	if cacheErr == nil && cached != "" {
-		var result dto.RevenueStatisticsResponse
-		if json.Unmarshal([]byte(cached), &result) == nil {
-			return &result, nil
-		}
-	}
-
-	var today, monthly, all dto.OrdersStatistics
 	now := timeutil.Now()
-	// Get today's revenue statistics
-	todayData, err := l.deps.Orders.QueryDateOrders(l.ctx, now)
+	today, err := s.deps.Orders.QueryDateOrders(ctx, now)
 	if err != nil {
-		l.Errorw("[QueryRevenueStatisticsLogic] QueryDateOrders error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryDateOrders error: %v", err)
-	} else {
-		today = dto.OrdersStatistics{
-			AmountTotal:        todayData.AmountTotal,
-			NewOrderAmount:     todayData.NewOrderAmount,
-			RenewalOrderAmount: todayData.RenewalOrderAmount,
-		}
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "sum today's orders: %v", err)
 	}
-	// Get monthly's revenue statistics
-	monthlyData, err := l.deps.Orders.QueryMonthlyOrders(l.ctx, now)
+	month, err := s.deps.Orders.QueryMonthlyOrders(ctx, now)
 	if err != nil {
-		l.Errorw("[QueryRevenueStatisticsLogic] QueryMonthlyOrders error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryMonthlyOrders error: %v", err)
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "sum this month's orders: %v", err)
+	}
+	monthly := ordersStatistics("", month)
+	monthly.List = make([]dto.OrdersStatistics, 0)
+	if days, err := s.deps.Orders.QueryDailyOrdersList(ctx, now); err != nil {
+		logger.WithContext(ctx).Errorw("[QueryRevenueStatistics] daily order breakdown", logger.Field("error", err.Error()))
 	} else {
-		monthly = dto.OrdersStatistics{
-			AmountTotal:        monthlyData.AmountTotal,
-			NewOrderAmount:     monthlyData.NewOrderAmount,
-			RenewalOrderAmount: monthlyData.RenewalOrderAmount,
-			List:               make([]dto.OrdersStatistics, 0),
-		}
+		monthly.List = ordersBreakdown(days)
 	}
 
-	// Get monthly daily list for the current month (from 1st to current date)
-	monthlyListData, err := l.deps.Orders.QueryDailyOrdersList(l.ctx, now)
+	total, err := s.deps.Orders.QueryTotalOrders(ctx)
 	if err != nil {
-		l.Errorw("[QueryRevenueStatisticsLogic] QueryDailyOrdersList error", logger.Field("error", err.Error()))
-		// Don't return error, just log it and continue with empty list
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "sum all orders: %v", err)
+	}
+	all := ordersStatistics("", total)
+	all.List = make([]dto.OrdersStatistics, 0)
+	if months, err := s.deps.Orders.QueryMonthlyOrdersList(ctx, now); err != nil {
+		logger.WithContext(ctx).Errorw("[QueryRevenueStatistics] monthly order breakdown", logger.Field("error", err.Error()))
 	} else {
-		monthlyList := make([]dto.OrdersStatistics, len(monthlyListData))
-		for i, data := range monthlyListData {
-			monthlyList[i] = dto.OrdersStatistics{
-				Date:               data.Date,
-				AmountTotal:        data.AmountTotal,
-				NewOrderAmount:     data.NewOrderAmount,
-				RenewalOrderAmount: data.RenewalOrderAmount,
-			}
-		}
-		monthly.List = monthlyList
+		all.List = ordersBreakdown(months)
 	}
 
-	// Get all revenue statistics
-	allData, err := l.deps.Orders.QueryTotalOrders(l.ctx)
-	if err != nil {
-		l.Errorw("[QueryRevenueStatisticsLogic] QueryTotalOrders error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryTotalOrders error: %v", err)
-	} else {
-		all = dto.OrdersStatistics{
-			AmountTotal:        allData.AmountTotal,
-			NewOrderAmount:     allData.NewOrderAmount,
-			RenewalOrderAmount: allData.RenewalOrderAmount,
-			List:               make([]dto.OrdersStatistics, 0),
-		}
-	}
-
-	// Get all monthly list for the past 6 months
-	allListData, err := l.deps.Orders.QueryMonthlyOrdersList(l.ctx, now)
-	if err != nil {
-		l.Errorw("[QueryRevenueStatisticsLogic] QueryMonthlyOrdersList error", logger.Field("error", err.Error()))
-		// Don't return error, just log it and continue with empty list
-	} else {
-		allList := make([]dto.OrdersStatistics, len(allListData))
-		for i, data := range allListData {
-			allList[i] = dto.OrdersStatistics{
-				Date:               data.Date,
-				AmountTotal:        data.AmountTotal,
-				NewOrderAmount:     data.NewOrderAmount,
-				RenewalOrderAmount: data.RenewalOrderAmount,
-			}
-		}
-		all.List = allList
-	}
-
-	resp = &dto.RevenueStatisticsResponse{
-		Today:   today,
+	resp := &dto.RevenueStatisticsResponse{
+		Today:   ordersStatistics("", today),
 		Monthly: monthly,
 		All:     all,
 	}
-
-	// Cache the result
-	if data, marshalErr := json.Marshal(resp); marshalErr == nil {
-		l.deps.Cache.Set(l.ctx, consoleRevenueStatisticsCacheKey, data, consoleRevenueStatisticsCacheTTL)
-	}
-
+	storeSnapshot(ctx, s.deps.Cache, consoleRevenueStatisticsCacheKey, resp, consoleRevenueStatisticsCacheTTL)
 	return resp, nil
 }
 
+func ordersStatistics(date string, total order.OrdersTotal) dto.OrdersStatistics {
+	return dto.OrdersStatistics{
+		Date:               date,
+		AmountTotal:        total.AmountTotal,
+		NewOrderAmount:     total.NewOrderAmount,
+		RenewalOrderAmount: total.RenewalOrderAmount,
+	}
+}
+
+func ordersBreakdown(periods []order.OrdersTotalWithDate) []dto.OrdersStatistics {
+	list := make([]dto.OrdersStatistics, len(periods))
+	for i, period := range periods {
+		list[i] = ordersStatistics(period.Date, order.OrdersTotal{
+			AmountTotal:        period.AmountTotal,
+			NewOrderAmount:     period.NewOrderAmount,
+			RenewalOrderAmount: period.RenewalOrderAmount,
+		})
+	}
+	return list
+}
+
 // mockRevenueStatistics is a mock function to simulate revenue statistics data.
-func (l *QueryRevenueStatisticsLogic) mockRevenueStatistics() *dto.RevenueStatisticsResponse {
+func mockRevenueStatistics() *dto.RevenueStatisticsResponse {
 	now := timeutil.Now()
 
 	// Generate daily data for the current month (from 1st to current date)

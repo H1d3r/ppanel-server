@@ -82,8 +82,9 @@ func (s *workerTaskStore) UpdateActiveProgressWithError(ctx context.Context, dat
 }
 
 type workerSender struct {
-	sent []string
-	err  error
+	sent     []string
+	contexts []context.Context
+	err      error
 }
 
 type workerLogStore struct {
@@ -112,9 +113,14 @@ func (s *workerLogStore) Update(_ context.Context, data *logEntity.SystemLog) er
 	return errors.New("log not found")
 }
 
-func (s *workerSender) Send(to []string, _, _ string) error {
+func (s *workerSender) SendContext(ctx context.Context, to []string, _, _ string) error {
+	s.contexts = append(s.contexts, ctx)
 	s.sent = append(s.sent, to...)
 	return s.err
+}
+
+func (s *workerSender) Send(to []string, subject, body string) error {
+	return s.SendContext(context.Background(), to, subject, body)
 }
 
 func newEmailTask(t *testing.T, status int8, current uint64, recipients ...string) *task.Task {
@@ -145,6 +151,27 @@ func TestWorkerResumesFromPersistedProgress(t *testing.T) {
 	}
 	if store.task.DailyDate == "" || store.task.DailySent != 1 {
 		t.Fatalf("daily limit state was not persisted: %+v", store.task)
+	}
+}
+
+// Stopping the worker must reach a delivery in flight, so every email goes
+// out under the worker's context.
+func TestWorkerSendsUnderItsContext(t *testing.T) {
+	type workerKey struct{}
+	store := &workerTaskStore{task: newEmailTask(t, task.StatusPending, 0, "a@example.com")}
+	sender := &workerSender{}
+	ctx := context.WithValue(context.Background(), workerKey{}, "campaign 7")
+
+	if err := NewWorker(ctx, 7, store, sender).Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if len(sender.contexts) != 1 {
+		t.Fatalf("sends = %d, want 1", len(sender.contexts))
+	}
+	for _, sent := range sender.contexts {
+		if sent.Value(workerKey{}) != "campaign 7" {
+			t.Fatal("an email went out without the worker's context")
+		}
 	}
 }
 

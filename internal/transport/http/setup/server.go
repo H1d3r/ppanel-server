@@ -6,6 +6,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -138,7 +139,7 @@ func handleInitConfig(_ context.Context, ctx *app.RequestContext) {
 	}
 	sqlDB, err := db.DB()
 	if err == nil {
-		defer sqlDB.Close()
+		defer closeDatabase(sqlDB)
 	}
 	// migrate database
 	if err = schema.Up(dbClient.Driver(), dbClient.MigrationDsn()); err != nil {
@@ -229,10 +230,14 @@ func HandleDatabaseTest(_ context.Context, ctx *app.RequestContext) {
 		message = "Database connection failed"
 		goto result
 	}
-	tx, _ = db.DB()
-	if tx != nil {
-		defer tx.Close()
+	tx, err = db.DB()
+	if err != nil {
+		logger.Errorf("get database connection failed, err: %v\n", err.Error())
+		status = false
+		message = "Database connection failed"
+		goto result
 	}
+	defer closeDatabase(tx)
 	if err := tx.Ping(); err != nil {
 		logger.Errorf("ping database failed, err: %v\n", err.Error())
 		status = false
@@ -258,6 +263,14 @@ result:
 		"msg":    message,
 		"status": status,
 	})
+}
+
+// closeDatabase releases the connection pool a setup request opened. The
+// response is already decided by then, so a failure is only logged.
+func closeDatabase(db io.Closer) {
+	if err := db.Close(); err != nil {
+		logger.Errorf("[Init Database] close database connection failed: %v", err.Error())
+	}
 }
 
 func buildDatabaseConfig(driver, host, port, database, user, password string) (orm.Config, error) {

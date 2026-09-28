@@ -1,28 +1,19 @@
-package auth
+package authn
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
-	identifier2 "github.com/perfect-panel/server/internal/auth/identifier"
+	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
-
-type BindDeviceLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps BindDeviceDependencies
-}
-
-func NewBindDeviceLogic(ctx context.Context, deps BindDeviceDependencies) *BindDeviceLogic {
-	return &BindDeviceLogic{Logger: logger.WithContext(ctx), ctx: ctx, deps: deps}
-}
 
 // maxUserAgentLength matches the user_device.user_agent column (02149).
 const maxUserAgentLength = 512
@@ -38,62 +29,70 @@ func truncateUserAgent(ua string) string {
 	return cut
 }
 
+// deviceMetadata is the client address and user agent a device records, from
+// the request metadata.
+func deviceMetadata(ctx context.Context) (ip, userAgent string) {
+	meta, _ := requestmeta.From(ctx)
+	return meta.ClientIP, truncateUserAgent(meta.UserAgent)
+}
+
 // BindDeviceToUser creates a binding or refreshes the current owner's device.
 // An identifier is not proof of ownership: never move another user's binding
 // or disable that account. Anonymous users can add email/mobile credentials
 // through authenticated profile binding without abandoning their account.
-func (l *BindDeviceLogic) BindDeviceToUser(identifier, ip, userAgent string, userID int64) (*user.Device, error) {
-	if identifier == "" {
+func (s *Service) BindDeviceToUser(ctx context.Context, deviceIdentifier string, userID int64) (*user.Device, error) {
+	if deviceIdentifier == "" {
 		return nil, nil
 	}
-	if userID <= 0 || len(identifier) > 255 || strings.TrimSpace(identifier) != identifier {
+	if userID <= 0 || len(deviceIdentifier) > 255 || strings.TrimSpace(deviceIdentifier) != deviceIdentifier {
 		return nil, xerr.NewErrCode(xerr.InvalidParams)
 	}
-	userAgent = truncateUserAgent(userAgent)
-	device, err := l.deps.Store.UserDevice().FindOneDeviceByIdentifier(l.ctx, identifier)
+	ip, userAgent := deviceMetadata(ctx)
+	devices := s.deps.Store.UserDevice()
+	device, err := devices.FindOneDeviceByIdentifier(ctx, deviceIdentifier)
 	if err == nil {
-		return l.existingDevice(device, userID, ip, userAgent)
+		return s.touchOwnDevice(ctx, device, userID, ip, userAgent)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find device")
 	}
 
-	device = &user.Device{UserId: userID, Identifier: identifier, Ip: ip, UserAgent: userAgent, Enabled: true}
-	err = l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
-		if err := store.UserAuth().InsertUserAuthMethods(l.ctx, &user.AuthMethods{
-			UserId: userID, AuthType: identifier2.Device, AuthIdentifier: identifier, Verified: true,
+	device = &user.Device{UserId: userID, Identifier: deviceIdentifier, Ip: ip, UserAgent: userAgent, Enabled: true}
+	err = s.deps.Store.InIdentityTx(ctx, func(store repository.IdentityStore) error {
+		if err := store.UserAuth().InsertUserAuthMethods(ctx, &user.AuthMethods{
+			UserId: userID, AuthType: identifier.Device, AuthIdentifier: deviceIdentifier, Verified: true,
 		}); err != nil {
 			return err
 		}
-		return store.UserDevice().InsertDevice(l.ctx, device)
+		return store.UserDevice().InsertDevice(ctx, device)
 	})
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		// A concurrent creator may only be reused if it belongs to this user.
-		existing, queryErr := l.deps.Store.UserDevice().FindOneDeviceByIdentifier(l.ctx, identifier)
+		existing, queryErr := devices.FindOneDeviceByIdentifier(ctx, deviceIdentifier)
 		if queryErr != nil {
-			return nil, queryErr
+			return nil, xerr.Wrapf(queryErr, xerr.DatabaseQueryError, "find concurrently bound device")
 		}
-		return l.existingDevice(existing, userID, ip, userAgent)
+		return s.touchOwnDevice(ctx, existing, userID, ip, userAgent)
 	}
 	if err != nil {
-		return nil, err
+		return nil, xerr.Wrapf(err, xerr.DatabaseInsertError, "bind device")
 	}
 	return device, nil
 }
 
-func (l *BindDeviceLogic) existingDevice(device *user.Device, userID int64, ip, userAgent string) (*user.Device, error) {
+func (s *Service) touchOwnDevice(ctx context.Context, device *user.Device, userID int64, ip, userAgent string) (*user.Device, error) {
 	if device == nil || device.UserId != userID {
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "device belongs to another account")
+		return nil, fmt.Errorf("device belongs to another account: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	if !device.Enabled {
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "device is disabled")
+		return nil, fmt.Errorf("device is disabled: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
-	updated, err := l.deps.Store.UserDevice().TouchDevice(l.ctx, device.Id, userID, ip, userAgent)
+	updated, err := s.deps.Store.UserDevice().TouchDevice(ctx, device.Id, userID, ip, userAgent)
 	if err != nil {
-		return nil, err
+		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "refresh device")
 	}
 	if !updated {
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "device binding changed")
+		return nil, fmt.Errorf("device binding changed: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	device.Ip, device.UserAgent = ip, userAgent
 	return device, nil

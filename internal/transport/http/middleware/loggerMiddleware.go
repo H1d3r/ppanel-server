@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/requestmeta"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 const requestActorIDKey = "audit_actor_id"
@@ -54,7 +55,19 @@ func LoggerMiddleware(enrichers ...requestmeta.Enricher) app.HandlerFunc {
 			logs = append(logs, logger.Field("parameter_error", true))
 		}
 		logs = append(logs, logger.Field("duration", cost))
-		if responseStatus >= 500 && responseStatus <= 599 {
+		// Handlers answer HTTP 200 with the error code in the body, so the
+		// failure is judged by that code: a generic code means the server
+		// failed, and its full error chain is logged once, here.
+		serverFailed := responseStatus >= 500 && responseStatus <= 599
+		if err := httpx.HandlerErrorFromRequestContext(ctx); err != nil {
+			code := xerr.CodeOf(err)
+			logs = append(logs, logger.Field("error_code", code))
+			if xerr.IsGeneric(code) {
+				serverFailed = true
+				logs = append(logs, logger.Field("error", xerr.Detail(err)))
+			}
+		}
+		if serverFailed {
 			logger.WithContext(c).Errorw("HTTP Error", logs...)
 		} else {
 			logger.WithContext(c).Infow("HTTP Request", logs...)

@@ -18,7 +18,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/render"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/slicesx"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -168,7 +168,7 @@ func (l *SubscribeLogic) Handler(req *dto.SubscribeRequest) (resp *dto.Subscribe
 		Config: bytes,
 		Header: fmt.Sprintf(
 			"upload=%d;download=%d;total=%d;expire=%d",
-			userSubscribe.Upload, userSubscribe.Download, userSubscribe.Traffic, userSubscribe.ExpireTime.Unix(),
+			userSubscribe.Upload, userSubscribe.Download, userSubscribe.Traffic, expireHeader(userSubscribe.ExpireTime),
 		),
 		Headers: headers,
 	}
@@ -228,17 +228,26 @@ func (l *SubscribeLogic) getUserSubscribe(token string) (*usersub.Subscribe, err
 	return userSub, nil
 }
 
+// logSubscribeActivity records the fetch: the only trail that the token was
+// used, from where and by which client, so it stays synchronous and a fetch
+// that cannot be recorded is refused. It costs one single-row INSERT into the
+// append-only audit table. The row carries the request's metadata already, so
+// the audit store has nothing to merge in and stores the content as encoded
+// here instead of decoding and encoding it again.
 func (l *SubscribeLogic) logSubscribeActivity(userSub *usersub.Subscribe) error {
+	metadata, _ := requestmeta.From(l.ctx)
 	subscribeLog := log.Subscribe{
+		IPMetadata:      metadata.IPMetadata,
 		Token:           logger.RedactedValue,
 		UserAgent:       l.request.UserAgent,
 		ClientIP:        l.request.ClientIP,
 		UserSubscribeId: userSub.Id,
+		ActorID:         metadata.ActorID,
 	}
 
 	content, err := subscribeLog.Marshal()
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "marshal subscription audit log: %v", err)
+		return xerr.Wrapf(err, xerr.ERROR, "marshal subscription audit log")
 	}
 
 	err = l.deps.Logs.Insert(l.ctx, &log.SystemLog{
@@ -248,65 +257,70 @@ func (l *SubscribeLogic) logSubscribeActivity(userSub *usersub.Subscribe) error 
 		Content:  string(content),
 	})
 	if err != nil {
-		l.Errorw("[Generate Subscribe]insert subscribe log error: %v", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert subscription audit log: %v", err)
+		l.Errorw("[Generate Subscribe] Insert subscription audit log failed", logger.Field("error", err.Error()), logger.Field("user_subscribe_id", userSub.Id))
+		return xerr.Wrapf(err, xerr.DatabaseInsertError, "insert subscription audit log")
 	}
 	return nil
+}
+
+// expireHeader is the subscription-userinfo expiry in Unix seconds; 0 tells
+// clients there is none, for the epoch sentinel and a NULL expiry alike.
+func expireHeader(expireTime time.Time) int64 {
+	if usersub.NoExpiry(expireTime) {
+		return 0
+	}
+	return expireTime.Unix()
+}
+
+// Notices a client shows in place of real nodes, by why the subscription may
+// not use the service.
+const (
+	noticeUnavailable = "订阅不可用 / Subscribe Unavailable"
+	noticeExpired     = "订阅已过期 / Subscribe Expired"
+	noticeExhausted   = "流量已用尽 / Traffic Exhausted"
+)
+
+// unavailableNotice returns the notice for a subscription that may not use
+// the service, or "" for one that may. It asks the same rule the node user
+// list, the storefront and the edge manifest ask (usersub.AvailabilityAt).
+func unavailableNotice(sub *usersub.Subscribe, now time.Time) string {
+	switch sub.AvailabilityAt(now) {
+	case usersub.Available:
+		return ""
+	case usersub.Expired:
+		return noticeExpired
+	case usersub.TrafficExhausted:
+		return noticeExhausted
+	default:
+		// Refunded, stopped or a status no rule serves.
+		return noticeUnavailable
+	}
 }
 
 // getServers returns the nodes the client config lists. Subscriptions that
 // may not use the service get notice placeholders instead of real nodes, so
 // the client shows why.
 func (l *SubscribeLogic) getServers(userSub *usersub.Subscribe, subDetails *subscribe.Subscribe) ([]*node.Node, error) {
-	if l.isSubscriptionUnavailable(userSub) {
-		return l.createNoticeServers("订阅不可用 / Subscribe Unavailable"), nil
+	if notice := unavailableNotice(userSub, timeutil.Now()); notice != "" {
+		return l.createNoticeServers(notice), nil
 	}
 
-	if l.isSubscriptionExpired(userSub) {
-		return l.createNoticeServers("订阅已过期 / Subscribe Expired"), nil
+	nodeIds, tags, err := subDetails.NodeScope()
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "plan nodes: %v", err)
 	}
-
-	if l.isTrafficExhausted(userSub) {
-		return l.createNoticeServers("流量已用尽 / Traffic Exhausted"), nil
-	}
-
-	nodeIds := slicesx.StringToInt64Slice(subDetails.Nodes)
-	tags := slicesx.RemoveStringElement(strings.Split(subDetails.NodeTags, ","), "")
-
-	l.Debugf("[Generate Subscribe]nodes: %v, NodeTags: %v", len(nodeIds), len(tags))
 	if len(nodeIds) == 0 && len(tags) == 0 {
-		logger.Infow("[Generate Subscribe]no subscribe nodes")
+		l.Infow("[Generate Subscribe] plan selects no nodes", logger.Field("subscribe_id", subDetails.Id))
 		return []*node.Node{}, nil
 	}
 	enable := true
-	nodes, err := l.deps.Nodes.ListNodesByScope(l.ctx, nodeIds, slicesx.RemoveDuplicateElements(tags...), &enable, true)
-
-	l.Debugf("[Query Subscribe]found servers: %v", len(nodes))
-
+	nodes, err := l.deps.Nodes.ListNodesByScope(l.ctx, nodeIds, tags, &enable, true)
 	if err != nil {
-		l.Errorw("[Generate Subscribe]find server details error: %v", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find server details error: %v", err.Error())
+		l.Errorw("[Generate Subscribe] List plan nodes failed", logger.Field("error", err.Error()), logger.Field("subscribe_id", subDetails.Id))
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list nodes of plan %d", subDetails.Id)
 	}
-	logger.Debugf("[Generate Subscribe]found servers: %v", len(nodes))
+	l.Debugf("[Generate Subscribe] found %d nodes", len(nodes))
 	return nodes, nil
-}
-
-// isSubscriptionUnavailable reports a refunded (Deducted) subscription or one
-// an administrator stopped: neither may reach real nodes, whatever its expiry
-// and traffic say.
-func (l *SubscribeLogic) isSubscriptionUnavailable(userSub *usersub.Subscribe) bool {
-	return userSub.Status == usersub.SubscribeStatusDeducted || userSub.Status == usersub.SubscribeStatusStopped
-}
-
-func (l *SubscribeLogic) isSubscriptionExpired(userSub *usersub.Subscribe) bool {
-	return userSub.ExpireTime.Unix() < timeutil.Now().Unix() && userSub.ExpireTime.Unix() != 0
-}
-
-// isTrafficExhausted reports whether the subscription has used up its traffic
-// quota. Traffic == 0 means unlimited. Mirrors the condition used by
-// FindTrafficExceededSubscribes (upload + download >= traffic AND traffic > 0).
-func (l *SubscribeLogic) isTrafficExhausted(userSub *usersub.Subscribe) bool {
-	return userSub.Traffic > 0 && userSub.Download+userSub.Upload >= userSub.Traffic
 }
 
 // createNoticeServers returns placeholder (non-functional) nodes whose names

@@ -11,7 +11,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
-	"gorm.io/gorm"
 )
 
 var errAccounting = errors.New("accounting write failed")
@@ -82,7 +81,7 @@ func (r accountingSubscriptions) FindSubscribesByIds(context.Context, []int64) (
 	return []*usersub.Subscribe{{Id: 2, UserId: 7}}, nil
 }
 
-func (r accountingSubscriptions) BatchUpdateUserSubscribeWithTraffic(_ context.Context, deltas []trafficEntity.SubscribeTrafficDelta, _ ...*gorm.DB) error {
+func (r accountingSubscriptions) BatchUpdateUserSubscribeWithTraffic(_ context.Context, deltas []trafficEntity.SubscribeTrafficDelta) error {
 	if r.s.fail == "usage" {
 		return errAccounting
 	}
@@ -98,7 +97,7 @@ type accountingLogs struct {
 	s *accountingStore
 }
 
-func (r accountingLogs) InsertBatch(_ context.Context, logs []*trafficEntity.TrafficLog, _ int, _ ...*gorm.DB) error {
+func (r accountingLogs) InsertBatch(_ context.Context, logs []*trafficEntity.TrafficLog, _ int) error {
 	if r.s.fail == "logs" {
 		return errAccounting
 	}

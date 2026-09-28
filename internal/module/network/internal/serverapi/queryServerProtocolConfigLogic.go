@@ -3,10 +3,10 @@ package serverapi
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	"github.com/perfect-panel/server/internal/module/network/internal/nodeconfig"
+	"github.com/perfect-panel/server/internal/module/network/internal/protocolmap"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
@@ -33,15 +33,15 @@ func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.Quer
 		return nil, err
 	}
 
-	// handler protocols
-	var protocols []dto.Protocol
 	dst, err := data.UnmarshalProtocols()
 	if err != nil {
-		l.Errorf("[FilterServerList] UnmarshalProtocols Error: %s", err.Error())
+		l.Errorf("[QueryServerProtocolConfig] UnmarshalProtocols Error: %s", err.Error())
 		return nil, err
 	}
-	dst = node.SanitizeProtocolsForNodeDistribution(dst)
-	mapping.DeepCopy(&protocols, dst)
+	protocols, err := protocolmap.ToDTO(node.SanitizeProtocolsForNodeDistribution(dst))
+	if err != nil {
+		return nil, err
+	}
 
 	// only return enabled protocols for node distribution
 	var enabledProtocols []dto.Protocol

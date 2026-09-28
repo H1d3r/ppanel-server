@@ -1,12 +1,17 @@
 package app
 
 import (
+	"context"
+
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/logger"
 )
 
 // newIdentityModule wires the identity module against the legacy store;
 // device kicking is a closure over the service context's device manager.
+// The trial settings are not passed: the subscription module grants trials
+// when it consumes the registration event.
 func newIdentityModule(store repository.Store, srv *Application) identity.Service {
 	return identity.New(identity.Deps{
 		Users:     store.User(),
@@ -14,8 +19,6 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 		Devices:   store.UserDevice(),
 		Cache:     store.UserCache(),
 		UserSubs:  store.UserSubscription(),
-		Plans:     store.Subscribe(),
-		Traffic:   store.TrafficLog(),
 		Logs:      store.Log(),
 		Store:     store,
 		KickDevice: func(userID int64, identifier string) {
@@ -32,8 +35,8 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 			return current.DomainSuffixList, current.EnableDomainSuffix
 		},
 		TelegramBotName: func() string { return srv.Runtime.Config().Telegram.BotName },
-		NotifyTelegramUnbind: func(userID, chatID int64) error {
-			return srv.Notification.NotifyTelegramUnbind(userID, chatID)
+		NotifyTelegramUnbind: func(ctx context.Context, userID, chatID int64) error {
+			return srv.Notification.NotifyTelegramUnbind(ctx, userID, chatID)
 		},
 		AuthConfig: func() identity.AuthSnapshot {
 			c := srv.Runtime.Config()
@@ -51,13 +54,11 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 
 				InviteForced:      c.Invite.ForcedInvite,
 				OnlyFirstPurchase: c.Invite.OnlyFirstPurchase,
-				TrialEnabled:      c.Register.EnableTrial,
-				TrialSubscribeID:  c.Register.TrialSubscribe,
-				TrialTime:         c.Register.TrialTime,
-				TrialTimeUnit:     c.Register.TrialTimeUnit,
 
 				StopRegister:            c.Register.StopRegister,
 				RegisterVerify:          c.Verify.RegisterVerify,
+				LoginVerify:             c.Verify.LoginVerify,
+				ResetPasswordVerify:     c.Verify.ResetPasswordVerify,
 				TurnstileSecret:         c.Verify.TurnstileSecret,
 				EnableIpRegisterLimit:   c.Register.EnableIpRegisterLimit,
 				IpRegisterLimit:         c.Register.IpRegisterLimit,
@@ -93,4 +94,21 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 			}
 		},
 	})
+}
+
+// normalizeIdentityData runs the identity module's idempotent startup data
+// fix-ups once the schema is current. They repair stored identifiers, so a
+// failure is logged and the server still starts.
+func normalizeIdentityData(ctx context.Context, store repository.Store) {
+	result, err := store.UserAuth().NormalizeMobileIdentifiers(ctx)
+	if err != nil {
+		logger.Errorw("[Identity] normalize stored phone numbers failed", logger.Field("error", err.Error()))
+		return
+	}
+	if result.Converted > 0 || result.Conflicts > 0 || result.Unparsable > 0 {
+		logger.Infow("[Identity] normalized stored phone numbers to E.164",
+			logger.Field("converted", result.Converted),
+			logger.Field("conflicts", result.Conflicts),
+			logger.Field("unparsable", result.Unparsable))
+	}
 }

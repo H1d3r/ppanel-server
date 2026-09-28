@@ -3,6 +3,7 @@ package routes
 import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/route"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/identity"
@@ -37,10 +38,6 @@ func (deps Dependencies) runtimeConfig() config.Config {
 	return deps.Config
 }
 
-func (deps Dependencies) verifyConfig() config.Verify {
-	return deps.runtimeConfig().Verify
-}
-
 func (deps Dependencies) subscribeConfig() config.SubscribeConfig {
 	return deps.runtimeConfig().Subscribe
 }
@@ -53,16 +50,27 @@ func (deps Dependencies) nodeSecret() string {
 	return deps.runtimeConfig().Node.NodeSecret
 }
 
+func (deps Dependencies) authDeps() middleware.AuthDeps {
+	return middleware.AuthDeps{
+		JWT: deps.runtimeConfig().JwtAuth, Redis: deps.Redis, Accounts: middleware.AccountsFromStore(deps.Store),
+	}
+}
+
 func (deps Dependencies) authMiddleware() app.HandlerFunc {
-	return middleware.AuthMiddleware(middleware.AuthDeps{
-		JWT: deps.runtimeConfig().JwtAuth, Redis: deps.Redis, Store: deps.Store,
-	})
+	return middleware.AuthMiddleware(deps.authDeps())
 }
 
 func (deps Dependencies) optionalAuthMiddleware() app.HandlerFunc {
-	return middleware.OptionalAuthMiddleware(middleware.AuthDeps{
-		JWT: deps.runtimeConfig().JwtAuth, Redis: deps.Redis, Store: deps.Store,
-	})
+	return middleware.OptionalAuthMiddleware(deps.authDeps())
+}
+
+// adminGroup opens an admin route group. It is the only way to open one
+// (TestAdminGroupsAreGuarded): it installs authentication and the
+// administrator guard, so no admin route can be registered without them.
+func (deps Dependencies) adminGroup(router *server.Hertz, path string) *route.RouterGroup {
+	group := router.Group(path)
+	group.Use(deps.authMiddleware(), middleware.AdminGuard())
+	return group
 }
 
 func (deps Dependencies) deviceMiddleware() app.HandlerFunc {

@@ -1,16 +1,15 @@
 package trace
 
-//nolint:staticcheck
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/jaeger"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -30,6 +29,13 @@ const (
 	kindOtlpHttp = "otlphttp"
 	kindFile     = "file"
 	protocolUdp  = "udp"
+
+	// jaegerOTLPPort is the port Jaeger receives OTLP over HTTP on.
+	jaegerOTLPPort = "4318"
+	// otlpTracesPath is the OTLP/HTTP traces path.
+	otlpTracesPath = "/v1/traces"
+	// jaegerThriftPath is the path of Jaeger's legacy Thrift collector.
+	jaegerThriftPath = "/api/traces"
 )
 
 var (
@@ -72,16 +78,68 @@ func StopAgent() {
 	clear(agents)
 }
 
+// jaegerEndpoint maps the endpoint of the jaeger batcher onto Jaeger's
+// OTLP/HTTP receiver, which Jaeger serves natively. A URL keeps its scheme,
+// host and path, posting to /v1/traces when it names no path; a bare
+// host:port is used as is (ok is false then, url empty). The endpoints of the
+// removed Jaeger Thrift exporter do not speak OTLP: the agent (udp://host)
+// and the collector's /api/traces path move to OTLP on port 4318 of the same
+// host, and legacy reports that the endpoint was rewritten.
+func jaegerEndpoint(endpoint string) (target string, ok, legacy bool) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", false, false
+	}
+	switch u.Scheme {
+	case protocolUdp:
+		return (&url.URL{Scheme: "http", Host: net.JoinHostPort(u.Hostname(), jaegerOTLPPort), Path: otlpTracesPath}).String(), true, true
+	case "http", "https":
+	default:
+		return "", false, false
+	}
+	switch u.Path {
+	case jaegerThriftPath:
+		host := u.Host
+		if u.Port() == "" || u.Port() == "14268" {
+			host = net.JoinHostPort(u.Hostname(), jaegerOTLPPort)
+		}
+		u.Host, u.Path = host, otlpTracesPath
+		return u.String(), true, true
+	case "", "/":
+		u.Path = otlpTracesPath
+	}
+	return u.String(), true, false
+}
+
+func jaegerOptions(c Config) []otlptracehttp.Option {
+	var opts []otlptracehttp.Option
+	target, isURL, legacy := jaegerEndpoint(c.Endpoint)
+	if legacy {
+		logger.Errorf("[trace] %q is a Jaeger Thrift endpoint; exporting OTLP to %s instead. Point Endpoint at Jaeger's OTLP/HTTP receiver", c.Endpoint, target)
+	}
+	if isURL {
+		opts = append(opts, otlptracehttp.WithEndpointURL(target))
+	} else {
+		opts = append(opts, otlptracehttp.WithEndpoint(c.Endpoint))
+		if !c.OtlpHttpSecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		if len(c.OtlpHttpPath) > 0 {
+			opts = append(opts, otlptracehttp.WithURLPath(c.OtlpHttpPath))
+		}
+	}
+	if len(c.OtlpHeaders) > 0 {
+		opts = append(opts, otlptracehttp.WithHeaders(c.OtlpHeaders))
+	}
+	return opts
+}
+
 func createExporter(c Config) (sdktrace.SpanExporter, error) {
-	// Just support jaeger and zipkin now, more for later
 	switch c.Batcher {
 	case kindJaeger:
-		u, err := url.Parse(c.Endpoint)
-		if err == nil && u.Scheme == protocolUdp {
-			return jaeger.New(jaeger.WithAgentEndpoint(jaeger.WithAgentHost(u.Hostname()),
-				jaeger.WithAgentPort(u.Port())))
-		}
-		return jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(c.Endpoint)))
+		// Jaeger ingests OTLP natively; the deprecated Jaeger exporter is
+		// gone, so this batcher exports OTLP over HTTP to Jaeger.
+		return otlptracehttp.New(context.Background(), jaegerOptions(c)...)
 	case kindZipkin:
 		return zipkin.New(c.Endpoint)
 	case kindOtlpGrpc:

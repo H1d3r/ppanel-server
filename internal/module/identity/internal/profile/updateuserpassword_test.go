@@ -2,19 +2,16 @@ package profile
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/auth/usersession"
-	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/gorm"
 )
 
 type passwordUsers struct {
@@ -22,7 +19,7 @@ type passwordUsers struct {
 	written map[string]interface{}
 }
 
-func (r *passwordUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]interface{}, _ ...*gorm.DB) error {
+func (r *passwordUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]interface{}) error {
 	r.written = columns
 	return nil
 }
@@ -32,7 +29,7 @@ func newPasswordLogic(t *testing.T, current *usermodel.User) (*UpdateUserPasswor
 	rds := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
 	t.Cleanup(func() { _ = rds.Close() })
 	users := &passwordUsers{}
-	ctx := context.WithValue(context.Background(), requestctx.CtxKeyUser, current)
+	ctx := usermodel.NewContext(context.Background(), current)
 	return newUpdateUserPasswordLogic(ctx, Deps{Users: users, Redis: rds}), users, rds
 }
 
@@ -78,7 +75,7 @@ func TestLogoutEndsOnlyTheCallingSession(t *testing.T) {
 	rds := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
 	t.Cleanup(func() { _ = rds.Close() })
 	for _, id := range []string{"current", "other"} {
-		if err := rds.Set(context.Background(), fmt.Sprintf("%v:%v", config.SessionIdKey, id), 7, 0).Err(); err != nil {
+		if err := rds.Set(context.Background(), usersession.SessionKey(id), 7, 0).Err(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -88,10 +85,10 @@ func TestLogoutEndsOnlyTheCallingSession(t *testing.T) {
 		t.Fatalf("Logout() error = %v", err)
 	}
 
-	if rds.Exists(context.Background(), fmt.Sprintf("%v:current", config.SessionIdKey)).Val() != 0 {
+	if rds.Exists(context.Background(), usersession.SessionKey("current")).Val() != 0 {
 		t.Fatal("the calling session still exists")
 	}
-	if rds.Exists(context.Background(), fmt.Sprintf("%v:other", config.SessionIdKey)).Val() != 1 {
+	if rds.Exists(context.Background(), usersession.SessionKey("other")).Val() != 1 {
 		t.Fatal("another session was ended")
 	}
 }

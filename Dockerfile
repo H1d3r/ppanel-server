@@ -6,6 +6,8 @@ LABEL stage=gobuilder
 ARG TARGETARCH
 ARG VERSION=unknown
 ARG CHANNEL=dev
+# UTC RFC 3339 (YYYY-MM-DDTHH:MM:SSZ); empty means the time of the build.
+ARG BUILD_TIME=
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH}
 
 # Combine apk commands into one to reduce layer size
@@ -25,9 +27,10 @@ COPY . .
 # (.dockerignore keeps it out of the build context as well).
 RUN mkdir -p etc && : > etc/ppanel.yaml
 
-# Build the binary with version and build time
-RUN BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S") && \
-    go build -ldflags="-s -w -X 'github.com/perfect-panel/server/internal/app/buildinfo.Version=${VERSION}' -X 'github.com/perfect-panel/server/internal/app/buildinfo.BuildTime=${BUILD_TIME}' -X 'github.com/perfect-panel/server/internal/app/buildinfo.Channel=${CHANNEL}'" -o /app/ppanel main.go
+# Build the binary with version and build time. script/ldflags.sh defines the
+# injected metadata for every build path (make, this image, the release).
+RUN LDFLAGS="$(VERSION="${VERSION}" CHANNEL="${CHANNEL}" BUILD_TIME="${BUILD_TIME}" sh script/ldflags.sh)" && \
+    go build -trimpath -ldflags="${LDFLAGS}" -o /app/ppanel main.go
 
 # Final minimal image
 FROM scratch

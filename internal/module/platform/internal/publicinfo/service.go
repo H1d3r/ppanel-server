@@ -7,12 +7,15 @@ import (
 	"context"
 
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
+	"golang.org/x/sync/singleflight"
 )
 
 // Service is the public-info subdomain entry point used by the platform
 // facade.
 type Service struct {
 	deps Deps
+	// statRefresh collapses concurrent refreshes of the site statistics.
+	statRefresh singleflight.Group
 }
 
 func NewService(deps Deps) *Service {
@@ -32,10 +35,6 @@ func (s *Service) GetTos(ctx context.Context) (*dto.GetTosResponse, error) {
 
 func (s *Service) GetPrivacyPolicy(ctx context.Context) (*dto.PrivacyPolicyConfig, error) {
 	return newGetPrivacyPolicyLogic(ctx, s.deps).GetPrivacyPolicy()
-}
-
-func (s *Service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
-	return newGetStatLogic(ctx, s.deps).GetStat()
 }
 
 func (s *Service) GetClient(ctx context.Context) (*dto.GetSubscribeClientResponse, error) {

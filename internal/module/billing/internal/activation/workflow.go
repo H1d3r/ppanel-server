@@ -7,17 +7,15 @@ import (
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/module/subscription"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/redis/go-redis/v9"
 )
-
-const OrderTypeResetTraffic = 3
 
 type SubscriptionFulfiller interface {
 	FulfillPaidOrder(context.Context, string) (*subscription.FulfillmentOutcome, error)
@@ -32,8 +30,15 @@ type LegacyGuestCache interface {
 	Get(context.Context, string) *redis.StringCmd
 }
 
+// WorkflowOrders is the order persistence the workflow uses outside its
+// stages: it reads the paid order and binds a guest order to its account.
+type WorkflowOrders interface {
+	FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error)
+	Update(ctx context.Context, data *order.Order) error
+}
+
 type WorkflowDeps struct {
-	Orders               repository.OrderRepo
+	Orders               WorkflowOrders
 	Profiles             ProfileReader
 	GuestAccounts        identity.GuestAccounts
 	Subscriptions        SubscriptionFulfiller
@@ -81,21 +86,21 @@ func (l *Workflow) Activate(ctx context.Context, orderNo string) error {
 	if err != nil {
 		return err
 	}
-	if orderInfo.Status == OrderStatusFinished {
+	if orderInfo.Status == order.StatusFinished {
 		return nil
 	}
-	if orderInfo.Status != OrderStatusPaid {
+	if orderInfo.Status != order.StatusPaid {
 		return ErrInvalidOrderStatus
 	}
 
-	if orderInfo.Type == OrderTypeSubscribe && orderInfo.UserId == 0 {
+	if orderInfo.Type == order.TypeSubscribe && orderInfo.UserId == 0 {
 		if err := l.ensureGuestAccount(ctx, orderInfo); err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Guest account stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
 	}
 
-	if orderInfo.Type == OrderTypeRecharge {
+	if orderInfo.Type == order.TypeRecharge {
 		balance, err := l.stages.ActivateRecharge(ctx, orderInfo.OrderNo)
 		if err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Recharge stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
@@ -123,7 +128,7 @@ func (l *Workflow) Activate(ctx context.Context, orderNo string) error {
 		return err
 	}
 
-	if orderInfo.Type == OrderTypeSubscribe || orderInfo.Type == OrderTypeRenewal {
+	if orderInfo.Type == order.TypeSubscribe || orderInfo.Type == order.TypeRenewal {
 		if err := l.stages.SettleOrderCommission(ctx, orderInfo.OrderNo, outcome.UserID); err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Commission stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
@@ -223,10 +228,10 @@ func (l *Workflow) sendNotifications(ctx context.Context, orderInfo *order.Order
 func (l *Workflow) sendRechargeNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User, balance int64) {
 	// Send user notification
 	templateData := map[string]string{
-		"OrderAmount":   fmt.Sprintf("%.2f", float64(orderInfo.Price)/100),
+		"OrderAmount":   payment.FormatAmount(orderInfo.Price),
 		"PaymentMethod": orderInfo.Method,
-		"Time":          orderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
-		"Balance":       fmt.Sprintf("%.2f", float64(balance)/100),
+		"Time":          orderInfo.CreatedAt.Format(noticeTimeLayout),
+		"Balance":       payment.FormatAmount(balance),
 	}
 	if text, err := notification.RenderTelegramMarkdown(notification.RechargeNotify, templateData); err == nil {
 		l.sendUserNotifyWithTelegram(ctx, userInfo.Id, text)
@@ -237,10 +242,10 @@ func (l *Workflow) sendRechargeNotifications(ctx context.Context, orderInfo *ord
 		"OrderNo":       orderInfo.OrderNo,
 		"TradeNo":       orderInfo.TradeNo,
 		"UserEmail":     findEmail(userInfo),
-		"OrderAmount":   fmt.Sprintf("%.2f", float64(orderInfo.Price)/100),
-		"SubscribeName": "余额充值",
-		"OrderStatus":   "已支付",
-		"OrderTime":     orderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
+		"OrderAmount":   payment.FormatAmount(orderInfo.Price),
+		"SubscribeName": noticeRechargeName,
+		"OrderStatus":   noticeStatusPaid,
+		"OrderTime":     orderInfo.CreatedAt.Format(noticeTimeLayout),
 		"PaymentMethod": orderInfo.Method,
 	}
 	if text, err := notification.RenderTelegramMarkdown(notification.AdminOrderNotify, adminData); err == nil {
@@ -253,12 +258,12 @@ func (l *Workflow) buildUserNotificationData(orderInfo *order.Order, outcome *su
 	data := map[string]string{
 		"OrderNo":       orderInfo.OrderNo,
 		"SubscribeName": outcome.PlanName,
-		"OrderAmount":   fmt.Sprintf("%.2f", float64(orderInfo.Price)/100),
+		"OrderAmount":   payment.FormatAmount(orderInfo.Price),
 	}
 
 	if outcome.HasSub {
-		data["ExpireTime"] = outcome.ExpireAt.Format("2006-01-02 15:04:05")
-		data["ResetTime"] = timeutil.Now().Format("2006-01-02 15:04:05")
+		data["ExpireTime"] = outcome.ExpireAt.Format(noticeTimeLayout)
+		data["ResetTime"] = timeutil.Now().Format(noticeTimeLayout)
 	}
 
 	return data
@@ -267,8 +272,8 @@ func (l *Workflow) buildUserNotificationData(orderInfo *order.Order, outcome *su
 // buildAdminNotificationData creates template data for admin notifications
 func (l *Workflow) buildAdminNotificationData(orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome) map[string]string {
 	subscribeName := outcome.PlanName
-	if orderInfo.Type == OrderTypeResetTraffic {
-		subscribeName = "流量重置"
+	if orderInfo.Type == order.TypeResetTraffic {
+		subscribeName = noticeResetTrafficName
 	}
 
 	return map[string]string{
@@ -276,9 +281,9 @@ func (l *Workflow) buildAdminNotificationData(orderInfo *order.Order, userInfo *
 		"TradeNo":       orderInfo.TradeNo,
 		"UserEmail":     findEmail(userInfo),
 		"SubscribeName": subscribeName,
-		"OrderAmount":   fmt.Sprintf("%.2f", float64(orderInfo.Price)/100),
-		"OrderStatus":   "已支付",
-		"OrderTime":     orderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
+		"OrderAmount":   payment.FormatAmount(orderInfo.Price),
+		"OrderStatus":   noticeStatusPaid,
+		"OrderTime":     orderInfo.CreatedAt.Format(noticeTimeLayout),
 		"PaymentMethod": orderInfo.Method,
 	}
 }

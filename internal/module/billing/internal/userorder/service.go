@@ -1,20 +1,20 @@
 // Package userorder implements the user-facing order query subdomain of the
-// billing module (the checkout flows join as migration proceeds). Only the
-// module facade may reach it.
+// billing module. Only the module facade may reach it.
 package userorder
 
 import (
 	"context"
+	"errors"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	subscribeEntity "github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 // PlanReader is the subdomain's read-only port onto the subscription
@@ -25,12 +25,18 @@ type PlanReader interface {
 	FindOne(ctx context.Context, id int64) (*subscribeEntity.Subscribe, error)
 }
 
+// Orders reads the current user's orders.
+type Orders interface {
+	FindOneDetailsByOrderNo(ctx context.Context, orderNo string) (*order.Details, error)
+	QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error)
+}
+
 type Service struct {
-	orders repository.OrderRepo
+	orders Orders
 	plans  PlanReader
 }
 
-func NewService(orders repository.OrderRepo, plans PlanReader) *Service {
+func NewService(orders Orders, plans PlanReader) *Service {
 	return &Service{orders: orders, plans: plans}
 }
 
@@ -60,17 +66,19 @@ func (s *Service) attachPlan(ctx context.Context, detail *dto.OrderDetail, cache
 // QueryDetail returns one of the current user's orders; ownership is
 // enforced here and the referrer commission never leaves the module.
 func (s *Service) QueryDetail(ctx context.Context, req *dto.QueryOrderDetailRequest) (*dto.OrderDetail, error) {
-	currentUser, ok := ctx.Value(requestctx.CtxKeyUser).(*user.User)
-	if !ok || currentUser == nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+	currentUser, ok := user.FromContext(ctx)
+	if !ok {
+		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 	orderInfo, err := s.orders.FindOneDetailsByOrderNo(ctx, req.OrderNo)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order %s not found", req.OrderNo)
+	}
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[QueryOrderDetail] Database query error", logger.Field("error", err.Error()), logger.Field("order_no", req.OrderNo))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find order error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", req.OrderNo)
 	}
 	if orderInfo.UserId != currentUser.Id {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
+		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
 	}
 	resp := &dto.OrderDetail{}
 	mapping.DeepCopy(resp, orderInfo)
@@ -81,15 +89,13 @@ func (s *Service) QueryDetail(ctx context.Context, req *dto.QueryOrderDetailRequ
 }
 
 func (s *Service) QueryList(ctx context.Context, req *dto.QueryOrderListRequest) (*dto.QueryOrderListResponse, error) {
-	u, ok := ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(ctx)
 	if !ok {
-		logger.Error("current user is not found in context")
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 	total, data, err := s.orders.QueryOrderListByPage(ctx, req.Page, req.Size, 0, u.Id, 0, "")
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[QueryOrderListLogic] Query order list failed", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Query order list failed")
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "query orders of user %d", u.Id)
 	}
 	resp := &dto.QueryOrderListResponse{
 		Total: total,

@@ -4,6 +4,7 @@ package registerpolicy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -13,8 +14,8 @@ import (
 	"github.com/perfect-panel/server/internal/auth/ratelimit"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,19 +25,55 @@ const (
 	MethodDevice = identifier.Device
 )
 
+// Policy is the account policy every identity flow applies: which sign-in
+// methods are enabled, whether registration is open, the human check and the
+// per-IP registration quota. The client address is the request's, from the
+// request metadata.
+type Policy interface {
+	// EnsureMethodEnabled rejects a sign-in method the administrator
+	// disabled.
+	EnsureMethodEnabled(ctx context.Context, method string) error
+	// EnsureRegistrationOpen rejects a new account when registration is
+	// stopped or its method disabled.
+	EnsureRegistrationOpen(ctx context.Context, method string) error
+	// VerifyHuman enforces the Turnstile challenge configured for purpose.
+	VerifyHuman(ctx context.Context, purpose Purpose, token string) error
+	// TakeIPPermit reserves one registration from the client's IP quota.
+	TakeIPPermit(ctx context.Context) error
+}
+
+// Purpose selects which configured Turnstile switch guards a request.
+type Purpose int
+
+const (
+	// Register guards new accounts.
+	Register Purpose = iota
+	// Login guards password and code sign-ins.
+	Login
+	// Reset guards password resets.
+	Reset
+)
+
 // Snapshot is the per-request view of the runtime-mutable policy settings.
 type Snapshot struct {
 	EmailEnabled  bool
 	MobileEnabled bool
 	DeviceEnabled bool
 
-	StopRegister            bool
+	StopRegister bool
+	// RegisterVerify, LoginVerify and ResetPasswordVerify switch the
+	// Turnstile challenge on for registration, sign-in and password reset.
 	RegisterVerify          bool
+	LoginVerify             bool
+	ResetPasswordVerify     bool
 	TurnstileSecret         string
 	EnableIpRegisterLimit   bool
 	IpRegisterLimit         int64
 	IpRegisterLimitDuration int64
 }
+
+// TurnstileVerifier checks a Turnstile response token.
+type TurnstileVerifier func(ctx context.Context, secret, token, remoteIP string) (bool, error)
 
 // Deps declares the policy's collaborators; the identity facade provides
 // them.
@@ -45,15 +82,26 @@ type Deps struct {
 	Redis *redis.Client
 	// Config snapshots the runtime-mutable policy settings per call.
 	Config func() Snapshot
+	// VerifyTurnstile overrides the Cloudflare client; nil selects it.
+	VerifyTurnstile TurnstileVerifier
 }
 
-// ServicePolicy is the use-case policy port implementation.
+// ServicePolicy implements Policy.
 type ServicePolicy struct {
 	deps Deps
 }
 
+var _ Policy = ServicePolicy{}
+
 func New(deps Deps) ServicePolicy {
+	if deps.VerifyTurnstile == nil {
+		deps.VerifyTurnstile = verifyTurnstile
+	}
 	return ServicePolicy{deps: deps}
+}
+
+func verifyTurnstile(ctx context.Context, secret, token, remoteIP string) (bool, error) {
+	return challenge.New(challenge.Config{Secret: secret, Timeout: 3 * time.Second}).Verify(ctx, token, remoteIP)
 }
 
 // EnsureMethodEnabled rejects direct calls to authentication methods disabled
@@ -76,64 +124,71 @@ func (p ServicePolicy) EnsureMethodEnabled(ctx context.Context, method string) e
 	default:
 		configured, err := p.deps.Auths.FindOneByMethod(ctx, method)
 		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.GetAuthenticatorError), "load auth method %q: %v", method, err)
+			return xerr.Wrapf(err, xerr.GetAuthenticatorError, "load auth method %q", method)
 		}
 		if configured.Enabled != nil && *configured.Enabled {
 			return nil
 		}
 	}
-	return errors.Wrapf(xerr.NewErrCode(xerr.GetAuthenticatorError), "auth method %q is disabled", method)
+	return fmt.Errorf("auth method %q is disabled: %w", method, xerr.NewErrCode(xerr.GetAuthenticatorError))
 }
 
 // EnsureRegistrationOpen applies policies shared by every new-account path.
 func (p ServicePolicy) EnsureRegistrationOpen(ctx context.Context, method string) error {
 	if p.deps.Config().StopRegister {
-		return errors.Wrap(xerr.NewErrCode(xerr.StopRegister), "registration is disabled")
+		return fmt.Errorf("registration is disabled: %w", xerr.NewErrCode(xerr.StopRegister))
 	}
 	return p.EnsureMethodEnabled(ctx, method)
 }
 
-// VerifyHuman enforces the configured registration Turnstile challenge.
-func (p ServicePolicy) VerifyHuman(ctx context.Context, token, ip string) error {
+// VerifyHuman enforces the Turnstile challenge configured for purpose. A
+// missing token or secret fails without asking Cloudflare.
+func (p ServicePolicy) VerifyHuman(ctx context.Context, purpose Purpose, token string) error {
 	cfg := p.deps.Config()
-	if !cfg.RegisterVerify {
+	enabled := cfg.RegisterVerify
+	switch purpose {
+	case Login:
+		enabled = cfg.LoginVerify
+	case Reset:
+		enabled = cfg.ResetPasswordVerify
+	}
+	if !enabled {
 		return nil
 	}
+	refused := xerr.NewErrCode(xerr.TooManyRequests)
 	if strings.TrimSpace(token) == "" || strings.TrimSpace(cfg.TurnstileSecret) == "" {
-		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "registration verification failed")
+		return fmt.Errorf("human verification failed: %w", refused)
 	}
-	verifier := challenge.New(challenge.Config{
-		Secret:  cfg.TurnstileSecret,
-		Timeout: 3 * time.Second,
-	})
-	ok, err := verifier.Verify(ctx, token, ip)
+	meta, _ := requestmeta.From(ctx)
+	ok, err := p.deps.VerifyTurnstile(ctx, cfg.TurnstileSecret, token, meta.ClientIP)
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "registration verification failed: %v", err)
+		return fmt.Errorf("human verification failed: %v: %w", err, refused)
 	}
 	if !ok {
-		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "registration verification failed")
+		return fmt.Errorf("human verification failed: %w", refused)
 	}
 	return nil
 }
 
 // TakeIPPermit atomically reserves one registration from the configured IP
-// quota. The duration is configured in minutes.
-func (p ServicePolicy) TakeIPPermit(ctx context.Context, ip string) error {
+// quota of the client. The duration is configured in minutes.
+func (p ServicePolicy) TakeIPPermit(ctx context.Context) error {
 	cfg := p.deps.Config()
 	if !cfg.EnableIpRegisterLimit {
 		return nil
 	}
 	if p.deps.Redis == nil || cfg.IpRegisterLimit <= 0 || cfg.IpRegisterLimitDuration <= 0 {
-		return errors.Wrap(xerr.NewErrCode(xerr.ERROR), "invalid IP registration limit configuration")
+		return fmt.Errorf("invalid IP registration limit configuration: %w", xerr.NewErrCode(xerr.ERROR))
 	}
-	parsedIP := net.ParseIP(strings.TrimSpace(ip))
+	meta, _ := requestmeta.From(ctx)
+	parsedIP := net.ParseIP(strings.TrimSpace(meta.ClientIP))
 	if parsedIP == nil {
-		return errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "invalid client IP")
+		return fmt.Errorf("invalid client IP: %w", xerr.NewErrCode(xerr.InvalidParams))
 	}
 
 	maxInt := int64(^uint(0) >> 1)
 	if cfg.IpRegisterLimit > maxInt || cfg.IpRegisterLimitDuration > maxInt/60 {
-		return errors.Wrap(xerr.NewErrCode(xerr.ERROR), "IP registration limit configuration is too large")
+		return fmt.Errorf("IP registration limit configuration is too large: %w", xerr.NewErrCode(xerr.ERROR))
 	}
 	limiter := ratelimit.NewPeriodLimit(
 		int(cfg.IpRegisterLimitDuration*60),
@@ -143,10 +198,10 @@ func (p ServicePolicy) TakeIPPermit(ctx context.Context, ip string) error {
 	)
 	permit, err := limiter.TakeCtx(ctx, parsedIP.String())
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "check IP registration limit: %v", err)
+		return xerr.Wrapf(err, xerr.ERROR, "check IP registration limit")
 	}
 	if !limiter.ParsePermitState(permit) {
-		return errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "registration limit exceeded for IP %s", parsedIP.String())
+		return fmt.Errorf("registration limit exceeded for IP %s: %w", parsedIP.String(), xerr.NewErrCode(xerr.TooManyRequests))
 	}
 	return nil
 }

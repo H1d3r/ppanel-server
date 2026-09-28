@@ -45,10 +45,6 @@ func (s *Service) DeleteServer(ctx context.Context, req *dto.DeleteServerRequest
 	return newDeleteServerLogic(ctx, s.deps).DeleteServer(req)
 }
 
-func (s *Service) FilterServerList(ctx context.Context, req *dto.FilterServerListRequest) (*dto.FilterServerListResponse, error) {
-	return newFilterServerListLogic(ctx, s.deps).FilterServerList(req)
-}
-
 func (s *Service) ResetSortWithServer(ctx context.Context, req *dto.ResetSortRequest) error {
 	return newResetSortWithServerLogic(ctx, s.deps).ResetSortWithServer(req)
 }

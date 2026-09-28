@@ -39,10 +39,6 @@ func (s *Service) GetVersion(ctx context.Context) (*dto.VersionResponse, error) 
 	return newGetVersionLogic(ctx, s.deps).GetVersion()
 }
 
-func (s *Service) QueryIPLocation(ctx context.Context, req *dto.QueryIPLocationRequest) (*dto.QueryIPLocationResponse, error) {
-	return newQueryIPLocationLogic(ctx, s.deps).QueryIPLocation(req)
-}
-
 func (s *Service) RestartSystem(ctx context.Context) error {
 	return newRestartSystemLogic(ctx, s.deps).RestartSystem()
 }

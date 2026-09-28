@@ -5,15 +5,12 @@ import (
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
-	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 type VerifyEmailLogic struct {
@@ -38,32 +35,31 @@ func (l *VerifyEmailLogic) VerifyEmail(req *dto.VerifyEmailRequest) error {
 	domainList, restrict := l.deps.EmailDomains()
 	email, err := identifier.ValidateEmail(req.Email, domainList, restrict)
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid email: %v", err)
+		return xerr.Wrapf(err, xerr.InvalidParams, "invalid email")
 	}
-	cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Security, email)
+	cacheKey := verification.EmailCodeKey(auth.Security, email)
 	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+		return xerr.Wrapf(err, xerr.VerifyCodeError, "check verification code")
 	}
 
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
-		logger.Error("current user is not found in context")
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	method, err := l.deps.UserAuth.FindUserAuthMethodByOpenID(l.ctx, identifier.Email, email)
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindUserAuthMethodByOpenID error")
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find identity")
 	}
 	if method.UserId != u.Id {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "invalid access")
+		return fmt.Errorf("the email belongs to another account: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+		return xerr.Wrapf(err, xerr.VerifyCodeError, "check verification code")
 	}
 	method.Verified = true
 	err = l.deps.UserAuth.UpdateUserAuthMethods(l.ctx, method)
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "UpdateUserAuthMethods error")
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update identity")
 	}
 	return nil
 }

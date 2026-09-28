@@ -2,35 +2,30 @@ package order
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	stdErrors "errors"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/sse"
 	"github.com/perfect-panel/server/internal/module/billing"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/httpx"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 )
 
-const v2SSEMaxConnectionsPerTicket = 3
-
-// EventStreamDeps contains only the infrastructure required by the V2 SSE
-// endpoint. Other order handlers depend on billing.Service directly.
+// EventStreamDeps contains the dependencies of the V2 SSE endpoint. The
+// stream use case lives behind the billing facade; Redis and Store are
+// deprecated and ignored, kept so existing route wiring compiles.
 type EventStreamDeps struct {
 	Billing billing.Service
-	Redis   *redis.Client
-	Store   Store
+	// Deprecated: the billing module owns the stream's Redis wake-ups.
+	Redis *redis.Client
+	// Deprecated: the billing module reads the order events itself.
+	Store Store
 }
 
 // V2CreateAndCheckoutHandler combines order creation and checkout initiation.
@@ -141,10 +136,9 @@ func V2OrderSessionHandler(service billing.Service) app.HandlerFunc {
 	}
 }
 
-// V2OrderEventsHandler serves a replayable SSE stream. The event table is the
-// source of truth; Redis is only used to wake the handler quickly after an
-// outbox publication. A periodic database catch-up keeps streams correct if
-// Redis or a subscription is briefly unavailable.
+// V2OrderEventsHandler serves a replayable SSE stream. The billing module
+// authorizes the ticket, replays the durable events after the cursor and
+// forwards live ones; the handler only adapts the stream to SSE.
 //
 // @Summary Stream V2 order events
 // @Tags user
@@ -157,94 +151,51 @@ func V2OrderSessionHandler(service billing.Service) app.HandlerFunc {
 // @Router /v2/public/orders/{orderNo}/events [get]
 func V2OrderEventsHandler(deps EventStreamDeps) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
-		orderNo := ctx.Param("orderNo")
-		ticket := ctx.Query("ticket")
-		snapshot, expiresAt, err := deps.Billing.V2AuthorizeEventStream(c, orderNo, ticket)
-		if err != nil {
-			httpx.HttpResult(ctx, nil, err)
+		sink := &sseSink{ctx: ctx}
+		defer sink.close()
+		err := deps.Billing.V2StreamOrderEvents(c, billing.V2EventStreamRequest{
+			OrderNo: ctx.Param("orderNo"),
+			Ticket:  ctx.Query("ticket"),
+			AfterID: requestedEventID(ctx),
+		}, sink)
+		if err == nil || sink.writer != nil {
 			return
 		}
-		release, allowed := acquireSSEConnection(c, deps.Redis, ticket, time.Until(expiresAt))
-		if !allowed {
+		if stdErrors.Is(err, billing.ErrTooManyEventStreams) {
 			ctx.JSON(http.StatusTooManyRequests, httpx.Error(xerr.TooManyRequests, "too many concurrent SSE connections"))
 			return
 		}
-		defer release()
+		httpx.HttpResult(ctx, nil, err)
+	}
+}
 
-		ctx.Header("X-Accel-Buffering", "no")
-		ctx.Header("Cache-Control", "no-cache")
-		writer := sse.NewWriter(ctx)
-		defer func() { _ = writer.Close() }()
+// sseSink starts the SSE response on the first event, so a refused stream
+// can still be answered with a JSON error.
+type sseSink struct {
+	ctx    *app.RequestContext
+	writer *sse.Writer
+}
 
-		// Subscribe before querying the event table. Query and broadcast can
-		// overlap, but the monotonically increasing event id makes that safe.
-		pubsub, messages := subscribeOrderEvents(c, deps.Redis, orderNo)
-		if pubsub != nil {
-			defer func() { _ = pubsub.Close() }()
-		}
+func (s *sseSink) start() *sse.Writer {
+	if s.writer == nil {
+		s.ctx.Header("X-Accel-Buffering", "no")
+		s.ctx.Header("Cache-Control", "no-cache")
+		s.writer = sse.NewWriter(s.ctx)
+	}
+	return s.writer
+}
 
-		if err := writeSSESnapshot(writer, snapshot); err != nil {
-			return
-		}
-		afterID := requestedEventID(ctx)
-		if afterID > 0 {
-			earliestID, err := deps.Store.OrderEvent().EarliestID(c, orderNo)
-			if err != nil {
-				logger.WithContext(c).Errorw("[V2OrderEvents] inspect replay cursor failed", logger.Field("error", err.Error()), logger.Field("order_no", orderNo))
-			} else if earliestID > afterID {
-				if err := writeSSEReset(writer, snapshot); err != nil {
-					return
-				}
-				afterID = earliestID - 1
-			}
-		}
-		if err := replayOrderEvents(c, writer, deps.Store, orderNo, &afterID); err != nil {
-			logger.WithContext(c).Errorw("[V2OrderEvents] initial replay failed", logger.Field("error", err.Error()), logger.Field("order_no", orderNo))
-		}
+func (s *sseSink) Event(id, name string, data []byte) error {
+	return s.start().WriteEvent(id, name, data)
+}
 
-		heartbeat := time.NewTicker(20 * time.Second)
-		defer heartbeat.Stop()
-		catchUp := time.NewTicker(5 * time.Second)
-		defer catchUp.Stop()
-		resubscribe := time.NewTicker(5 * time.Second)
-		defer resubscribe.Stop()
-		expiration := time.NewTimer(time.Until(expiresAt))
-		defer expiration.Stop()
+func (s *sseSink) KeepAlive() error {
+	return s.start().WriteKeepAlive()
+}
 
-		for {
-			select {
-			case <-c.Done():
-				return
-			case <-expiration.C:
-				data, _ := json.Marshal(map[string]string{"reason": "ticket_expired"})
-				_ = writer.WriteEvent("", "stream.expiring", data)
-				return
-			case _, ok := <-messages:
-				if !ok {
-					messages = nil
-					if pubsub != nil {
-						_ = pubsub.Close()
-						pubsub = nil
-					}
-					continue
-				}
-				if err := replayOrderEvents(c, writer, deps.Store, orderNo, &afterID); err != nil {
-					return
-				}
-			case <-catchUp.C:
-				if err := replayOrderEvents(c, writer, deps.Store, orderNo, &afterID); err != nil {
-					return
-				}
-			case <-heartbeat.C:
-				if err := writer.WriteKeepAlive(); err != nil {
-					return
-				}
-			case <-resubscribe.C:
-				if messages == nil {
-					pubsub, messages = subscribeOrderEvents(c, deps.Redis, orderNo)
-				}
-			}
-		}
+func (s *sseSink) close() {
+	if s.writer != nil {
+		_ = s.writer.Close()
 	}
 }
 
@@ -272,87 +223,10 @@ func requestedEventID(ctx *app.RequestContext) int64 {
 	return id
 }
 
-func writeSSESnapshot(writer *sse.Writer, snapshot dto.V2OrderSnapshot) error {
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return err
-	}
-	return writer.WriteEvent("", "order.snapshot", data)
-}
-
-func writeSSEReset(writer *sse.Writer, snapshot dto.V2OrderSnapshot) error {
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return err
-	}
-	return writer.WriteEvent("", "order.reset", data)
-}
-
-func replayOrderEvents(ctx context.Context, writer *sse.Writer, store Store, orderNo string, afterID *int64) error {
-	for {
-		events, err := store.OrderEvent().ListAfter(ctx, orderNo, *afterID, 500)
-		if err != nil {
-			return err
-		}
-		for _, event := range events {
-			if event.ID <= *afterID {
-				continue
-			}
-			if err := writer.WriteEvent(strconv.FormatInt(event.ID, 10), event.EventType, []byte(event.Payload)); err != nil {
-				return err
-			}
-			*afterID = event.ID
-		}
-		if len(events) < 500 {
-			return nil
-		}
-	}
-}
-
-func subscribeOrderEvents(ctx context.Context, client *redis.Client, orderNo string) (*redis.PubSub, <-chan *redis.Message) {
-	if client == nil {
-		return nil, nil
-	}
-	pubsub := client.Subscribe(ctx, order.EventChannel(orderNo))
-	confirmCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	if _, err := pubsub.Receive(confirmCtx); err != nil {
-		_ = pubsub.Close()
-		return nil, nil
-	}
-	return pubsub, pubsub.Channel()
-}
-
-func acquireSSEConnection(ctx context.Context, client *redis.Client, ticket string, ttl time.Duration) (func(), bool) {
-	if client == nil {
-		return func() {}, true
-	}
-	digest := sha256.Sum256([]byte(ticket))
-	key := "order:sse:connections:" + hex.EncodeToString(digest[:])
-	count, err := client.Incr(ctx, key).Result()
-	if err != nil {
-		// The event table can still sustain an SSE connection during a Redis
-		// outage. The expiry guard is a best-effort abuse control, not a reason
-		// to hide a paid order from its owner.
-		return func() {}, true
-	}
-	if count == 1 {
-		if ttl < time.Minute {
-			ttl = time.Minute
-		}
-		_ = client.Expire(ctx, key, ttl).Err()
-	}
-	if count > v2SSEMaxConnectionsPerTicket {
-		_, _ = client.Decr(ctx, key).Result()
-		return func() {}, false
-	}
-	return func() {
-		_, _ = client.Decr(context.Background(), key).Result()
-	}, true
-}
-
-// Store is the persistence capability required by this package. It excludes
-// unrelated repositories and application-wide transactions.
+// Store is the persistence the SSE endpoint used before the stream moved
+// behind the billing facade.
+//
+// Deprecated: nothing reads it any more.
 type Store interface {
 	OrderEvent() repository.OrderEventRepo
 }

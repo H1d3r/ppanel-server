@@ -1,9 +1,14 @@
 package lifecycle
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,6 +122,107 @@ func TestStopRetainsOnceDoPanicSemantics(t *testing.T) {
 
 func (s mockedStarter) Start() {
 	s.fn()
+}
+
+// failingStopService logs the error its shutdown ran into, the way the HTTP
+// server logs a failed graceful shutdown.
+type failingStopService struct{ panics bool }
+
+func (failingStopService) Start() {}
+
+func (s failingStopService) Stop() {
+	logger.Errorf("server shutdown error: %s", "context deadline exceeded")
+	if s.panics {
+		panic("stop failed")
+	}
+}
+
+// bufferedWriter holds entries until it is closed, like the file output,
+// whose entries wait in a channel for its writer goroutine.
+type bufferedWriter struct {
+	mu               sync.Mutex
+	pending, flushed []string
+	closed           bool
+}
+
+func (w *bufferedWriter) add(v any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pending = append(w.pending, fmt.Sprint(v))
+}
+
+func (w *bufferedWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.flushed = append(w.flushed, w.pending...)
+	w.pending = nil
+	w.closed = true
+	return nil
+}
+
+func (w *bufferedWriter) Alert(v any)                       { w.add(v) }
+func (w *bufferedWriter) Debug(v any, _ ...logger.LogField) { w.add(v) }
+func (w *bufferedWriter) Error(v any, _ ...logger.LogField) { w.add(v) }
+func (w *bufferedWriter) Info(v any, _ ...logger.LogField)  { w.add(v) }
+func (w *bufferedWriter) Severe(v any)                      { w.add(v) }
+func (w *bufferedWriter) Slow(v any, _ ...logger.LogField)  { w.add(v) }
+func (w *bufferedWriter) Stack(v any)                       { w.add(v) }
+func (w *bufferedWriter) Stat(v any, _ ...logger.LogField)  { w.add(v) }
+
+// Stop closes the log output last, so the errors the services log while
+// stopping are flushed before the process exits — also when a service panics
+// while stopping.
+func TestStopClosesLogOutputLast(t *testing.T) {
+	for _, panics := range []bool{false, true} {
+		previous := logger.Reset()
+		writer := &bufferedWriter{}
+		logger.SetWriter(writer)
+
+		group := NewServiceGroup()
+		group.Add(failingStopService{panics: panics})
+		func() {
+			defer func() { _ = recover() }()
+			group.Stop()
+		}()
+
+		if w := logger.Reset(); w != nil {
+			t.Fatalf("panics=%v: the log output is still open after Stop", panics)
+		}
+		if previous != nil {
+			logger.SetWriter(previous)
+		}
+		if !writer.closed || len(writer.pending) != 0 || len(writer.flushed) != 1 || !strings.Contains(writer.flushed[0], "context deadline exceeded") {
+			t.Fatalf("panics=%v: writer = %+v, want the shutdown error flushed by the close", panics, writer)
+		}
+	}
+}
+
+// End to end with the file output: the shutdown error is in error.log once
+// Stop returns.
+func TestStopFlushesTheFileOutput(t *testing.T) {
+	dir := t.TempDir()
+	previous := logger.Reset()
+	t.Cleanup(func() {
+		logger.Reset()
+		if previous != nil {
+			logger.SetWriter(previous)
+		}
+	})
+	if err := logger.SetUp(logger.LogConf{Mode: "file", Path: dir}); err != nil {
+		t.Fatalf("SetUp: %v", err)
+	}
+
+	group := NewServiceGroup()
+	group.Add(failingStopService{})
+	group.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, "error.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "context deadline exceeded") {
+		t.Fatalf("error.log = %q, want the shutdown error", data)
+	}
 }
 
 type mockedService struct {

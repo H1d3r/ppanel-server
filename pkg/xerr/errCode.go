@@ -98,6 +98,30 @@ const (
 	VerifyCodeError uint32 = 70001
 )
 
+// Identity band: accounts, sign-in, OAuth and verification.
+const (
+	// OAuthStateInvalid: the callback's state is unknown, used or expired.
+	OAuthStateInvalid uint32 = 110001
+	// OAuthProviderError: the provider rejected the sign-in or could not be reached.
+	OAuthProviderError uint32 = 110002
+	// OAuthCallbackInvalid: the callback payload is malformed or its signature does not verify.
+	OAuthCallbackInvalid uint32 = 110003
+	// OAuthCallbackExpired: the signed callback is older than its validity window.
+	OAuthCallbackExpired uint32 = 110004
+	// OAuthCallbackReplayed: the signed callback has already been redeemed.
+	OAuthCallbackReplayed uint32 = 110005
+	// OAuthProviderMisconfigured: the stored provider configuration is unusable.
+	OAuthProviderMisconfigured uint32 = 110006
+	// TelegramBotUnavailable: no Telegram bot is configured to bind accounts with.
+	TelegramBotUnavailable uint32 = 110007
+	// DemoModeRestricted: the operation is not allowed on the demo instance.
+	DemoModeRestricted uint32 = 110008
+	// SenderTestFailed: the test message of a sender platform could not be sent.
+	SenderTestFailed uint32 = 110009
+	// EmailIdentityAmbiguous: an email address matches more than one binding.
+	EmailIdentityAmbiguous uint32 = 110010
+)
+
 // equipment error
 
 const (
@@ -143,4 +167,37 @@ const (
 	OrderStatusError      uint32 = 61003
 	InsufficientOfPeriod  uint32 = 61004
 	ExistAvailableTraffic uint32 = 61005
+)
+
+// Billing band (BandBilling): orders, payments, coupons and the wallet. The
+// messages keep the identifiers these failures carried before they had
+// codes, so clients matching the message keep working.
+const (
+	PaymentNotifyURLNotConfigured uint32 = 120001
+	UnsupportedPaymentPlatform    uint32 = 120002
+	InvalidPaymentConfig          uint32 = 120003
+	PaymentPlatformImmutable      uint32 = 120004
+	PaymentMethodHasPendingOrders uint32 = 120005
+	PaymentMethodInternal         uint32 = 120006
+	InvalidPaymentFee             uint32 = 120007
+	PaymentStatusUnconfirmed      uint32 = 120008
+	InvalidInitialOrderStatus     uint32 = 120009
+	InvalidOrderTransition        uint32 = 120010
+	TradeNoRequired               uint32 = 120011
+	InvalidOrderCloseRequest      uint32 = 120012
+	CouponUsedCountImmutable      uint32 = 120013
+	InvalidCoupon                 uint32 = 120014
+	InvalidCouponDiscount         uint32 = 120015
+	InvalidCouponType             uint32 = 120016
+	WithdrawalAlreadyReviewed     uint32 = 120017
+)
+
+// Subscription band (BandSubscription): plans, user subscriptions and quota.
+const (
+	// SubscriptionStatusChanged: the subscription is no longer in the status
+	// the request was made against.
+	SubscriptionStatusChanged uint32 = 130001
+	// SubscriptionStatusNotToggleable: only an active or a stopped
+	// subscription can be stopped or resumed.
+	SubscriptionStatusNotToggleable uint32 = 130002
 )

@@ -9,7 +9,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -17,12 +16,17 @@ import (
 var errGuestOrderBind = errors.New("order binding failed")
 
 type workflowOrders struct {
-	repository.OrderRepo
 	bindFails bool
 	boundUser int64
 }
 
-func (r *workflowOrders) Update(_ context.Context, o *order.Order, _ ...*gorm.DB) error {
+var _ WorkflowOrders = (*workflowOrders)(nil)
+
+func (r *workflowOrders) FindOneByOrderNo(context.Context, string) (*order.Order, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (r *workflowOrders) Update(_ context.Context, o *order.Order) error {
 	if r.bindFails {
 		return errGuestOrderBind
 	}

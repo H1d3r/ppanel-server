@@ -1,13 +1,14 @@
-package auth
+package authn
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -37,10 +38,10 @@ func ensureLoginAllowed(ctx context.Context, client *redis.Client, userID int64)
 		return nil
 	}
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "read sign-in attempts: %v", err)
+		return xerr.Wrapf(err, xerr.ERROR, "read sign-in attempts")
 	}
 	if failures >= maxLoginFailures {
-		return errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "too many failed sign-in attempts, try again later")
+		return fmt.Errorf("too many failed sign-in attempts, try again later: %w", xerr.NewErrCode(xerr.TooManyRequests))
 	}
 	return nil
 }

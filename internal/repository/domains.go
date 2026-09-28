@@ -4,7 +4,6 @@ import (
 	"context"
 
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
-	"gorm.io/gorm"
 )
 
 // Domain store views (ADR-001 step 2). A scoped transaction hands the closure
@@ -30,8 +29,8 @@ type WalletRepo interface {
 	FindWalletsByUserIds(ctx context.Context, userIds []int64) (map[int64]*walletEntity.Wallet, error)
 	// UpdateBalanceFields persists the balance and gift columns;
 	// UpdateCommission persists the commission column.
-	UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error
-	UpdateCommission(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error
+	UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet) error
+	UpdateCommission(ctx context.Context, data *walletEntity.Wallet) error
 }
 
 // BillingStore is the billing domain's transactional surface: orders,

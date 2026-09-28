@@ -1,7 +1,10 @@
 package lifecycle
 
 import (
+	"log"
 	"sync"
+
+	"github.com/perfect-panel/server/pkg/logger"
 )
 
 type (
@@ -41,8 +44,8 @@ func (sg *Group) Add(service Service) {
 }
 
 // Start starts the ServiceGroup.
-// There should not be any logic code after calling this method, because this method is a blocking one.
-// Also, quitting this method will close the logx output.
+// There should not be any logic code after calling this method, because this
+// method is a blocking one: it returns once every service's Start returned.
 func (sg *Group) Start() {
 	AddShutdownListener(func() {
 		sg.Stop()
@@ -51,9 +54,24 @@ func (sg *Group) Start() {
 	sg.doStart()
 }
 
-// Stop stops the ServiceGroup.
+// Stop stops the services in the reverse order they were added, then closes
+// the log output as the final step. The file output buffers entries, so the
+// lines written while stopping — typically the shutdown errors — only reach
+// the files once the output is closed. The output closes even when a service
+// panics while stopping.
 func (sg *Group) Stop() {
-	sg.stopOnce.Do(sg.doStop)
+	sg.stopOnce.Do(func() {
+		defer closeLogs()
+		sg.doStop()
+	})
+}
+
+// closeLogs flushes and closes the log output. Anything logged afterwards
+// goes to the console.
+func closeLogs() {
+	if err := logger.Close(); err != nil {
+		log.Printf("close log output: %v", err)
+	}
 }
 
 func (sg *Group) doStart() {

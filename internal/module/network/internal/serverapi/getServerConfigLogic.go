@@ -77,7 +77,7 @@ func (l *GetServerConfigLogic) GetServerConfig(req *dto.GetServerConfigRequest) 
 	if err != nil {
 		return nil, err
 	}
-	var cfg map[string]interface{}
+	var cfg map[string]any
 	matched := false
 	for _, protocol := range protocols {
 		if protocol.Enable && protocol.Type == protocolRequest {
@@ -121,8 +121,10 @@ func (l *GetServerConfigLogic) GetServerConfig(req *dto.GetServerConfigRequest) 
 	return resp, nil
 }
 
-func (l *GetServerConfigLogic) compatible(config node.Protocol) map[string]interface{} {
-	var result interface{}
+// compatible renders a protocol in the legacy server-config shape, or nil for
+// a protocol that shape cannot express.
+func (l *GetServerConfigLogic) compatible(config node.Protocol) map[string]any {
+	var result any
 	switch config.Type {
 	case ShadowSocks:
 		result = ShadowsocksNode{
@@ -132,130 +134,82 @@ func (l *GetServerConfigLogic) compatible(config node.Protocol) map[string]inter
 		}
 	case Vless:
 		result = VlessNode{
-			Port:    config.Port,
-			Flow:    config.Flow,
-			Network: config.Transport,
-			TransportConfig: &TransportConfig{
-				Path:                 config.Path,
-				Host:                 config.Host,
-				ServiceName:          config.ServiceName,
-				DisableSNI:           config.DisableSNI,
-				ReduceRtt:            config.ReduceRtt,
-				UDPRelayMode:         config.UDPRelayMode,
-				CongestionController: config.CongestionController,
-			},
-			Security: config.Security,
-			SecurityConfig: &SecurityConfig{
-				SNI:                  config.SNI,
-				AllowInsecure:        &config.AllowInsecure,
-				Fingerprint:          config.Fingerprint,
-				RealityServerAddress: config.RealityServerAddr,
-				RealityServerPort:    config.RealityServerPort,
-				RealityPrivateKey:    config.RealityPrivateKey,
-				RealityPublicKey:     config.RealityPublicKey,
-				RealityShortId:       config.RealityShortId,
-			},
+			Port:            config.Port,
+			Flow:            config.Flow,
+			Network:         config.Transport,
+			TransportConfig: legacyTransportConfig(config),
+			Security:        config.Security,
+			SecurityConfig:  legacySecurityConfig(config),
 		}
 	case Vmess:
 		result = VmessNode{
-			Port:    config.Port,
-			Network: config.Transport,
-			TransportConfig: &TransportConfig{
-				Path:                 config.Path,
-				Host:                 config.Host,
-				ServiceName:          config.ServiceName,
-				DisableSNI:           config.DisableSNI,
-				ReduceRtt:            config.ReduceRtt,
-				UDPRelayMode:         config.UDPRelayMode,
-				CongestionController: config.CongestionController,
-			},
-			Security: config.Security,
-			SecurityConfig: &SecurityConfig{
-				SNI:                  config.SNI,
-				AllowInsecure:        &config.AllowInsecure,
-				Fingerprint:          config.Fingerprint,
-				RealityServerAddress: config.RealityServerAddr,
-				RealityServerPort:    config.RealityServerPort,
-				RealityPrivateKey:    config.RealityPrivateKey,
-				RealityPublicKey:     config.RealityPublicKey,
-				RealityShortId:       config.RealityShortId,
-			},
+			Port:            config.Port,
+			Network:         config.Transport,
+			TransportConfig: legacyTransportConfig(config),
+			Security:        config.Security,
+			SecurityConfig:  legacySecurityConfig(config),
 		}
 	case Trojan:
 		result = TrojanNode{
-			Port:    config.Port,
-			Network: config.Transport,
-			TransportConfig: &TransportConfig{
-				Path:                 config.Path,
-				Host:                 config.Host,
-				ServiceName:          config.ServiceName,
-				DisableSNI:           config.DisableSNI,
-				ReduceRtt:            config.ReduceRtt,
-				UDPRelayMode:         config.UDPRelayMode,
-				CongestionController: config.CongestionController,
-			},
-			Security: config.Security,
-			SecurityConfig: &SecurityConfig{
-				SNI:                  config.SNI,
-				AllowInsecure:        &config.AllowInsecure,
-				Fingerprint:          config.Fingerprint,
-				RealityServerAddress: config.RealityServerAddr,
-				RealityServerPort:    config.RealityServerPort,
-				RealityPrivateKey:    config.RealityPrivateKey,
-				RealityPublicKey:     config.RealityPublicKey,
-				RealityShortId:       config.RealityShortId,
-			},
+			Port:            config.Port,
+			Network:         config.Transport,
+			TransportConfig: legacyTransportConfig(config),
+			Security:        config.Security,
+			SecurityConfig:  legacySecurityConfig(config),
 		}
 	case AnyTLS:
+		security := legacySecurityConfig(config)
+		security.PaddingScheme = config.PaddingScheme
 		result = AnyTLSNode{
-			Port: config.Port,
-			SecurityConfig: &SecurityConfig{
-				SNI:                  config.SNI,
-				AllowInsecure:        &config.AllowInsecure,
-				Fingerprint:          config.Fingerprint,
-				RealityServerAddress: config.RealityServerAddr,
-				RealityServerPort:    config.RealityServerPort,
-				RealityPrivateKey:    config.RealityPrivateKey,
-				RealityPublicKey:     config.RealityPublicKey,
-				RealityShortId:       config.RealityShortId,
-				PaddingScheme:        config.PaddingScheme,
-			},
+			Port:           config.Port,
+			SecurityConfig: security,
 		}
 	case Tuic:
 		result = TuicNode{
-			Port: config.Port,
-			SecurityConfig: &SecurityConfig{
-				SNI:                  config.SNI,
-				AllowInsecure:        &config.AllowInsecure,
-				Fingerprint:          config.Fingerprint,
-				RealityServerAddress: config.RealityServerAddr,
-				RealityServerPort:    config.RealityServerPort,
-				RealityPrivateKey:    config.RealityPrivateKey,
-				RealityPublicKey:     config.RealityPublicKey,
-				RealityShortId:       config.RealityShortId,
-			},
+			Port:           config.Port,
+			SecurityConfig: legacySecurityConfig(config),
 		}
 	case Hysteria:
 		result = Hysteria2Node{
-			Port:         config.Port,
-			HopPorts:     config.HopPorts,
-			HopInterval:  config.HopInterval,
-			ObfsPassword: config.ObfsPassword,
-			SecurityConfig: &SecurityConfig{
-				SNI:                  config.SNI,
-				AllowInsecure:        &config.AllowInsecure,
-				Fingerprint:          config.Fingerprint,
-				RealityServerAddress: config.RealityServerAddr,
-				RealityServerPort:    config.RealityServerPort,
-				RealityPrivateKey:    config.RealityPrivateKey,
-				RealityPublicKey:     config.RealityPublicKey,
-				RealityShortId:       config.RealityShortId,
-			},
+			Port:           config.Port,
+			HopPorts:       config.HopPorts,
+			HopInterval:    config.HopInterval,
+			ObfsPassword:   config.ObfsPassword,
+			SecurityConfig: legacySecurityConfig(config),
 		}
 
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	s, _ := json.Marshal(result)
 	_ = json.Unmarshal(s, &resp)
 	return resp
+}
+
+// legacySecurityConfig is the TLS/REALITY block every legacy protocol shape
+// shares. Only AnyTLS adds its padding scheme.
+func legacySecurityConfig(config node.Protocol) *SecurityConfig {
+	return &SecurityConfig{
+		SNI:                  config.SNI,
+		AllowInsecure:        &config.AllowInsecure,
+		Fingerprint:          config.Fingerprint,
+		RealityServerAddress: config.RealityServerAddr,
+		RealityServerPort:    config.RealityServerPort,
+		RealityPrivateKey:    config.RealityPrivateKey,
+		RealityPublicKey:     config.RealityPublicKey,
+		RealityShortId:       config.RealityShortId,
+	}
+}
+
+// legacyTransportConfig is the transport block of the legacy VLESS, VMess
+// and Trojan shapes.
+func legacyTransportConfig(config node.Protocol) *TransportConfig {
+	return &TransportConfig{
+		Path:                 config.Path,
+		Host:                 config.Host,
+		ServiceName:          config.ServiceName,
+		DisableSNI:           config.DisableSNI,
+		ReduceRtt:            config.ReduceRtt,
+		UDPRelayMode:         config.UDPRelayMode,
+		CongestionController: config.CongestionController,
+	}
 }

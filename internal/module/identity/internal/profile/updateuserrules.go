@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -28,7 +27,7 @@ func newUpdateUserRulesLogic(ctx context.Context, deps Deps) *UpdateUserRulesLog
 }
 
 func (l *UpdateUserRulesLogic) UpdateUserRules(req *dto.UpdateUserRulesRequest) error {
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
 		logger.Error("current user is not found in context")
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
@@ -36,13 +35,11 @@ func (l *UpdateUserRulesLogic) UpdateUserRules(req *dto.UpdateUserRulesRequest) 
 	if len(req.Rules) > 0 {
 		bytes, err := json.Marshal(req.Rules)
 		if err != nil {
-			l.Logger.Errorf("UpdateUserRulesLogic json marshal rules error: %v", err)
-			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "json marshal rules failed: %v", err.Error())
+			return xerr.Wrapf(err, xerr.ERROR, "marshal rules")
 		}
 		err = l.deps.Users.UpdateColumns(l.ctx, u.Id, map[string]interface{}{"rules": string(bytes)})
 		if err != nil {
-			l.Logger.Errorf("UpdateUserRulesLogic UpdateUserRules error: %v", err)
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update user rules failed: %v", err.Error())
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update rules of user %d", u.Id)
 		}
 	}
 	return nil

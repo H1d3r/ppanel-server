@@ -1,179 +1,223 @@
 package selfsub
 
 import (
-	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
-	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/billing/entity/wallet"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/logger/logtest"
-	"gorm.io/gorm"
+	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 )
-
-type refundWallets struct {
-	repository.WalletRepo
-	wallets map[int64]*walletEntity.Wallet
-}
-
-func (r *refundWallets) FindOneForUpdate(_ context.Context, userID int64) (*walletEntity.Wallet, error) {
-	w := *r.wallets[userID]
-	return &w, nil
-}
-
-func (r *refundWallets) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
-	r.wallets[data.UserId].Balance = data.Balance
-	r.wallets[data.UserId].GiftAmount = data.GiftAmount
-	return nil
-}
-
-func (r *refundWallets) UpdateCommission(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
-	r.wallets[data.UserId].Commission = data.Commission
-	return nil
-}
-
-type refundOrders struct {
-	repository.OrderRepo
-	details *order.Details
-}
-
-func (r *refundOrders) FindOneDetails(_ context.Context, _ int64) (*order.Details, error) {
-	return r.details, nil
-}
-
-type refundLogs struct {
-	repository.LogRepo
-	entries []*log.SystemLog
-}
-
-func (r *refundLogs) Insert(_ context.Context, data *log.SystemLog) error {
-	r.entries = append(r.entries, data)
-	return nil
-}
-
-type refundStore struct {
-	repository.Store
-	wallets *refundWallets
-	orders  *refundOrders
-	logs    *refundLogs
-	inbox   *fakeInboxRepo
-}
-
-func (s *refundStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
-	return fn(s)
-}
-func (s *refundStore) Wallet() repository.WalletRepo { return s.wallets }
-func (s *refundStore) Order() repository.OrderRepo   { return s.orders }
-func (s *refundStore) Log() repository.LogRepo       { return s.logs }
-func (s *refundStore) Inbox() repository.InboxRepo   { return s.inbox }
-
-type refundUsers struct {
-	repository.UserRepo
-	users map[int64]*usermodel.User
-}
-
-func (r *refundUsers) FindOne(_ context.Context, id int64) (*usermodel.User, error) {
-	return r.users[id], nil
-}
 
 const (
 	refundBuyer    int64 = 7
 	refundReferrer int64 = 3
+	refundPlan     int64 = 9
+	refundOrder    int64 = 1
 )
 
-func newRefundLogic(details *order.Details, cancellation string, refererID int64) (*UnsubscribeLogic, *refundStore) {
-	store := &refundStore{
-		wallets: &refundWallets{wallets: map[int64]*walletEntity.Wallet{
-			refundBuyer:    {UserId: refundBuyer},
-			refundReferrer: {UserId: refundReferrer, Commission: 5000},
-		}},
-		orders: &refundOrders{details: details},
-		logs:   &refundLogs{},
-		inbox:  newFakeInboxRepo(),
-	}
-	_ = store.inbox.Insert(context.Background(), unsubscribeCancelConsumer, "9", cancellation)
-	logic := newUnsubscribeLogic(context.Background(), Deps{
-		Store: store,
-		Inbox: store.inbox,
-		Users: &refundUsers{users: map[int64]*usermodel.User{
-			refundBuyer: {Id: refundBuyer, RefererId: refererID},
-		}},
+// paidSubscription is a balance-paid subscription (3000 from the balance,
+// 1000 from the gift amount) whose refund is exactly 3000: it starts later,
+// so the refundable share is the traffic left, three quarters. The order
+// earned its buyer's referrer 800 commission.
+func (f *fixture) paidSubscription(t *testing.T) *usersub.Subscribe {
+	t.Helper()
+	allow := true
+	f.Plan(t, subscribe.Subscribe{Id: refundPlan, UnitTime: "Month", AllowDeduction: &allow})
+	start := time.Now().Add(time.Hour)
+	sub := f.Subscription(t, usersub.Subscribe{
+		UserId: refundBuyer, OrderId: refundOrder, SubscribeId: refundPlan, StartTime: start, ExpireTime: start.AddDate(0, 1, 0),
+		Traffic: 1000, Upload: 250, Status: usersub.SubscribeStatusActive,
 	})
-	return logic, store
+	f.orders[refundOrder] = &order.Details{Id: refundOrder, UserId: refundBuyer, OrderNo: "A", Method: "balance", Amount: 3000, GiftAmount: 1000, Commission: 800}
+	f.buyers[refundBuyer] = &user.User{Id: refundBuyer, RefererId: refundReferrer}
+	f.billing.wallets[refundBuyer] = wallet.Wallet{Balance: 500}
+	f.billing.wallets[refundReferrer] = wallet.Wallet{Commission: 5000}
+	return sub
+}
+
+// cancelledSubscription is a subscription whose cancellation committed with
+// the given marker while its refund never did, paid by card through order
+// details.
+func (f *fixture) cancelledSubscription(t *testing.T, details *order.Details, marker string, referrer int64) *usersub.Subscribe {
+	t.Helper()
+	f.Plan(t, subscribe.Subscribe{Id: refundPlan})
+	sub := f.Subscription(t, usersub.Subscribe{UserId: refundBuyer, OrderId: refundOrder, SubscribeId: refundPlan, Status: usersub.SubscribeStatusDeducted})
+	details.Id, details.UserId, details.OrderNo, details.Method = refundOrder, refundBuyer, "A", "stripe"
+	f.orders[refundOrder] = details
+	f.buyers[refundBuyer] = &user.User{Id: refundBuyer, RefererId: referrer}
+	f.billing.wallets[refundReferrer] = wallet.Wallet{Commission: 5000}
+	f.cancelled(t, sub.Id, marker)
+	return sub
+}
+
+func logContent[T interface{ Unmarshal([]byte) error }](t *testing.T, f *fixture, typ log.Type, content T) []log.SystemLog {
+	t.Helper()
+	rows := f.Logs(t, typ)
+	if len(rows) == 1 {
+		if err := content.Unmarshal([]byte(rows[0].Content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return rows
+}
+
+// The quote is what the cancellation refunds: the gift share goes back to the
+// gift amount, the rest to the balance, each movement logged, and the
+// referrer loses the commission share the refund takes back. A repeated
+// request pays nothing twice.
+func TestUnsubscribeRefundsTheUnusedShareOnce(t *testing.T) {
+	f := newFixture(t)
+	sub := f.paidSubscription(t)
+
+	quote, err := f.svc.PreUnsubscribe(as(refundBuyer), &dto.PreUnsubscribeRequest{Id: sub.Id})
+	if err != nil || quote.DeductionAmount != 3000 {
+		t.Fatalf("PreUnsubscribe = %+v, %v; want 3000", quote, err)
+	}
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.Load(t, sub.Id).Status; got != usersub.SubscribeStatusDeducted {
+		t.Fatalf("status = %d, want Deducted", got)
+	}
+	if got := f.billing.wallet(refundBuyer); got.Balance != 2500 || got.GiftAmount != 1000 {
+		t.Fatalf("buyer wallet = %+v, want 2000 back to the balance and 1000 to the gift amount", got)
+	}
+	// Three quarters of the 800 commission are taken back.
+	if got := f.billing.wallet(refundReferrer); got.Commission != 4400 {
+		t.Fatalf("referrer commission = %d, want 4400", got.Commission)
+	}
+	var balance log.Balance
+	if rows := logContent(t, f, log.TypeBalance, &balance); len(rows) != 1 || rows[0].ObjectID != refundBuyer ||
+		balance.Type != log.BalanceTypeRefund || balance.Amount != 2000 || balance.Balance != 2500 || balance.OrderNo != "A" {
+		t.Fatalf("balance log = %+v %+v", rows, balance)
+	}
+	var gift log.Gift
+	if rows := logContent(t, f, log.TypeGift, &gift); len(rows) != 1 || gift.Type != log.GiftTypeIncrease || gift.Amount != 1000 || gift.Balance != 1000 || gift.SubscribeId != sub.Id {
+		t.Fatalf("gift log = %+v %+v", rows, gift)
+	}
+	var commission log.Commission
+	if rows := logContent(t, f, log.TypeCommission, &commission); len(rows) != 1 || rows[0].ObjectID != refundReferrer ||
+		commission.Type != log.CommissionTypeRefund || commission.Amount != -600 {
+		t.Fatalf("commission log = %+v %+v", rows, commission)
+	}
+
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); !errors.Is(err, errNotCancelable) {
+		t.Fatalf("repeated Unsubscribe = %v, want errNotCancelable", err)
+	}
+	if got := f.billing.wallet(refundBuyer); got.Balance != 2500 || got.GiftAmount != 1000 || len(f.Logs(t, log.TypeBalance)) != 1 {
+		t.Fatalf("the repeated request moved money: %+v", got)
+	}
+}
+
+// A refund that fails after the cancellation committed rolls back whole —
+// no money, no log, no marker — and the retry settles the amount the
+// cancellation recorded, once.
+func TestUnsubscribeResumesAFailedRefund(t *testing.T) {
+	f := newFixture(t)
+	sub := f.paidSubscription(t)
+	f.billing.failSaves = 1
+
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); !errors.Is(err, errWalletUnavailable) {
+		t.Fatalf("Unsubscribe = %v, want the wallet failure", err)
+	}
+	if got := f.Load(t, sub.Id).Status; got != usersub.SubscribeStatusDeducted {
+		t.Fatalf("status = %d, want the committed cancellation", got)
+	}
+	if result, ok := f.marker(t, unsubscribeCancelConsumer, sub.Id); !ok || result != "1|3000" {
+		t.Fatalf("cancellation marker = %q, %v", result, ok)
+	}
+	if _, ok := f.marker(t, unsubscribeRefundConsumer, sub.Id); ok {
+		t.Fatal("the failed refund left its marker")
+	}
+	if got := f.billing.wallet(refundBuyer); got.Balance != 500 || got.GiftAmount != 0 || len(f.Logs(t, log.TypeGift)) != 0 {
+		t.Fatalf("the failed refund left money or logs behind: %+v", got)
+	}
+
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); err != nil {
+		t.Fatalf("retry = %v", err)
+	}
+	if got := f.billing.wallet(refundBuyer); got.Balance != 2500 || got.GiftAmount != 1000 {
+		t.Fatalf("buyer wallet after the retry = %+v", got)
+	}
+	if got := f.billing.wallet(refundReferrer); got.Commission != 4400 {
+		t.Fatalf("referrer commission after the retry = %d", got.Commission)
+	}
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); !errors.Is(err, errNotCancelable) {
+		t.Fatalf("second retry = %v, want errNotCancelable", err)
+	}
 }
 
 // A refund takes back the commission its orders earned, in proportion, so a
-// buy-and-refund loop on recycled balance cannot farm commission.
+// buy-and-refund loop on recycled balance cannot farm commission. Paid
+// renewals count; a traffic reset is neither refunded nor part of the basis.
 func TestSettleRefundReversesCommissionInProportion(t *testing.T) {
-	logtest.Discard(t)
-	details := &order.Details{
-		Id: 1, UserId: refundBuyer, OrderNo: "A", Method: "stripe", Amount: 6000, Commission: 1200,
+	f := newFixture(t)
+	sub := f.cancelledSubscription(t, &order.Details{
+		Amount: 6000, Commission: 1200,
 		SubOrders: []*order.Order{
-			{Type: orderTypeRenewal, Status: 2, Amount: 4000, Commission: 800},
-			// A traffic reset is neither refunded nor part of the basis.
-			{Type: 3, Status: 2, Amount: 500, Commission: 0},
+			{Type: order.TypeRenewal, Status: order.StatusPaid, Amount: 4000, Commission: 800},
+			{Type: order.TypeResetTraffic, Status: order.StatusPaid, Amount: 500, Commission: 0},
 		},
-	}
-	logic, store := newRefundLogic(details, "1|5000", refundReferrer)
+	}, "1|5000", refundReferrer)
 
-	if err := logic.settleRefundOnce(refundBuyer, 9, "9"); err != nil {
-		t.Fatalf("settleRefundOnce() error = %v", err)
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); err != nil {
+		t.Fatal(err)
 	}
-
-	if got := store.wallets.wallets[refundBuyer].Balance; got != 5000 {
-		t.Fatalf("buyer balance = %d, want 5000", got)
+	if got := f.billing.wallet(refundBuyer); got.Balance != 5000 || got.GiftAmount != 0 {
+		t.Fatalf("buyer wallet = %+v, want 5000 back to the balance", got)
 	}
 	// Half of the 10000 basis was refunded, so half of the 2000 commission
 	// goes back.
-	if got := store.wallets.wallets[refundReferrer].Commission; got != 4000 {
-		t.Fatalf("referrer commission = %d, want 4000", got)
+	if got := f.billing.wallet(refundReferrer); got.Commission != 4000 {
+		t.Fatalf("referrer commission = %d, want 4000", got.Commission)
 	}
-	var reversal *log.Commission
-	for _, entry := range store.logs.entries {
-		if entry.Type == log.TypeCommission.Uint8() && entry.ObjectID == refundReferrer {
-			var c log.Commission
-			if err := c.Unmarshal([]byte(entry.Content)); err != nil {
-				t.Fatal(err)
-			}
-			reversal = &c
-		}
+	var commission log.Commission
+	if rows := logContent(t, f, log.TypeCommission, &commission); len(rows) != 1 || commission.Amount != -1000 || commission.Type != log.CommissionTypeRefund {
+		t.Fatalf("commission reversal log = %+v %+v, want a refund entry of -1000", rows, commission)
 	}
-	if reversal == nil || reversal.Type != log.CommissionTypeRefund || reversal.Amount != -1000 {
-		t.Fatalf("commission reversal log = %+v, want a refund entry of -1000", reversal)
+	if _, ok := f.marker(t, unsubscribeRefundConsumer, sub.Id); !ok {
+		t.Fatal("the settled refund left no marker")
 	}
 }
 
 // A cancellation recorded by the old formula could exceed what was paid; the
 // settlement caps it at the basis.
 func TestSettleRefundCapsRefundAtAmountPaid(t *testing.T) {
-	logtest.Discard(t)
-	details := &order.Details{Id: 1, UserId: refundBuyer, OrderNo: "A", Method: "stripe", Amount: 36500, Commission: 7300}
-	logic, store := newRefundLogic(details, "1|72900", refundReferrer)
+	f := newFixture(t)
+	sub := f.cancelledSubscription(t, &order.Details{Amount: 36500, Commission: 7300}, "1|72900", refundReferrer)
 
-	if err := logic.settleRefundOnce(refundBuyer, 9, "9"); err != nil {
-		t.Fatalf("settleRefundOnce() error = %v", err)
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); err != nil {
+		t.Fatal(err)
 	}
-
-	if got := store.wallets.wallets[refundBuyer].Balance; got != 36500 {
-		t.Fatalf("buyer balance = %d, want the 36500 paid", got)
+	if got := f.billing.wallet(refundBuyer); got.Balance != 36500 {
+		t.Fatalf("buyer balance = %d, want the 36500 paid", got.Balance)
 	}
-	if got := store.wallets.wallets[refundReferrer].Commission; got != 5000-7300 {
-		t.Fatalf("referrer commission = %d, want the whole 7300 reversed", got)
+	if got := f.billing.wallet(refundReferrer); got.Commission != 5000-7300 {
+		t.Fatalf("referrer commission = %d, want the whole 7300 reversed", got.Commission)
 	}
 }
 
 func TestSettleRefundWithoutReferrerKeepsCommissionsUntouched(t *testing.T) {
-	logtest.Discard(t)
-	details := &order.Details{Id: 1, UserId: refundBuyer, OrderNo: "A", Method: "stripe", Amount: 6000, Commission: 1200}
-	logic, store := newRefundLogic(details, "1|3000", 0)
+	f := newFixture(t)
+	sub := f.cancelledSubscription(t, &order.Details{Amount: 6000, Commission: 1200}, "1|3000", 0)
 
-	if err := logic.settleRefundOnce(refundBuyer, 9, "9"); err != nil {
-		t.Fatalf("settleRefundOnce() error = %v", err)
+	if err := f.svc.Unsubscribe(as(refundBuyer), &dto.UnsubscribeRequest{Id: sub.Id}); err != nil {
+		t.Fatal(err)
 	}
-
-	if got := store.wallets.wallets[refundReferrer].Commission; got != 5000 {
-		t.Fatalf("referrer commission = %d, want 5000", got)
+	if got := f.billing.wallet(refundBuyer); got.Balance != 3000 {
+		t.Fatalf("buyer balance = %d, want 3000", got.Balance)
+	}
+	if got := f.billing.wallet(refundReferrer); got.Commission != 5000 {
+		t.Fatalf("referrer commission = %d, want 5000", got.Commission)
+	}
+	if rows := f.Logs(t, log.TypeCommission); len(rows) != 0 {
+		t.Fatalf("commission logs = %+v, want none", rows)
 	}
 }

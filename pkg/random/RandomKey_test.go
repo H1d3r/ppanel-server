@@ -6,6 +6,45 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// EncodeBase62 generates user invite codes, which are stored and shared:
+// these values, taken from the implementation before its clean-up, must
+// never change. They include the quirks — the unpadded zero, the padding
+// that lets 916132831 and 56800235583 collide, and negative input.
+func TestEncodeBase62Golden(t *testing.T) {
+	for _, tt := range []struct {
+		id   int64
+		want string
+	}{
+		{0, "E"},
+		{1, "wT2ey7"},
+		{2, "wT2eyg"},
+		{61, "wT2eyy"},
+		{62, "T2ey7E"},
+		{63, "T2ey77"},
+		{3843, "T2eyyy"},
+		{3844, "2ey7EE"},
+		{238327, "2eyyyy"},
+		{238328, "ey7EEE"},
+		{14776335, "eyyyyy"},
+		{14776336, "y7EEEE"},
+		{916132831, "yyyyyy"},
+		{916132832, "7EEEEE"},
+		{1112275807, "75xyJN"},
+		{56800235583, "yyyyyy"},
+		{56800235584, "7EEEEEE"},
+		{1790000000042, "uunMhgV"},
+		{3521614606207, "yyyyyyy"},
+		{3521614606208, "7EEEEEEE"},
+		{9223372036854775807, "ky9SwEZ4SCW"},
+		{-1, "JwT2ey"},
+		{-62, "JwT2ey"},
+	} {
+		if got := EncodeBase62(tt.id); got != tt.want {
+			t.Errorf("EncodeBase62(%d) = %q, want %q", tt.id, got, tt.want)
+		}
+	}
+}
+
 func TestEncodeBase62(t *testing.T) {
 	start := 1112275807
 	length := 10000

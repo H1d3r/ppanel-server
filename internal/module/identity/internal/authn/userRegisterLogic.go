@@ -1,207 +1,114 @@
-package auth
+package authn
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strconv"
-	"time"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
-	"github.com/perfect-panel/server/internal/config"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
+	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
-	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
-type UserRegisterLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps UserRegisterDependencies
-}
-
-// NewUserRegisterLogic User register
-func NewUserRegisterLogic(ctx context.Context, deps UserRegisterDependencies) *UserRegisterLogic {
-	return &UserRegisterLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *UserRegisterLogic) UserRegister(req *dto.UserRegisterRequest) (resp *dto.LoginResponse, err error) {
-
-	canonicalEmail, err := identifier.ValidateEmail(req.Email, l.deps.Config.EmailDomainSuffixList, l.deps.Config.EmailEnableDomainSuffix)
+// UserRegister creates an account that signs in with an email address and
+// password, and signs it in.
+func (s *Service) UserRegister(ctx context.Context, req *dto.UserRegisterRequest) (resp *dto.LoginResponse, err error) {
+	cfg := s.deps.Config()
+	email, err := identifier.ValidateEmail(req.Email, cfg.EmailDomainSuffixList, cfg.EmailEnableDomainSuffix)
 	if err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid email: %v", err)
+		return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid email")
 	}
-	var referer *user.User
-	if err := l.deps.Policy.EnsureRegistrationOpen(l.ctx, identifier.Email); err != nil {
+	if err := s.policy.EnsureRegistrationOpen(ctx, identifier.Email); err != nil {
 		return nil, err
 	}
-	if err := l.deps.Policy.VerifyHuman(l.ctx, req.CfToken, req.IP); err != nil {
+	if err := s.policy.VerifyHuman(ctx, registerpolicy.Register, req.CfToken); err != nil {
 		return nil, err
 	}
-
-	if req.Invite == "" {
-		if l.deps.Config.InviteForced {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InviteCodeError), "invite code is required")
-		}
-	} else {
-		// Check if the invite code is valid
-		referer, err = l.deps.Store.User().FindOneByReferCode(l.ctx, req.Invite)
-		if err != nil {
-			l.Errorw("FindOneByReferCode Error", logger.Field("error", err))
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InviteCodeError), "invite code is invalid")
+	referer, err := s.resolveReferer(ctx, req.Invite)
+	if err != nil {
+		return nil, err
+	}
+	codeKey := verification.EmailCodeKey(auth.Register, email)
+	if cfg.EmailVerifyEnabled {
+		if err := verification.ValidateVerificationCode(ctx, s.deps.Redis, codeKey, req.Code, false); err != nil {
+			return nil, xerr.Wrapf(err, xerr.VerifyCodeError, "check registration code")
 		}
 	}
-
-	// if the email verification is enabled, the verification code is required
-	if l.deps.Config.EmailVerifyEnabled {
-		cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Register, canonicalEmail)
-		if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
-		}
-	}
-	// Check if the user exists
-	u, err := l.deps.Store.User().FindOneByEmail(l.ctx, canonicalEmail)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		l.Errorw("FindOneByEmail Error", logger.Field("error", err))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query user info failed: %v", err.Error())
-	} else if err == nil && !u.DeletedAt.Valid {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "user email exist: %v", req.Email)
-	} else if err == nil && u.DeletedAt.Valid {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserDisabled), "user email deleted: %v", req.Email)
+	existing, err := s.deps.Store.User().FindOneByEmail(ctx, email)
+	switch {
+	case err == nil && existing.DeletedAt.Valid:
+		return nil, fmt.Errorf("the email belongs to a deleted account: %w", xerr.NewErrCode(xerr.UserDisabled))
+	case err == nil:
+		return nil, fmt.Errorf("the email is registered: %w", xerr.NewErrCode(xerr.UserExist))
+	case !errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user by email")
 	}
 	// One inbox must not open many accounts (and trials): "a.b+x@gmail.com"
 	// reaches the mailbox of an existing "ab@gmail.com".
-	if _, err := l.deps.Store.UserAuth().FindEmailAlias(l.ctx, canonicalEmail); err == nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "email reaches the mailbox of an existing account: %v", req.Email)
+	if _, err := s.deps.Store.UserAuth().FindEmailAlias(ctx, email); err == nil {
+		return nil, fmt.Errorf("the email reaches the mailbox of an existing account: %w", xerr.NewErrCode(xerr.UserExist))
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		l.Errorw("FindEmailAlias Error", logger.Field("error", err))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query email aliases failed: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find email aliases")
 	}
-	if err := l.deps.Policy.TakeIPPermit(l.ctx, req.IP); err != nil {
+	if err := s.policy.TakeIPPermit(ctx); err != nil {
 		return nil, err
 	}
-	if l.deps.Config.EmailVerifyEnabled {
-		cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Register, canonicalEmail)
-		if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "code error")
+	if cfg.EmailVerifyEnabled {
+		if err := verification.ValidateVerificationCode(ctx, s.deps.Redis, codeKey, req.Code, true); err != nil {
+			return nil, xerr.Wrapf(err, xerr.VerifyCodeError, "check registration code")
 		}
 	}
 
-	// Generate password
-	pwd := password.EncodePassWord(req.Password)
-	userInfo := &user.User{
-		Password:          pwd,
+	newUser := &user.User{
+		Password:          password.EncodePassWord(req.Password),
 		Algo:              password.PasswordAlgoArgon2id,
-		OnlyFirstPurchase: &l.deps.Config.OnlyFirstPurchase,
+		OnlyFirstPurchase: &cfg.OnlyFirstPurchase,
 	}
 	if referer != nil {
-		userInfo.RefererId = referer.Id
+		newUser.RefererId = referer.Id
 	}
-	err = l.deps.Store.InIdentityTx(l.ctx, func(store repository.IdentityStore) error {
-		// Save user information
-		if err := store.User().Insert(l.ctx, userInfo); err != nil {
-			return err
-		}
-		// Generate ReferCode
-		userInfo.ReferCode = user.GenerateInviteCode(userInfo.Id)
-		// Update ReferCode
-		if err := store.User().UpdateColumns(l.ctx, userInfo.Id, map[string]interface{}{"refer_code": userInfo.ReferCode}); err != nil {
-			return err
-		}
-		// create user auth info
-		authInfo := &user.AuthMethods{
-			UserId:         userInfo.Id,
-			AuthType:       identifier.Email,
-			AuthIdentifier: canonicalEmail,
-			Verified:       l.deps.Config.EmailVerifyEnabled,
-		}
-		if err = store.UserAuth().InsertUserAuthMethods(l.ctx, authInfo); err != nil {
-			return err
-		}
-
-		// Registration emits the domain event; the subscription module
-		// grants the trial when it consumes it (idempotent, retried by
-		// the dispatcher).
-		if err := store.Outbox().Append(l.ctx, "identity.user_registered", strconv.FormatInt(userInfo.Id, 10), "{}"); err != nil {
-			return err
-		}
-		registerLog := log.Register{
-			AuthMethod: "email",
-			Identifier: logger.RedactedValue,
-			RegisterIP: req.IP,
-			UserAgent:  req.UserAgent,
-			Timestamp:  timeutil.Now().UnixMilli(),
-		}
-		content, err := registerLog.Marshal()
-		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "marshal registration audit: %v", err)
-		}
-		if err := store.Log().Insert(l.ctx, &log.SystemLog{
-			Type:     log.TypeRegister.Uint8(),
-			ObjectID: userInfo.Id,
-			Date:     timeutil.Now().Format(time.DateOnly),
-			Content:  string(content),
-		}); err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "record registration audit: %v", err)
-		}
-		return nil
-	})
-	if err != nil {
+	if err := account.Register(ctx, s.deps.Store, account.New{
+		User: newUser,
+		Identities: []user.AuthMethods{
+			{AuthType: identifier.Email, AuthIdentifier: email, Verified: cfg.EmailVerifyEnabled},
+		},
+	}, identifier.Email); err != nil {
 		return nil, err
 	}
+	return s.signInRegistered(ctx, newUser.Id, identifier.Email, req.Identifier, req.LoginType)
+}
 
-	device, err := bindLoginDevice(l.deps.DeviceBinder, req.Identifier, req.IP, req.UserAgent, userInfo.Id)
-	if err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "bind device: %v", err)
-	}
-	session, err := issueLoginSession(l.ctx, l.deps.Redis, l.deps.Config.JWTAccessSecret, l.deps.Config.JWTAccessExpire, userInfo.Id, req.LoginType, device)
-	if err != nil {
-		return nil, err
-	}
-	token := session.Token
-	loginStatus := true
+// signInRegistered signs a newly registered account in, auditing the sign-in.
+func (s *Service) signInRegistered(ctx context.Context, userID int64, method, deviceIdentifier, loginType string) (resp *dto.LoginResponse, err error) {
+	attempt := account.NewAttempt(s.deps.Store.Log(), method)
+	attempt.Identify(userID)
 	defer func() {
-		if token != "" && userInfo.Id != 0 {
-			loginLog := log.Login{
-				Method:    "email",
-				LoginIP:   req.IP,
-				UserAgent: req.UserAgent,
-				Success:   loginStatus,
-				Timestamp: timeutil.Now().UnixMilli(),
-			}
-			content, _ := loginLog.Marshal()
-			if auditErr := l.deps.Store.Log().Insert(l.ctx, &log.SystemLog{
-				Id:       0,
-				Type:     log.TypeLogin.Uint8(),
-				Date:     timeutil.Now().Format("2006-01-02"),
-				ObjectID: userInfo.Id,
-				Content:  string(content),
-			}); auditErr != nil {
-				l.Errorw("failed to insert login log",
-					logger.Field("user_id", userInfo.Id),
-					logger.Field("ip", req.IP),
-					logger.Field("error", auditErr.Error()),
-				)
-				if err == nil {
-					resp = nil
-					err = errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "record login audit: %v", auditErr)
-				}
-			}
+		if err = attempt.Finish(ctx, err); err != nil {
+			resp = nil
 		}
 	}()
-	return &dto.LoginResponse{
-		Token: token,
-	}, nil
+	return s.signIn(ctx, userID, deviceIdentifier, loginType)
+}
+
+// resolveReferer returns the account whose invite code a registration
+// names, or nil for none; an invite is required when invites are forced.
+func (s *Service) resolveReferer(ctx context.Context, invite string) (*user.User, error) {
+	if invite == "" {
+		if s.deps.Config().InviteForced {
+			return nil, fmt.Errorf("invite code is required: %w", xerr.NewErrCode(xerr.InviteCodeError))
+		}
+		return nil, nil
+	}
+	referer, err := s.deps.Store.User().FindOneByReferCode(ctx, invite)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.InviteCodeError, "find invite code")
+	}
+	return referer, nil
 }

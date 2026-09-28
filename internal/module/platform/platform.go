@@ -1,7 +1,7 @@
-// Package platform is the facade of the platform module (shared-kernel
-// concerns: audit/message logs and their retention settings; system
-// configuration joins as migration proceeds). See
-// docs/design/adr-001-modular-monolith.md.
+// Package platform is the facade of the platform module, the shared kernel:
+// audit and message logs with their retention settings, the system settings,
+// the admin console dashboard and tools, and the unauthenticated site-level
+// reads of the public portal. See docs/design/adr-001-modular-monolith.md.
 package platform
 
 import (
@@ -127,7 +127,8 @@ type Deps struct {
 	Redis        *redis.Client
 	PublicConfig func() GlobalConfigSnapshot
 
-	// Tool dependencies: the logger output path and the GeoIP reader.
+	// Tool dependencies: the logger output path and the GeoIP reader, which
+	// the public statistics also locate the nodes with.
 	LogPath string
 	GeoIP   func() *geoip2.Reader
 }
@@ -177,6 +178,7 @@ func New(deps Deps) Service {
 			Store:  deps.PublicStore,
 			Redis:  deps.Redis,
 			Config: deps.PublicConfig,
+			GeoIP:  deps.GeoIP,
 		}),
 		logs: auditlog.NewService(auditlog.Deps{
 			Logs:                deps.Logs,

@@ -244,14 +244,14 @@ func isTopicNotModifiedError(err error) bool {
 // PostMarkdown sends MarkdownV2 into a topic through Relay's self-healing.
 func (s *TopicService) PostMarkdown(m TelegramMessenger, topic *telegramtopic.Topic, text string) (*telegramtopic.Topic, error) {
 	return s.Relay(topic, func(threadID int64) error {
-		return m.SendMarkdown(s.group, threadID, text)
+		return m.SendMarkdown(s.ctx, s.group, threadID, text)
 	})
 }
 
 // PostText is PostMarkdown for plain text.
 func (s *TopicService) PostText(m TelegramMessenger, topic *telegramtopic.Topic, text string) (*telegramtopic.Topic, error) {
 	return s.Relay(topic, func(threadID int64) error {
-		return m.Send(s.group, threadID, text)
+		return m.Send(s.ctx, s.group, threadID, text)
 	})
 }
 

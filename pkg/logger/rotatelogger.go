@@ -71,8 +71,8 @@ type (
 	}
 )
 
-// DefaultRotateRule is a default log rotating rule, currently DailyRotateRule.
-func DefaultRotateRule(filename, delimiter string, days int, gzip bool) RotateRule {
+// defaultRotateRule is a default log rotating rule, currently DailyRotateRule.
+func defaultRotateRule(filename, delimiter string, days int, gzip bool) RotateRule {
 	return &DailyRotateRule{
 		rotatedTime: getNowDate(),
 		filename:    filename,
@@ -136,8 +136,8 @@ func (r *DailyRotateRule) ShallRotate(_ int64) bool {
 	return len(r.rotatedTime) > 0 && getNowDate() != r.rotatedTime
 }
 
-// NewSizeLimitRotateRule returns the rotation rule with size limit
-func NewSizeLimitRotateRule(filename, delimiter string, days, maxSize, maxBackups int, gzip bool) RotateRule {
+// newSizeLimitRotateRule returns the rotation rule with size limit
+func newSizeLimitRotateRule(filename, delimiter string, days, maxSize, maxBackups int, gzip bool) RotateRule {
 	return &SizeLimitRotateRule{
 		DailyRotateRule: DailyRotateRule{
 			rotatedTime: getNowDateInRFC3339Format(),
@@ -226,8 +226,8 @@ func (r *SizeLimitRotateRule) parseFilename() (prefix, ext string) {
 	return
 }
 
-// NewLogger returns a RotateLogger with given filename and rule, etc.
-func NewLogger(filename string, rule RotateRule, compress bool) (*RotateLogger, error) {
+// newRotateLogger returns a RotateLogger with given filename and rule, etc.
+func newRotateLogger(filename string, rule RotateRule, compress bool) (*RotateLogger, error) {
 	l := &RotateLogger{
 		filename: filename,
 		channel:  make(chan []byte, bufferSize),
@@ -316,7 +316,7 @@ func (l *RotateLogger) maybeCompressFile(file string) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			ErrorStack(r)
+			errorStack(r)
 		}
 	}()
 

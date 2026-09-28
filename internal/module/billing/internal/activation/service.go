@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/internal/ledger"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
@@ -17,18 +18,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Order lifecycle constants mirrored from the order rows.
+// The consumer names are historical (the stages once lived under the
+// identity label); they must not change, or in-flight replays would
+// re-execute committed stages.
 const (
-	OrderTypeSubscribe = 1
-	OrderTypeRenewal   = 2
-	OrderTypeRecharge  = 4
-
-	OrderStatusPaid     = 2
-	OrderStatusFinished = 5
-
-	// The consumer names are historical (the stages once lived under the
-	// identity label); they must not change, or in-flight replays would
-	// re-execute committed stages.
 	inboxRecharge   = "identity.balance_recharge"
 	inboxCommission = "identity.commission"
 )
@@ -43,6 +36,11 @@ type ProfileReader interface {
 	FindOne(ctx context.Context, id int64) (*user.User, error)
 }
 
+// Orders reads the order an activation stage works on.
+type Orders interface {
+	FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error)
+}
+
 // Store is the narrow persistence surface the activation stages need; the
 // repository store satisfies it structurally.
 type Store interface {
@@ -54,7 +52,7 @@ type Store interface {
 // Deps declares the subdomain's dependencies; the module facade forwards
 // them from the composition root.
 type Deps struct {
-	Orders repository.OrderRepo
+	Orders Orders
 	// Store carries the billing-scoped transactions, the wallet view and
 	// the inbox markers.
 	Store Store
@@ -123,22 +121,8 @@ func (s *Service) rechargeTx(ctx context.Context, store repository.BillingStore,
 	if err := store.Wallet().UpdateBalanceFields(ctx, wallet); err != nil {
 		return 0, err
 	}
-	balanceLog := &log.Balance{
-		Amount:    orderInfo.Price,
-		Type:      log.BalanceTypeRecharge,
-		OrderNo:   orderInfo.OrderNo,
-		Balance:   wallet.Balance,
-		Timestamp: timeutil.Now().UnixMilli(),
-	}
-	content, err := balanceLog.Marshal()
-	if err != nil {
-		return 0, err
-	}
-	if err := store.Log().Insert(ctx, &log.SystemLog{
-		Type:     log.TypeBalance.Uint8(),
-		Date:     timeutil.Now().Format(time.DateOnly),
-		ObjectID: wallet.UserId,
-		Content:  string(content),
+	if err := ledger.Recharge(ctx, store.Log(), ledger.Balance{
+		UserID: wallet.UserId, OrderNo: orderInfo.OrderNo, Amount: orderInfo.Price, Balance: wallet.Balance,
 	}); err != nil {
 		return 0, err
 	}
@@ -169,7 +153,7 @@ func (s *Service) SettleOrderCommission(ctx context.Context, orderNo string, buy
 }
 
 func (s *Service) handleCommissionTx(ctx context.Context, store repository.BillingStore, buyerID int64, orderInfo *order.Order) error {
-	if orderInfo.Type != OrderTypeSubscribe && orderInfo.Type != OrderTypeRenewal {
+	if orderInfo.Type != order.TypeSubscribe && orderInfo.Type != order.TypeRenewal {
 		return nil
 	}
 	buyer, err := s.deps.Profiles.FindOne(ctx, buyerID)
@@ -223,7 +207,7 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 		return err
 	}
 	commissionType := log.CommissionTypePurchase
-	if orderInfo.Type == OrderTypeRenewal {
+	if orderInfo.Type == order.TypeRenewal {
 		commissionType = log.CommissionTypeRenewal
 	}
 	content, err := (&log.Commission{
@@ -243,10 +227,11 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 	})
 }
 
-// calculateCommission computes the commission amount based on order price
-// and referral percentage.
+// calculateCommission is percentage percent of price, rounded down to whole
+// minor units. The float product it replaced under-paid a unit whenever the
+// percentage has no exact binary fraction (29% of 100 came out as 28).
 func calculateCommission(price int64, percentage uint8) int64 {
-	return int64(float64(price) * (float64(percentage) / 100))
+	return price * int64(percentage) / 100
 }
 
 // FinalizeOrder is the billing-domain settlement: coupon accounting and the
@@ -270,7 +255,7 @@ func (s *Service) FinalizeOrder(ctx context.Context, orderNo string) error {
 				return err
 			}
 		}
-		updated, err := store.Order().UpdateOrderStatusFrom(ctx, orderInfo.OrderNo, OrderStatusPaid, OrderStatusFinished)
+		updated, err := store.Order().UpdateOrderStatusFrom(ctx, orderInfo.OrderNo, order.StatusPaid, order.StatusFinished)
 		if err != nil {
 			return err
 		}

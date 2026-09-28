@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -80,7 +81,7 @@ func Migrate(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("open mysql: %w", err)
 	}
-	defer mysqlDB.Close()
+	defer closeDatabase("mysql", mysqlDB)
 	if err := mysqlDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping mysql: %w", err)
 	}
@@ -89,7 +90,7 @@ func Migrate(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("open postgres: %w", err)
 	}
-	defer postgresDB.Close()
+	defer closeDatabase("postgres", postgresDB)
 	if err := postgresDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
@@ -128,6 +129,23 @@ func Migrate(ctx context.Context, cfg Config) error {
 	}
 	log.Printf("migration completed")
 	return nil
+}
+
+// closeDatabase releases a connection pool once the migration is done with
+// it. Every copied table has committed by then, so a failure is reported but
+// does not turn a completed migration into a failed one.
+func closeDatabase(name string, db io.Closer) {
+	if err := db.Close(); err != nil {
+		log.Printf("close %s connection: %v", name, err)
+	}
+}
+
+// closeRows closes rows and adds a close failure to *err, next to any error
+// the function is already returning.
+func closeRows(rows io.Closer, err *error) {
+	if closeErr := rows.Close(); closeErr != nil {
+		*err = errors.Join(*err, fmt.Errorf("close rows: %w", closeErr))
+	}
 }
 
 func ParseFlags(args []string) (Config, error) {
@@ -257,7 +275,7 @@ func parseTableSet(input string) map[string]struct{} {
 	return result
 }
 
-func listMySQLTables(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
+func listMySQLTables(ctx context.Context, db *sql.DB) (_ map[string]struct{}, err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT table_name
 FROM information_schema.tables
@@ -267,11 +285,11 @@ ORDER BY table_name`)
 	if err != nil {
 		return nil, fmt.Errorf("list mysql tables: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 	return scanNameSet(rows)
 }
 
-func listPostgresTables(ctx context.Context, db *sql.DB, schema string) (map[string]struct{}, error) {
+func listPostgresTables(ctx context.Context, db *sql.DB, schema string) (_ map[string]struct{}, err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT table_name
 FROM information_schema.tables
@@ -281,7 +299,7 @@ ORDER BY table_name`, schema)
 	if err != nil {
 		return nil, fmt.Errorf("list postgres tables: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 	return scanNameSet(rows)
 }
 
@@ -297,7 +315,7 @@ func scanNameSet(rows *sql.Rows) (map[string]struct{}, error) {
 	return result, rows.Err()
 }
 
-func listMySQLColumns(ctx context.Context, db *sql.DB, table string) (map[string]struct{}, error) {
+func listMySQLColumns(ctx context.Context, db *sql.DB, table string) (_ map[string]struct{}, err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT column_name
 FROM information_schema.columns
@@ -307,11 +325,11 @@ ORDER BY ordinal_position`, table)
 	if err != nil {
 		return nil, fmt.Errorf("list mysql columns for %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 	return scanNameSet(rows)
 }
 
-func listMySQLPrimaryKeyColumns(ctx context.Context, db *sql.DB, table string) ([]string, error) {
+func listMySQLPrimaryKeyColumns(ctx context.Context, db *sql.DB, table string) (_ []string, err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT column_name
 FROM information_schema.key_column_usage
@@ -322,7 +340,7 @@ ORDER BY ordinal_position`, table)
 	if err != nil {
 		return nil, fmt.Errorf("list mysql primary keys for %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	var result []string
 	for rows.Next() {
@@ -335,7 +353,7 @@ ORDER BY ordinal_position`, table)
 	return result, rows.Err()
 }
 
-func listPostgresColumns(ctx context.Context, db *sql.DB, schema, table string) ([]postgresColumn, error) {
+func listPostgresColumns(ctx context.Context, db *sql.DB, schema, table string) (_ []postgresColumn, err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT column_name,
        data_type,
@@ -351,7 +369,7 @@ ORDER BY ordinal_position`, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("list postgres columns for %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	var result []postgresColumn
 	for rows.Next() {
@@ -368,7 +386,7 @@ ORDER BY ordinal_position`, schema, table)
 	return result, rows.Err()
 }
 
-func listPostgresForeignKeys(ctx context.Context, db *sql.DB, schema string) ([]foreignKey, error) {
+func listPostgresForeignKeys(ctx context.Context, db *sql.DB, schema string) (_ []foreignKey, err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT child.relname AS child_table,
        parent.relname AS parent_table
@@ -384,7 +402,7 @@ ORDER BY child.relname, parent.relname`, schema)
 	if err != nil {
 		return nil, fmt.Errorf("list postgres foreign keys: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	var result []foreignKey
 	for rows.Next() {
@@ -479,7 +497,7 @@ func truncateTables(ctx context.Context, db *sql.DB, schema string, plans []tabl
 	return nil
 }
 
-func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, plan tablePlan, batchSize int) error {
+func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, plan tablePlan, batchSize int) (err error) {
 	log.Printf("copy %s: start", plan.Name)
 	cols := make([]string, len(plan.Columns))
 	for i, col := range plan.Columns {
@@ -494,7 +512,7 @@ func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, 
 	if err != nil {
 		return fmt.Errorf("query mysql table %s: %w", plan.Name, err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	tx, err := postgresDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -700,7 +718,7 @@ func parseTimestamp(value string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unsupported timestamp %q", value)
 }
 
-func resetSequences(ctx context.Context, db *sql.DB, schema string) error {
+func resetSequences(ctx context.Context, db *sql.DB, schema string) (err error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT table_name, column_name
 FROM information_schema.columns
@@ -710,7 +728,7 @@ ORDER BY table_name, ordinal_position`, schema)
 	if err != nil {
 		return fmt.Errorf("list postgres sequences: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	type sequenceColumn struct {
 		table  string

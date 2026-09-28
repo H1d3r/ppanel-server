@@ -56,8 +56,6 @@ func RegisterHandlers(mux *asynq.ServeMux, deps Dependencies) {
 	// Daily settlement summary for administrators bound on Telegram.
 	mux.Handle(taskqueue.SchedulerDailyOrderReport, order.NewDailyOrderReportLogic(deps.Order))
 
-	// Forthwith traffic statistics
-	mux.Handle(taskqueue.ForthwithTrafficStatistics, traffic.NewTrafficStatisticsLogic(deps.Traffic))
 	// Flush aggregated traffic
 	mux.Handle(taskqueue.SchedulerFlushTraffic, traffic.NewFlushTrafficLogic(deps.Traffic))
 
@@ -66,11 +64,8 @@ func RegisterHandlers(mux *asynq.ServeMux, deps Dependencies) {
 	// Warn owners before their subscription expires.
 	mux.Handle(taskqueue.SchedulerRemindExpiringSubscriptions, subscription.NewRemindExpiringLogic(deps.Subscription))
 
-	// Schedule total server data
-	mux.Handle(taskqueue.SchedulerTotalServerData, traffic.NewServerDataLogic(deps.Traffic))
-
 	// Schedule reset traffic
-	mux.Handle(taskqueue.SchedulerResetTraffic, traffic.NewResetTrafficLogic(deps.Traffic))
+	mux.Handle(taskqueue.SchedulerResetTraffic, traffic.NewResetTrafficLogic(deps.Subscription, deps.Traffic.Redis))
 
 	// ScheduledBatchSendEmail
 	mux.Handle(taskqueue.ScheduledBatchSendEmail, email.NewBatchEmailLogic(deps.Email))

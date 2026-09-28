@@ -4,18 +4,17 @@ package ticket
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
 	entity "github.com/perfect-panel/server/internal/module/support/entity/ticket"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // Notifier mirrors ticket lifecycle into other channels — today the forum
@@ -41,44 +40,118 @@ func NewService(repo repository.TicketRepo, notify Notifier, limiter CreationLim
 }
 
 func currentUser(ctx context.Context) (*user.User, error) {
-	u, ok := ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(ctx)
 	if !ok {
-		logger.Error("current user is not found in context")
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		logger.WithContext(ctx).Error("current user is not found in context")
+		return nil, xerr.Wrapf(errors.New("no authenticated user"), xerr.InvalidAccess, "Invalid Access")
 	}
 	return u, nil
 }
 
-// CreateFollow appends an admin reply and flips the ticket back to Waiting.
-func (s *Service) CreateFollow(ctx context.Context, req *dto.CreateTicketFollowRequest) error {
-	if _, err := s.repo.FindOne(ctx, req.TicketId); err != nil {
-		logger.WithContext(ctx).Errorw("[CreateTicketFollow] FindOne error", logger.Field("error", err.Error()), logger.Field("ticketId", req.TicketId))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find ticket failed: %v", err.Error())
+// change is one write to a ticket: the follow to append, if any, and the
+// status the ticket moves to.
+type change struct {
+	ticketID int64
+	// ownerID scopes the status update to the ticket's owner; zero for staff.
+	ownerID int64
+	// follow is nil when only the status changes.
+	follow *entity.Follow
+	status uint8
+	// mirror reports whether the notifier mirrors the change. It is false
+	// when the change was made inside the mirror channel itself.
+	mirror bool
+}
+
+// apply is the one "append follow / update status" use case behind every
+// ticket reply and status change, whichever channel it comes from: the
+// admin panel, the user site or the Telegram bot. A reply is mirrored as a
+// reply and a status change as a status change.
+func (s *Service) apply(ctx context.Context, c change) error {
+	if c.follow != nil {
+		if err := s.repo.InsertTicketFollow(ctx, c.follow); err != nil {
+			return xerr.Wrapf(err, xerr.DatabaseInsertError, "create ticket follow failed: %v", err)
+		}
 	}
-	if err := s.repo.InsertTicketFollow(ctx, &entity.Follow{
-		TicketId: req.TicketId,
-		From:     req.From,
-		Type:     req.Type,
-		Content:  req.Content,
-	}); err != nil {
-		logger.WithContext(ctx).Errorw("[CreateTicketFollow] Database insert error", logger.Field("error", err.Error()), logger.Field("request", req))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "create ticket follow failed: %v", err.Error())
+	if err := s.repo.UpdateTicketStatus(ctx, c.ticketID, c.ownerID, c.status); err != nil {
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update ticket status failed: %v", err)
 	}
-	if err := s.repo.UpdateTicketStatus(ctx, req.TicketId, 0, entity.Waiting); err != nil {
-		logger.WithContext(ctx).Errorw("[CreateTicketFollow] Database update error", logger.Field("error", err.Error()), logger.Field("status", entity.Waiting))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket status failed: %v", err.Error())
+	if !c.mirror || s.notify == nil {
+		return nil
 	}
-	if s.notify != nil {
-		s.notify.TicketReplied(ctx, req.TicketId, req.From, req.Content)
+	if c.follow != nil {
+		s.notify.TicketReplied(ctx, c.ticketID, c.follow.From, c.follow.Content)
+	} else {
+		s.notify.TicketStatusChanged(ctx, c.ticketID, c.status)
 	}
 	return nil
+}
+
+// findTicket loads the ticket a change applies to.
+func (s *Service) findTicket(ctx context.Context, id int64) (*entity.Ticket, error) {
+	t, err := s.repo.FindOne(ctx, id)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find ticket %d failed: %v", id, err)
+	}
+	return t, nil
+}
+
+// CreateFollow appends an admin reply and flips the ticket back to Waiting.
+func (s *Service) CreateFollow(ctx context.Context, req *dto.CreateTicketFollowRequest) error {
+	if _, err := s.findTicket(ctx, req.TicketId); err != nil {
+		return err
+	}
+	return s.apply(ctx, change{
+		ticketID: req.TicketId,
+		follow: &entity.Follow{
+			TicketId: req.TicketId,
+			From:     req.From,
+			Type:     req.Type,
+			Content:  req.Content,
+		},
+		status: entity.Waiting,
+		mirror: true,
+	})
+}
+
+// UpdateAsStaff applies a ticket change staff made outside the admin panel:
+// a reply is appended as a text follow and moves the ticket to Waiting, like
+// a reply from the admin panel; otherwise the ticket moves to cmd.Status. A
+// missing ticket is an error whose chain holds gorm.ErrRecordNotFound.
+func (s *Service) UpdateAsStaff(ctx context.Context, cmd *dto.StaffTicketUpdateCommand) (*dto.StaffTicketUpdateResult, error) {
+	c := change{ticketID: cmd.TicketId, status: cmd.Status, mirror: !cmd.FromMirror}
+	if cmd.Reply != "" {
+		c.status = entity.Waiting
+		c.follow = &entity.Follow{
+			TicketId: cmd.TicketId,
+			From:     cmd.From,
+			Type:     entity.FollowText,
+			Content:  cmd.Reply,
+		}
+	} else if !validStatus(cmd.Status) {
+		return nil, xerr.Wrapf(errors.New("unknown ticket status"), xerr.InvalidParams, "ticket status %d is not a ticket status", cmd.Status)
+	}
+	t, err := s.findTicket(ctx, cmd.TicketId)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.apply(ctx, c); err != nil {
+		return nil, err
+	}
+	return &dto.StaffTicketUpdateResult{PreviousStatus: t.Status}, nil
+}
+
+func validStatus(status uint8) bool {
+	switch status {
+	case entity.Pending, entity.Waiting, entity.Processed, entity.Closed:
+		return true
+	}
+	return false
 }
 
 func (s *Service) List(ctx context.Context, req *dto.GetTicketListRequest) (*dto.GetTicketListResponse, error) {
 	total, list, err := s.repo.QueryTicketList(ctx, int(req.Page), int(req.Size), req.UserId, req.Status, req.Search)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[GetTicketList] Query Database Error: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryTicketList error: %v", err)
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "QueryTicketList error: %v", err)
 	}
 	resp := &dto.GetTicketListResponse{
 		Total: total,
@@ -91,8 +164,7 @@ func (s *Service) List(ctx context.Context, req *dto.GetTicketListRequest) (*dto
 func (s *Service) GetDetail(ctx context.Context, req *dto.GetTicketRequest) (*dto.Ticket, error) {
 	data, err := s.repo.QueryTicketDetail(ctx, req.Id)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[GetTicket] Query Database Error: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get ticket detail failed: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "get ticket detail failed: %v", err)
 	}
 	resp := &dto.Ticket{}
 	mapping.DeepCopy(resp, data)
@@ -100,14 +172,7 @@ func (s *Service) GetDetail(ctx context.Context, req *dto.GetTicketRequest) (*dt
 }
 
 func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateTicketStatusRequest) error {
-	if err := s.repo.UpdateTicketStatus(ctx, req.Id, 0, *req.Status); err != nil {
-		logger.WithContext(ctx).Errorw("[UpdateTicketStatus] Update Database Error: ", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket error: %v", err.Error())
-	}
-	if s.notify != nil {
-		s.notify.TicketStatusChanged(ctx, req.Id, *req.Status)
-	}
-	return nil
+	return s.apply(ctx, change{ticketID: req.Id, status: *req.Status, mirror: true})
 }
 
 func (s *Service) CreateUserTicket(ctx context.Context, req *dto.CreateUserTicketRequest) error {
@@ -123,7 +188,7 @@ func (s *Service) CreateUserTicket(ctx context.Context, req *dto.CreateUserTicke
 			// ticket desk from a Redis outage.
 			logger.WithContext(ctx).Errorw("[CreateUserTicket] rate limit check failed", logger.Field("error", err.Error()), logger.Field("user_id", u.Id))
 		case !allowed:
-			return errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "ticket creation limit exceeded for user %d", u.Id)
+			return xerr.Wrapf(errors.New("rate limited"), xerr.TooManyRequests, "ticket creation limit exceeded for user %d", u.Id)
 		}
 	}
 	// Insert backfills the id, which the mirror channel needs for its topic.
@@ -134,10 +199,24 @@ func (s *Service) CreateUserTicket(ctx context.Context, req *dto.CreateUserTicke
 		Status:      entity.Pending,
 	}
 	if err := s.repo.Insert(ctx, t); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "insert ticket error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseInsertError, "insert ticket error: %v", err)
 	}
 	if s.notify != nil {
 		s.notify.TicketCreated(ctx, t)
+	}
+	return nil
+}
+
+// ownTicket loads a ticket the current user acts on and refuses anyone but
+// its owner.
+func (s *Service) ownTicket(ctx context.Context, u *user.User, id int64) error {
+	t, err := s.findTicket(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.UserId != u.Id {
+		logger.WithContext(ctx).Errorw("[Ticket] Invalid access", logger.Field("user_id", u.Id), logger.Field("ticket_user_id", t.UserId))
+		return xerr.Wrapf(errors.New("not the ticket owner"), xerr.InvalidAccess, "invalid access")
 	}
 	return nil
 }
@@ -154,32 +233,21 @@ func (s *Service) CreateUserFollow(ctx context.Context, req *dto.CreateUserTicke
 	if err != nil {
 		return err
 	}
-	t, err := s.repo.FindOne(ctx, req.TicketId)
-	if err != nil {
-		logger.WithContext(ctx).Errorw("[CreateUserTicketFollow] Database query error", logger.Field("error", err.Error()), logger.Field("request", req))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query ticket failed: %v", err.Error())
+	if err := s.ownTicket(ctx, u, req.TicketId); err != nil {
+		return err
 	}
-	if u.Id != t.UserId {
-		logger.WithContext(ctx).Errorw("[CreateUserTicketFollow] Invalid access", logger.Field("user_id", u.Id), logger.Field("ticket_user_id", t.UserId))
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "invalid access")
-	}
-	if err := s.repo.InsertTicketFollow(ctx, &entity.Follow{
-		TicketId: req.TicketId,
-		From:     entity.FromUser,
-		Type:     followType,
-		Content:  req.Content,
-	}); err != nil {
-		logger.WithContext(ctx).Errorw("[CreateUserTicketFollow] Database insert error", logger.Field("error", err.Error()), logger.Field("request", req))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "create ticket follow failed: %v", err.Error())
-	}
-	if err := s.repo.UpdateTicketStatus(ctx, req.TicketId, u.Id, entity.Pending); err != nil {
-		logger.WithContext(ctx).Errorw("[CreateUserTicketFollow] Database update error", logger.Field("error", err.Error()), logger.Field("status", entity.Pending))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket status failed: %v", err.Error())
-	}
-	if s.notify != nil {
-		s.notify.TicketReplied(ctx, req.TicketId, entity.FromUser, req.Content)
-	}
-	return nil
+	return s.apply(ctx, change{
+		ticketID: req.TicketId,
+		ownerID:  u.Id,
+		follow: &entity.Follow{
+			TicketId: req.TicketId,
+			From:     entity.FromUser,
+			Type:     followType,
+			Content:  req.Content,
+		},
+		status: entity.Pending,
+		mirror: true,
+	})
 }
 
 // rasterDataURLPrefixes are the inline image encodings a user may attach: the
@@ -201,11 +269,11 @@ func userFollowType(followType uint8, content string) (uint8, error) {
 		return entity.FollowText, nil
 	case entity.FollowImage:
 		if !isImageReference(content) {
-			return 0, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "image follow must be an inline raster image or an http(s) URL")
+			return 0, xerr.Wrapf(errors.New("unsupported image reference"), xerr.InvalidParams, "image follow must be an inline raster image or an http(s) URL")
 		}
 		return entity.FollowImage, nil
 	}
-	return 0, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "unsupported follow type %d", followType)
+	return 0, xerr.Wrapf(errors.New("unsupported follow type"), xerr.InvalidParams, "unsupported follow type %d", followType)
 }
 
 func isImageReference(content string) bool {
@@ -221,15 +289,14 @@ func isImageReference(content string) bool {
 func (s *Service) GetUserDetail(ctx context.Context, req *dto.GetUserTicketDetailRequest) (*dto.Ticket, error) {
 	data, err := s.repo.QueryTicketDetail(ctx, req.Id)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[GetUserTicketDetailsLogic] Database Error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get ticket detail failed: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "get ticket detail failed: %v", err)
 	}
 	u, err := currentUser(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if data.UserId != u.Id {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "invalid access")
+		return nil, xerr.Wrapf(errors.New("not the ticket owner"), xerr.InvalidAccess, "invalid access")
 	}
 	resp := &dto.Ticket{}
 	mapping.DeepCopy(resp, data)
@@ -241,11 +308,9 @@ func (s *Service) GetUserList(ctx context.Context, req *dto.GetUserTicketListReq
 	if err != nil {
 		return nil, err
 	}
-	logger.WithContext(ctx).Debugf("Current user: %v", u.Id)
 	total, list, err := s.repo.QueryTicketList(ctx, req.Page, req.Size, u.Id, req.Status, req.Search)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[GetUserTicketListLogic] Database Error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryTicketList error: %v", err)
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "QueryTicketList error: %v", err)
 	}
 	resp := &dto.GetUserTicketListResponse{
 		Total: total,
@@ -266,23 +331,10 @@ func (s *Service) UpdateUserStatus(ctx context.Context, req *dto.UpdateUserTicke
 		return err
 	}
 	if req.Status == nil || *req.Status != entity.Closed {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "users may only close tickets")
+		return xerr.Wrapf(errors.New("unsupported status change"), xerr.InvalidParams, "users may only close tickets")
 	}
-	t, err := s.repo.FindOne(ctx, req.Id)
-	if err != nil {
-		logger.WithContext(ctx).Errorw("[UpdateUserTicketStatusLogic] Database query error", logger.Field("error", err.Error()), logger.Field("ticket_id", req.Id))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query ticket failed: %v", err.Error())
+	if err := s.ownTicket(ctx, u, req.Id); err != nil {
+		return err
 	}
-	if t.UserId != u.Id {
-		logger.WithContext(ctx).Errorw("[UpdateUserTicketStatusLogic] Invalid access", logger.Field("user_id", u.Id), logger.Field("ticket_user_id", t.UserId))
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "invalid access")
-	}
-	if err := s.repo.UpdateTicketStatus(ctx, req.Id, u.Id, entity.Closed); err != nil {
-		logger.WithContext(ctx).Errorw("[UpdateUserTicketStatusLogic] Database Error", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update ticket error: %v", err.Error())
-	}
-	if s.notify != nil {
-		s.notify.TicketStatusChanged(ctx, req.Id, entity.Closed)
-	}
-	return nil
+	return s.apply(ctx, change{ticketID: req.Id, ownerID: u.Id, status: entity.Closed, mirror: true})
 }

@@ -11,7 +11,8 @@ import (
 )
 
 // TrafficReader is the subdomain's port onto the network domain's traffic
-// statistics; the legacy traffic repository satisfies it structurally.
+// statistics; the network module's traffic repository satisfies it
+// structurally.
 type TrafficReader = repository.TrafficRepo
 
 // PlatformTransactor mirrors the store's platform-scoped transaction.

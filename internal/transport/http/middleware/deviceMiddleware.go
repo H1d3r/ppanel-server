@@ -12,6 +12,7 @@ import (
 	"github.com/perfect-panel/server/internal/auth/deviceauth"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/httpx"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
@@ -26,7 +27,7 @@ func DeviceMiddleware(configProvider func() config.DeviceConfig, replayStore dev
 		loginType := string(c.GetHeader("Login-Type"))
 		isDeviceLogin := string(c.Path()) == "/v1/auth/login/device"
 		signedLoginType, _ := ctx.Value(requestctx.LoginType).(string)
-		authenticated := ctx.Value(requestctx.CtxKeyUser) != nil
+		_, authenticated := user.FromContext(ctx)
 		if !isDeviceLogin && loginType != "device" && !(authenticated && signedLoginType == "device") {
 			c.Next(ctx)
 			return

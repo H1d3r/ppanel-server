@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/cache"
+	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"gorm.io/gorm"
@@ -44,41 +45,52 @@ func subscribeInSet(field string, values []string) func(db *gorm.DB) *gorm.DB {
 	return orm.CommaSeparatedContains(field, values)
 }
 
-func (m *subscribeRepo) batchGetCacheKeys(subscribes ...*subscribe.Subscribe) []string {
+// cacheKeys returns every cache entry derived from the plans: their own rows
+// and the user lists of the servers carrying their nodes and node tags. The
+// node-derived keys of all plans resolve in one lookup. The lookup is best
+// effort, as before batching: a failure degrades to the plans' own keys
+// rather than failing the plan write.
+func (m *subscribeRepo) cacheKeys(ctx context.Context, plans ...*subscribe.Subscribe) []string {
 	var keys []string
-	for _, s := range subscribes {
-		keys = append(keys, m.getCacheKeys(s)...)
+	var nodeIDs []int64
+	var tags []string
+	for _, plan := range plans {
+		if plan == nil {
+			continue
+		}
+		if plan.Nodes != "" {
+			// A damaged node list degrades, like a failed lookup below, to
+			// fewer invalidation keys rather than a failed plan write.
+			ids, err := slicesx.ParseInt64CSV(plan.Nodes)
+			if err != nil {
+				logger.WithContext(ctx).Errorw("[SubscribeRepo] plan node list is damaged; its node caches are not cleared",
+					logger.Field("subscribe_id", plan.Id), logger.Field("error", err.Error()))
+			}
+			nodeIDs = append(nodeIDs, ids...)
+		}
+		if plan.NodeTags != "" {
+			tags = append(tags, strings.Split(plan.NodeTags, ",")...)
+		}
+		keys = append(keys, planCacheKey(plan.Id))
+	}
+	if (len(nodeIDs) > 0 || len(tags) > 0) && m.nodes != nil {
+		nodeKeys, err := m.nodes.NodeUserListCacheKeys(ctx, slicesx.RemoveDuplicateElements(nodeIDs...), slicesx.RemoveDuplicateElements(tags...))
+		if err != nil {
+			logger.WithContext(ctx).Errorw("[SubscribeRepo] resolve node cache keys failed", logger.Field("error", err.Error()))
+		} else {
+			keys = append(nodeKeys, keys...)
+		}
 	}
 	return keys
 }
 
-func (m *subscribeRepo) getCacheKeys(data *subscribe.Subscribe) []string {
-	if data == nil {
-		return []string{}
-	}
-	var keys []string
-	var nodeIDs []int64
-	var tags []string
-	if data.Nodes != "" {
-		nodeIDs = slicesx.StringSliceToInt64Slice(strings.Split(data.Nodes, ","))
-	}
-	if data.NodeTags != "" {
-		tags = slicesx.RemoveDuplicateElements(strings.Split(data.NodeTags, ",")...)
-	}
-	if (len(nodeIDs) > 0 || len(tags) > 0) && m.nodes != nil {
-		// Best effort, matching the old behavior: a failed node lookup
-		// degrades to fewer invalidation keys, not a failed plan write.
-		if nodeKeys, err := m.nodes.NodeUserListCacheKeys(context.Background(), nodeIDs, tags); err == nil {
-			keys = append(keys, nodeKeys...)
-		}
-	}
-
-	return append(keys, fmt.Sprintf("%s%v", cacheSubscribeIdPrefix, data.Id))
+func planCacheKey(id int64) string {
+	return fmt.Sprintf("%s%v", cacheSubscribeIdPrefix, id)
 }
 
 func (m *subscribeRepo) getUserSubscribeCacheKeys(ctx context.Context, subscribeId int64) ([]string, error) {
 	var userIds []int64
-	err := m.QueryNoCacheCtx(ctx, &userIds, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &userIds, func(conn *gorm.DB, v any) error {
 		return conn.Model(&usersub.Subscribe{}).
 			Where("subscribe_id = ?", subscribeId).
 			Distinct("user_id").
@@ -95,19 +107,16 @@ func (m *subscribeRepo) getUserSubscribeCacheKeys(ctx context.Context, subscribe
 	return keys, nil
 }
 
-func (m *subscribeRepo) Insert(ctx context.Context, data *subscribe.Subscribe, tx ...*gorm.DB) error {
+func (m *subscribeRepo) Insert(ctx context.Context, data *subscribe.Subscribe) error {
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Create(&data).Error
-	}, m.getCacheKeys(data)...)
+	}, m.cacheKeys(ctx, data)...)
 }
 
 func (m *subscribeRepo) FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error) {
-	subscribeIdKey := fmt.Sprintf("%s%v", cacheSubscribeIdPrefix, id)
+	subscribeIdKey := planCacheKey(id)
 	var resp subscribe.Subscribe
-	err := m.QueryCtx(ctx, &resp, subscribeIdKey, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, &resp, subscribeIdKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&subscribe.Subscribe{}).Where("id = ?", id).First(&resp).Error
 	})
 	switch {
@@ -118,29 +127,25 @@ func (m *subscribeRepo) FindOne(ctx context.Context, id int64) (*subscribe.Subsc
 	}
 }
 
-func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe, tx ...*gorm.DB) error {
+func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe) error {
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	cacheKeys := m.getCacheKeys(old)
+	cacheKeys := m.cacheKeys(ctx, old)
 	userSubscribeCacheKeys, err := m.getUserSubscribeCacheKeys(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	cacheKeys = append(cacheKeys, userSubscribeCacheKeys...)
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		if len(tx) > 0 {
-			db = tx[0]
-		}
-		return db.Save(data).Error
+		return conn.Save(data).Error
 	}, cacheKeys...)
 }
 
 // ReserveInventory consumes one finite inventory unit with a conditional update.
 // A stale plan object must never decide whether stock is still available.
-func (m *subscribeRepo) ReserveInventory(ctx context.Context, id int64, tx ...*gorm.DB) (bool, error) {
+func (m *subscribeRepo) ReserveInventory(ctx context.Context, id int64) (bool, error) {
 	data, err := m.FindOne(ctx, id)
 	if err != nil {
 		return false, err
@@ -153,21 +158,18 @@ func (m *subscribeRepo) ReserveInventory(ctx context.Context, id int64, tx ...*g
 	}
 	var reserved bool
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		result := conn.Model(&subscribe.Subscribe{}).
 			Where("id = ? AND inventory > 0", id).
 			UpdateColumn("inventory", gorm.Expr("inventory - 1"))
 		reserved = result.RowsAffected == 1
 		return result.Error
-	}, m.getCacheKeys(data)...)
+	}, m.cacheKeys(ctx, data)...)
 	return reserved, err
 }
 
 // RestoreInventory returns one previously reserved finite inventory unit. An
 // unlimited plan (inventory = -1) remains unlimited.
-func (m *subscribeRepo) RestoreInventory(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *subscribeRepo) RestoreInventory(ctx context.Context, id int64) error {
 	data, err := m.FindOne(ctx, id)
 	if err != nil {
 		return err
@@ -176,16 +178,13 @@ func (m *subscribeRepo) RestoreInventory(ctx context.Context, id int64, tx ...*g
 		return nil
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&subscribe.Subscribe{}).
 			Where("id = ? AND inventory >= 0", id).
 			UpdateColumn("inventory", gorm.Expr("inventory + 1")).Error
-	}, m.getCacheKeys(data)...)
+	}, m.cacheKeys(ctx, data)...)
 }
 
-func (m *subscribeRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *subscribeRepo) Delete(ctx context.Context, id int64) error {
 	data, err := m.FindOne(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -193,24 +192,20 @@ func (m *subscribeRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) er
 		}
 		return err
 	}
-	cacheKeys := m.getCacheKeys(data)
+	cacheKeys := m.cacheKeys(ctx, data)
 	userSubscribeCacheKeys, err := m.getUserSubscribeCacheKeys(ctx, id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	cacheKeys = append(cacheKeys, userSubscribeCacheKeys...)
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		if len(tx) > 0 {
-			db = tx[0]
-		}
-		return db.Delete(&subscribe.Subscribe{}, id).Error
+		return conn.Delete(&subscribe.Subscribe{}, id).Error
 	}, cacheKeys...)
 }
 
 func (m *subscribeRepo) QuerySubscribeMinSortByIds(ctx context.Context, ids []int64) (int64, error) {
 	var minSort int64
-	err := m.QueryNoCacheCtx(ctx, &minSort, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &minSort, func(conn *gorm.DB, v any) error {
 		return conn.Model(&subscribe.Subscribe{}).Where("id IN ?", ids).Select("COALESCE(MIN(sort), 0)").Scan(v).Error
 	})
 	return minSort, err
@@ -218,26 +213,31 @@ func (m *subscribeRepo) QuerySubscribeMinSortByIds(ctx context.Context, ids []in
 
 func (m *subscribeRepo) QueryResetCycleSubscribeIds(ctx context.Context, resetCycle int) ([]int64, error) {
 	var ids []int64
-	err := m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &ids, func(conn *gorm.DB, v any) error {
 		return conn.Model(&subscribe.Subscribe{}).Select("id").Where("reset_cycle = ?", resetCycle).Find(&ids).Error
 	})
 	return ids, err
 }
 
+// ClearCache invalidates the plans' cache entries, reading every plan in one
+// query. A plan that no longer exists still loses its own entry.
 func (m *subscribeRepo) ClearCache(ctx context.Context, ids ...int64) error {
-	if len(ids) <= 0 {
+	ids = slicesx.RemoveDuplicateElements(ids...)
+	if len(ids) == 0 {
 		return nil
 	}
-
-	var cacheKeys []string
-	for _, id := range ids {
-		data, err := m.FindOne(ctx, id)
-		if err != nil {
-			return err
-		}
-		cacheKeys = append(cacheKeys, m.getCacheKeys(data)...)
+	var plans []*subscribe.Subscribe
+	err := m.QueryNoCacheCtx(ctx, &plans, func(conn *gorm.DB, v any) error {
+		return conn.Model(&subscribe.Subscribe{}).Where("id IN ?", ids).Find(v).Error
+	})
+	if err != nil {
+		return err
 	}
-	return m.CachedConn.DelCacheCtx(ctx, cacheKeys...)
+	keys := m.cacheKeys(ctx, plans...)
+	for _, id := range ids {
+		keys = append(keys, planCacheKey(id))
+	}
+	return m.DelCacheCtx(ctx, keys...)
 }
 
 func (m *subscribeRepo) UpdateSort(ctx context.Context, data []*subscribe.Subscribe) error {
@@ -246,13 +246,13 @@ func (m *subscribeRepo) UpdateSort(ctx context.Context, data []*subscribe.Subscr
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		return conn.Save(data).Error
-	}, m.batchGetCacheKeys(data...)...)
+	}, m.cacheKeys(ctx, data...)...)
 }
 
 func (m *subscribeRepo) QueryGroupList(ctx context.Context) (int64, []*subscribe.Group, error) {
 	var list []*subscribe.Group
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		return conn.Model(&subscribe.Group{}).Count(&total).Find(v).Error
 	})
 	return total, list, err
@@ -328,7 +328,7 @@ func (m *subscribeRepo) FilterList(ctx context.Context, params *subscribe.Filter
 	}
 
 	queryFunc := func(lang string) error {
-		return m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+		return m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 			query := buildQuery(conn, lang)
 			if err := query.Count(&total).Error; err != nil {
 				return err
@@ -359,9 +359,9 @@ func (m *subscribeRepo) FilterList(ctx context.Context, params *subscribe.Filter
 // public/admin pagination cap or issuing a separate COUNT query.
 func (m *subscribeRepo) FindByNodeScope(ctx context.Context, nodeIDs []int64, tags []string) ([]*subscribe.Subscribe, error) {
 	conditions := make([]string, 0, 2)
-	args := make([]interface{}, 0, len(nodeIDs)+len(tags))
+	args := make([]any, 0, len(nodeIDs)+len(tags))
 	list := make([]*subscribe.Subscribe, 0)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		if condition, values := orm.CommaSeparatedContainsCondition(conn, "nodes", slicesx.Int64SliceToStringSlice(nodeIDs)); condition != "" {
 			conditions = append(conditions, condition)
 			args = append(args, values...)

@@ -16,13 +16,6 @@ var ErrProviderManaged = errors.New("subscription is managed by its payment prov
 // back a refunded or administrator-stopped subscription.
 var ErrSubscriptionOnHold = errors.New("subscription is refunded or stopped")
 
-// OnHold reports whether the subscription was refunded (Deducted) or stopped
-// by an administrator. Only an administrator may bring it back; a user
-// purchase must not.
-func OnHold(status uint8) bool {
-	return status == SubscribeStatusDeducted || status == SubscribeStatusStopped
-}
-
 // Cache key prefixes for the user-subscription cache.
 const (
 	cacheTokenPrefix = "cache:user:subscribe:token:"
@@ -49,8 +42,12 @@ type Subscribe struct {
 	UUID        string     `gorm:"type:varchar(255);unique;index:idx_uuid;default:'';comment:UUID"`
 	Status      uint8      `gorm:"type:tinyint(1);default:0;comment:Subscription Status: 0: Pending 1: Active 2: Finished 3: Expired 4: Deducted 5: stopped"`
 	Note        string     `gorm:"type:varchar(500);default:'';comment:User note for subscription"`
-	CreatedAt   time.Time  `gorm:"<-:create;comment:Creation Time"`
-	UpdatedAt   time.Time  `gorm:"comment:Update Time"`
+	// TrafficResetAt is the start of the day of the last calendar traffic
+	// reset. It is that reset's done-marker: a retried reset run skips the
+	// subscriptions already reset for the day.
+	TrafficResetAt *time.Time `gorm:"default:NULL;comment:Last Calendar Traffic Reset Day"`
+	CreatedAt      time.Time  `gorm:"<-:create;comment:Creation Time"`
+	UpdatedAt      time.Time  `gorm:"comment:Update Time"`
 }
 
 const (

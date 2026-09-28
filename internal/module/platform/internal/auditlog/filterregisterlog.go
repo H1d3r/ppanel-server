@@ -6,6 +6,7 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 )
@@ -50,21 +51,13 @@ func (l *FilterRegisterLogLogic) FilterRegisterLog(req *dto.FilterRegisterLogReq
 			l.Errorf("[FilterLoginLog] failed to unmarshal content: %v", err.Error())
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt registration log %d: %v", datum.Id, err)
 		}
-		list = append(list, dto.RegisterLog{
-			UserId:           datum.ObjectID,
-			AuthMethod:       item.AuthMethod,
-			Identifier:       item.Identifier,
-			RegisterIP:       item.RegisterIP,
-			UserAgent:        item.UserAgent,
-			Timestamp:        datum.CreatedAt.UnixMilli(),
-			ActorID:          item.ActorID,
-			IPCountryCode:    item.IPCountryCode,
-			IPCountry:        item.IPCountry,
-			IPRegion:         item.IPRegion,
-			IPCity:           item.IPCity,
-			IPASN:            item.IPASN,
-			IPASOrganization: item.IPASOrganization,
-		})
+		list = append(list, withRequestMetadata(&dto.RegisterLog{
+			UserId:     datum.ObjectID,
+			AuthMethod: item.AuthMethod,
+			Identifier: item.Identifier,
+			RegisterIP: item.RegisterIP,
+			Timestamp:  datum.CreatedAt.UnixMilli(),
+		}, requestmeta.Metadata{UserAgent: item.UserAgent, ActorID: item.ActorID, IPMetadata: item.IPMetadata}))
 	}
 
 	return &dto.FilterRegisterLogResponse{

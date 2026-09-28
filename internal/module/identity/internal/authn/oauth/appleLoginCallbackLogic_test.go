@@ -7,6 +7,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -58,45 +59,46 @@ func Test_appleLoginRedirect_preserves_temporary_redirect_when_state_is_invalid(
 	}
 }
 
-func TestAppleLoginCallbackFollowsStoredRedirectOnTheSiteHost(t *testing.T) {
+func newAppleCallback(t *testing.T, fallback string) (*Service, *redis.Client) {
+	t.Helper()
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	if err := client.Set(context.Background(), "apple:state-1", "https://panel.example/callback", 0).Err(); err != nil {
+	return NewService(Deps{Redis: client, Config: func() Config { return Config{SiteHost: fallback} }}), client
+}
+
+// The callback hands the code and state on to the stored redirect without
+// redeeming the state: the sign-in that follows redeems it.
+func TestAppleLoginCallbackFollowsStoredRedirectOnTheSiteHost(t *testing.T) {
+	svc, client := newAppleCallback(t, "https://panel.example")
+	state, err := oauthstate.Issue(context.Background(), client, "apple", "https://panel.example/callback")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	logic := NewAppleLoginCallbackLogic(context.Background(), AppleLoginCallbackDependencies{
-		Redis:            client,
-		FallbackRedirect: "https://panel.example",
-	})
-
-	redirect, err := logic.AppleLoginCallback(&dto.AppleLoginCallbackRequest{State: "state-1", Code: "code-1"})
+	redirect, err := svc.AppleLoginCallback(context.Background(), &dto.AppleLoginCallbackRequest{State: state, Code: "code-1"})
 	if err != nil {
 		t.Fatalf("AppleLoginCallback error = %v", err)
 	}
 	if redirect.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want %d", redirect.StatusCode, http.StatusFound)
 	}
-	if redirect.Location != "https://panel.example/callback?code=code-1&method=apple&state=state-1" {
-		t.Fatalf("location = %q", redirect.Location)
+	if want := "https://panel.example/callback?code=code-1&method=apple&state=" + state; redirect.Location != want {
+		t.Fatalf("location = %q, want %q", redirect.Location, want)
+	}
+	if _, err := oauthstate.Consume(context.Background(), client, "apple", state); err != nil {
+		t.Fatalf("the callback redeemed the state the sign-in needs: %v", err)
 	}
 }
 
 func TestAppleLoginCallbackRejectsStoredRedirectOffTheSiteHost(t *testing.T) {
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	if err := client.Set(context.Background(), "apple:state-1", "https://evil.example/phish", 0).Err(); err != nil {
+	svc, client := newAppleCallback(t, "https://panel.example")
+	state, err := oauthstate.Issue(context.Background(), client, "apple", "https://evil.example/phish")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	logic := NewAppleLoginCallbackLogic(context.Background(), AppleLoginCallbackDependencies{
-		Redis:            client,
-		FallbackRedirect: "https://panel.example",
-	})
-
-	redirect, err := logic.AppleLoginCallback(&dto.AppleLoginCallbackRequest{State: "state-1", Code: "code-1"})
+	redirect, err := svc.AppleLoginCallback(context.Background(), &dto.AppleLoginCallbackRequest{State: state, Code: "code-1"})
 	if err != nil {
 		t.Fatalf("AppleLoginCallback error = %v", err)
 	}
@@ -105,17 +107,10 @@ func TestAppleLoginCallbackRejectsStoredRedirectOffTheSiteHost(t *testing.T) {
 	}
 }
 
-func TestAppleLoginCallbackUsesInjectedStateStoreAndFallbackRedirect(t *testing.T) {
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
+func TestAppleLoginCallbackSendsAnUnknownStateToTheSiteHost(t *testing.T) {
+	svc, _ := newAppleCallback(t, "https://panel.example/fallback")
 
-	logic := NewAppleLoginCallbackLogic(context.Background(), AppleLoginCallbackDependencies{
-		Redis:            client,
-		FallbackRedirect: "https://panel.example/fallback",
-	})
-
-	redirect, err := logic.AppleLoginCallback(&dto.AppleLoginCallbackRequest{State: "missing"})
+	redirect, err := svc.AppleLoginCallback(context.Background(), &dto.AppleLoginCallbackRequest{State: "missing"})
 	if err != nil {
 		t.Fatalf("AppleLoginCallback error = %v", err)
 	}

@@ -26,9 +26,6 @@ func UserRegisterHandler(service identity.Service) app.HandlerFunc {
 			httpx.ParamErrorResult(c, err)
 			return
 		}
-		// get client ip
-		req.IP = c.ClientIP()
-		req.UserAgent = string(c.UserAgent())
 		validateErr := validation.Validate(&req)
 		if validateErr != nil {
 			httpx.ParamErrorResult(c, validateErr)

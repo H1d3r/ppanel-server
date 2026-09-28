@@ -56,10 +56,12 @@ func clearUserAccessCaches(ctx context.Context, deps Deps, userIDs []int64) {
 
 func collectPlanServerIDs(ctx context.Context, deps Deps, nodes, tags string, serverIDs map[int64]struct{}) {
 	queries := make([]*node.FilterNodeParams, 0, 2)
-	if value := strings.TrimSpace(nodes); value != "" {
+	if nodeIDs, err := slicesx.ParseInt64CSV(nodes); err != nil {
+		logger.WithContext(ctx).Errorw("resolve plan nodes while deleting user", logger.Field("error", err.Error()))
+	} else if len(nodeIDs) > 0 {
 		queries = append(queries, &node.FilterNodeParams{
 			Page: 1, Size: 9999,
-			NodeId: slicesx.StringSliceToInt64Slice(strings.Split(value, ",")),
+			NodeId: nodeIDs,
 		})
 	}
 	if value := strings.TrimSpace(tags); value != "" {

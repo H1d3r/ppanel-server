@@ -4,56 +4,82 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/module/platform/entity/system"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-func Site(ctx *Dependencies) {
+// Stored settings categories, as the system table and the admin settings
+// handlers name them.
+const (
+	categorySite       = "site"
+	categoryInvite     = "invite"
+	categoryRegister   = "register"
+	categorySubscribe  = "subscribe"
+	categoryVerify     = "verify"
+	categoryVerifyCode = "verify_code"
+	categoryNode       = "server"
+	categoryCurrency   = "currency"
+)
+
+// readSettings reads one settings category and decodes it into target. A
+// read failure is returned; a stored value that cannot be applied is only
+// logged with its key, because the silent decoder this replaced applied the
+// remaining settings as well.
+func readSettings(category string, read func(context.Context) ([]*system.System, error), target any) error {
+	entries, err := read(context.Background())
+	if err != nil {
+		return wrapf(err, xerr.DatabaseQueryError, "read %s settings", category)
+	}
+	decodeSettings(category, entries, target)
+	return nil
+}
+
+func decodeSettings[T config.SystemConfigEntry](category string, entries []T, target any) {
+	if err := config.DecodeSystemConfig(entries, target); err != nil {
+		logger.Errorw("[Settings] stored settings could not be applied, the affected fields keep their zero value",
+			logger.Field("category", category), logger.Field("error", err.Error()))
+	}
+}
+
+func Site(ctx *Dependencies) error {
 	logger.Debug("initialize site config")
-	configs, err := ctx.Store.System().GetSiteConfig(context.Background())
-	if err != nil {
-		panic(err)
-	}
 	var siteConfig config.SiteConfig
-	config.SystemConfigSliceReflectToStruct(configs, &siteConfig)
+	if err := readSettings(categorySite, ctx.Store.System().GetSiteConfig, &siteConfig); err != nil {
+		return err
+	}
 	ctx.updateConfig(func(current *config.Config) { current.Site = siteConfig })
+	return nil
 }
 
-func Invite(ctx *Dependencies) {
-	// Initialize the system configuration
-	logger.Debug("Register config initialization")
-	configs, err := ctx.Store.System().GetInviteConfig(context.Background())
-	if err != nil {
-		logger.Error("[Init Invite Config] Get Invite Config Error: ", logger.Field("error", err.Error()))
-		return
-	}
+func Invite(ctx *Dependencies) error {
+	logger.Debug("Invite config initialization")
 	var inviteConfig config.InviteConfig
-	config.SystemConfigSliceReflectToStruct(configs, &inviteConfig)
+	if err := readSettings(categoryInvite, ctx.Store.System().GetInviteConfig, &inviteConfig); err != nil {
+		return err
+	}
 	ctx.updateConfig(func(current *config.Config) { current.Invite = inviteConfig })
+	return nil
 }
 
-func Register(ctx *Dependencies) {
+func Register(ctx *Dependencies) error {
 	logger.Debug("Register config initialization")
-	configs, err := ctx.Store.System().GetRegisterConfig(context.Background())
-	if err != nil {
-		logger.Errorf("[Init Register Config] Get Register Config Error: %s", err.Error())
-		return
-	}
 	var registerConfig config.RegisterConfig
-	config.SystemConfigSliceReflectToStruct(configs, &registerConfig)
+	if err := readSettings(categoryRegister, ctx.Store.System().GetRegisterConfig, &registerConfig); err != nil {
+		return err
+	}
 	ctx.updateConfig(func(current *config.Config) { current.Register = registerConfig })
+	return nil
 }
 
-func Subscribe(svc *Dependencies) {
+func Subscribe(svc *Dependencies) error {
 	logger.Debug("Subscribe config initialization")
-	configs, err := svc.Store.System().GetSubscribeConfig(context.Background())
-	if err != nil {
-		logger.Error("[Init Subscribe Config] Get Subscribe Config Error: ", logger.Field("error", err.Error()))
-		return
-	}
-
 	var subscribeConfig config.SubscribeConfig
-	config.SystemConfigSliceReflectToStruct(configs, &subscribeConfig)
+	if err := readSettings(categorySubscribe, svc.Store.System().GetSubscribeConfig, &subscribeConfig); err != nil {
+		return err
+	}
 	svc.updateConfig(func(current *config.Config) { current.Subscribe = subscribeConfig })
+	return nil
 }
 
 type verifyConfig struct {
@@ -64,15 +90,14 @@ type verifyConfig struct {
 	EnableResetPasswordVerify bool
 }
 
-func Verify(svc *Dependencies) {
+// Verify loads the captcha and the verification-code settings. Both are read
+// before either is published, so a failed read keeps the previous pair.
+func Verify(svc *Dependencies) error {
 	logger.Debug("Verify config initialization")
-	configs, err := svc.Store.System().GetVerifyConfig(context.Background())
-	if err != nil {
-		logger.Error("[Init Verify Config] Get Verify Config Error: ", logger.Field("error", err.Error()))
-		return
-	}
 	var verify verifyConfig
-	config.SystemConfigSliceReflectToStruct(configs, &verify)
+	if err := readSettings(categoryVerify, svc.Store.System().GetVerifyConfig, &verify); err != nil {
+		return err
+	}
 	verifyConfig := config.Verify{
 		TurnstileSiteKey:    verify.TurnstileSiteKey,
 		TurnstileSecret:     verify.TurnstileSecret,
@@ -80,17 +105,18 @@ func Verify(svc *Dependencies) {
 		RegisterVerify:      verify.EnableRegisterVerify,
 		ResetPasswordVerify: verify.EnableResetPasswordVerify,
 	}
-	svc.updateConfig(func(current *config.Config) { current.Verify = verifyConfig })
 
 	logger.Debug("Verify code config initialization")
-
 	cfg, err := svc.Store.System().GetVerifyCodeConfig(context.Background())
 	if err != nil {
-		logger.Errorf("[Init Verify Config] Get Verify Code Config Error: %s", err.Error())
-		return
+		return wrapf(err, xerr.DatabaseQueryError, "read %s settings", categoryVerifyCode)
 	}
 	verifyCode := verifyCodeFromSettings(cfg)
-	svc.updateConfig(func(current *config.Config) { current.VerifyCode = verifyCode })
+	svc.updateConfig(func(current *config.Config) {
+		current.Verify = verifyConfig
+		current.VerifyCode = verifyCode
+	})
+	return nil
 }
 
 // verifyCodeSettings mirrors the stored keys, which carry a VerifyCode prefix
@@ -104,7 +130,7 @@ type verifyCodeSettings struct {
 
 func verifyCodeFromSettings[T config.SystemConfigEntry](settings []T) config.VerifyCode {
 	var stored verifyCodeSettings
-	config.SystemConfigSliceReflectToStruct(settings, &stored)
+	decodeSettings(categoryVerifyCode, settings, &stored)
 	return config.VerifyCode{
 		ExpireTime: stored.VerifyCodeExpireTime,
 		Limit:      stored.VerifyCodeLimit,

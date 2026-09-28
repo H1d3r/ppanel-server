@@ -88,9 +88,11 @@ func TestUpdateSubscribeColumnsWritesOnlyNamedColumns(t *testing.T) {
 			if err := subs.UpdateSubscribeColumns(context.Background(), sub); err != nil || logs.Len() != 0 {
 				t.Fatalf("no columns must be a no-op: err=%v sql=%s", err, logs.String())
 			}
+			// The provider owns a managed row's term; only local controls
+			// (credentials, note, usage, hold) may be written.
 			managed := *sub
 			managed.EntitlementSource = "apple"
-			if err := subs.UpdateSubscribeColumns(context.Background(), &managed, "status"); !errors.Is(err, usersub.ErrProviderManaged) || logs.Len() != 0 {
+			if err := subs.UpdateSubscribeColumns(context.Background(), &managed, "status", "expire_time"); !errors.Is(err, usersub.ErrProviderManaged) || logs.Len() != 0 {
 				t.Fatalf("provider-managed row: err=%v sql=%s", err, logs.String())
 			}
 		})

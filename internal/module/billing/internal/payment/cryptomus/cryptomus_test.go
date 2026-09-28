@@ -1,6 +1,7 @@
 package cryptomus
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -152,7 +153,7 @@ func TestCreateInvoiceSendsSignedRequest(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{MerchantID: "merchant-1", APIKey: apiKey, BaseURL: server.URL})
-	invoice, err := client.CreateInvoice(Order{
+	invoice, err := client.CreateInvoice(context.Background(), Order{
 		OrderNo:   "order-1",
 		Amount:    1050,
 		Currency:  "usd",
@@ -168,10 +169,10 @@ func TestCreateInvoiceSendsSignedRequest(t *testing.T) {
 
 func TestCreateInvoiceRejectsInvalidOrder(t *testing.T) {
 	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key"})
-	if _, err := client.CreateInvoice(Order{OrderNo: "", Amount: 100, Currency: "USD"}); err == nil {
+	if _, err := client.CreateInvoice(context.Background(), Order{OrderNo: "", Amount: 100, Currency: "USD"}); err == nil {
 		t.Fatal("empty order number must be rejected")
 	}
-	if _, err := client.CreateInvoice(Order{OrderNo: "order-1", Amount: 0, Currency: "USD"}); err == nil {
+	if _, err := client.CreateInvoice(context.Background(), Order{OrderNo: "order-1", Amount: 0, Currency: "USD"}); err == nil {
 		t.Fatal("zero amount must be rejected")
 	}
 }
@@ -193,17 +194,17 @@ func TestGetInvoiceLooksUpByUUIDOrOrderNo(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key", BaseURL: server.URL})
-	invoice, err := client.GetInvoice("uuid-1", "")
+	invoice, err := client.GetInvoice(context.Background(), "uuid-1", "")
 	if err != nil {
 		t.Fatalf("GetInvoice by uuid: %v", err)
 	}
 	if !invoice.Paid() {
 		t.Fatal("payment_status=paid must report Paid()")
 	}
-	if _, err := client.GetInvoice("", "order-1"); err != nil {
+	if _, err := client.GetInvoice(context.Background(), "", "order-1"); err != nil {
 		t.Fatalf("GetInvoice by order number: %v", err)
 	}
-	if _, err := client.GetInvoice("", ""); err == nil {
+	if _, err := client.GetInvoice(context.Background(), "", ""); err == nil {
 		t.Fatal("lookup without identifiers must be rejected")
 	}
 }
@@ -216,7 +217,7 @@ func TestGatewayErrorsMapToAPIError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key", BaseURL: server.URL})
-	_, err := client.GetInvoice("uuid-unknown", "")
+	_, err := client.GetInvoice(context.Background(), "uuid-unknown", "")
 	if err == nil {
 		t.Fatal("gateway error must be returned")
 	}
@@ -256,7 +257,7 @@ func TestNonJSONNotFoundIsNotMissingInvoice(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
 	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key", BaseURL: server.URL})
-	_, err := client.GetInvoice("uuid-1", "")
+	_, err := client.GetInvoice(context.Background(), "uuid-1", "")
 	if err == nil || IsNotFound(err) {
 		t.Fatalf("proxy 404 must not mean a missing invoice, got %v", err)
 	}
@@ -278,11 +279,13 @@ func TestInvoiceStatePrefersStatusOverPaymentStatus(t *testing.T) {
 	}
 }
 
-func TestFormatMoney(t *testing.T) {
-	tests := map[int64]string{0: "0.00", 5: "0.05", 100: "1.00", 1050: "10.50", 123456: "1234.56"}
-	for amount, want := range tests {
-		if got := FormatMoney(amount); got != want {
-			t.Fatalf("FormatMoney(%d)=%s, want %s", amount, got, want)
+// Every invoice must ask for exactly the payment expectation of the order.
+func TestInvoiceRequestSendsExactAmounts(t *testing.T) {
+	for amount := int64(1); amount <= 100000; amount++ {
+		request := newInvoiceRequest(Order{OrderNo: "order-1", Amount: amount, Currency: "usd"})
+		sent, err := ParseMoney(request.Amount)
+		if err != nil || sent != amount || request.Currency != "USD" {
+			t.Fatalf("amount %d was sent as %q %s", amount, request.Amount, request.Currency)
 		}
 	}
 }

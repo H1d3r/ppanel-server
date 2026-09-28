@@ -111,6 +111,51 @@ func (SystemLog) TableName() string {
 	return "system_logs"
 }
 
+// The content types below are what system_logs.content stores as JSON. Their
+// Marshal and Unmarshal methods — deliberately not json.Marshaler — encode
+// and decode that stored form, and both run the type's clean method: the
+// request that caused an entry is attacker-influenced, so it is bounded (and,
+// where the type says so, redacted) when stored and again when read, which
+// also covers rows stored before a bound existed. Every type goes through
+// marshalEntry and unmarshalEntry, so none can skip the cleaning.
+
+// cleaner is a content type that cleans itself in place.
+type cleaner[T any] interface {
+	*T
+	clean()
+}
+
+// marshalEntry encodes a cleaned copy of entry.
+func marshalEntry[T any, P cleaner[T]](entry *T) ([]byte, error) {
+	safe := *entry
+	P(&safe).clean()
+	return json.Marshal(&safe)
+}
+
+// unmarshalEntry decodes stored content into entry and cleans it.
+func unmarshalEntry[T any, P cleaner[T]](data []byte, entry *T) error {
+	if err := json.Unmarshal(data, entry); err != nil {
+		return err
+	}
+	P(entry).clean()
+	return nil
+}
+
+// boundedRiskValue retains exact request metadata used by risk analysis while
+// preventing attacker-controlled headers from growing an audit row without
+// bound. The limits match the existing user_device storage contract.
+func boundedRiskValue(value string, maxBytes int) string {
+	return requestmeta.Bound(value, maxBytes)
+}
+
+func sanitizeRequestMetadata(metadata requestmeta.Metadata) requestmeta.Metadata {
+	return requestmeta.Normalize(metadata)
+}
+
+func sanitizeIPMetadata(metadata requestmeta.IPMetadata) requestmeta.IPMetadata {
+	return requestmeta.Normalize(requestmeta.Metadata{IPMetadata: metadata}).IPMetadata
+}
+
 // Message represents a message log entry.
 type Message struct {
 	requestmeta.Metadata
@@ -122,27 +167,13 @@ type Message struct {
 	Status   uint8                  `json:"status"` // 0: Attempt started, 1: Sent, 2: Failed
 }
 
-// Marshal implements the json.Marshaler interface for Message.
-func (m *Message) Marshal() ([]byte, error) {
-	type Alias Message
-	safe := Alias(sanitizeMessage(*m))
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: &safe,
-	})
-}
+// Marshal encodes the entry as stored, redacted.
+func (m *Message) Marshal() ([]byte, error) { return marshalEntry(m) }
 
-// Unmarshal implements the json.Unmarshaler interface for Message.
-func (m *Message) Unmarshal(data []byte) error {
-	type Alias Message
-	aux := (*Alias)(m)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	*m = sanitizeMessage(*m)
-	return nil
-}
+// Unmarshal decodes a stored entry, redacted.
+func (m *Message) Unmarshal(data []byte) error { return unmarshalEntry(data, m) }
+
+func (m *Message) clean() { *m = sanitizeMessage(*m) }
 
 func sanitizeMessage(message Message) Message {
 	message.Metadata = sanitizeRequestMetadata(message.Metadata)
@@ -182,22 +213,14 @@ type Traffic struct {
 	Upload   int64 `json:"upload"`
 }
 
-// Marshal implements the json.Marshaler interface for SubscribeTraffic.
-func (s *Traffic) Marshal() ([]byte, error) {
-	type Alias Traffic
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(s),
-	})
-}
+// Marshal encodes the entry as stored.
+func (s *Traffic) Marshal() ([]byte, error) { return marshalEntry(s) }
 
-// Unmarshal implements the json.Unmarshaler interface for SubscribeTraffic.
-func (s *Traffic) Unmarshal(data []byte) error {
-	type Alias Traffic
-	aux := (*Alias)(s)
-	return json.Unmarshal(data, aux)
-}
+// Unmarshal decodes a stored entry.
+func (s *Traffic) Unmarshal(data []byte) error { return unmarshalEntry(data, s) }
+
+// clean has nothing to bound: the entry records no request.
+func (s *Traffic) clean() {}
 
 // Login represents a login log entry.
 type Login struct {
@@ -210,31 +233,16 @@ type Login struct {
 	ActorID   int64  `json:"actor_id,omitempty"`
 }
 
-// Marshal implements the json.Marshaler interface for Login.
-func (l *Login) Marshal() ([]byte, error) {
-	type Alias Login
-	safe := Alias(*l)
-	safe.LoginIP = boundedRiskValue(safe.LoginIP, 255)
-	safe.UserAgent = boundedRiskValue(safe.UserAgent, 512)
-	safe.IPMetadata = sanitizeIPMetadata(safe.IPMetadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: &safe,
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (l *Login) Marshal() ([]byte, error) { return marshalEntry(l) }
 
-// Unmarshal implements the json.Unmarshaler interface for Login.
-func (l *Login) Unmarshal(data []byte) error {
-	type Alias Login
-	aux := (*Alias)(l)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	l.LoginIP = boundedRiskValue(l.LoginIP, 255)
-	l.UserAgent = boundedRiskValue(l.UserAgent, 512)
+// Unmarshal decodes a stored entry, its request bounded.
+func (l *Login) Unmarshal(data []byte) error { return unmarshalEntry(data, l) }
+
+func (l *Login) clean() {
+	l.LoginIP = boundedRiskValue(l.LoginIP, requestmeta.MaxClientIPBytes)
+	l.UserAgent = boundedRiskValue(l.UserAgent, requestmeta.MaxUserAgentBytes)
 	l.IPMetadata = sanitizeIPMetadata(l.IPMetadata)
-	return nil
 }
 
 // Register represents a registration log entry.
@@ -248,34 +256,19 @@ type Register struct {
 	ActorID    int64  `json:"actor_id,omitempty"`
 }
 
-// Marshal implements the json.Marshaler interface for Register.
-func (r *Register) Marshal() ([]byte, error) {
-	type Alias Register
-	safe := Alias(*r)
-	safe.Identifier = logger.RedactedValue
-	safe.RegisterIP = boundedRiskValue(safe.RegisterIP, 255)
-	safe.UserAgent = boundedRiskValue(safe.UserAgent, 512)
-	safe.IPMetadata = sanitizeIPMetadata(safe.IPMetadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: &safe,
-	})
-}
+// Marshal encodes the entry as stored: the identifier redacted, the request
+// bounded.
+func (r *Register) Marshal() ([]byte, error) { return marshalEntry(r) }
 
-// Unmarshal implements the json.Unmarshaler interface for Register.
+// Unmarshal decodes a stored entry: the identifier redacted, the request
+// bounded.
+func (r *Register) Unmarshal(data []byte) error { return unmarshalEntry(data, r) }
 
-func (r *Register) Unmarshal(data []byte) error {
-	type Alias Register
-	aux := (*Alias)(r)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
+func (r *Register) clean() {
 	r.Identifier = logger.RedactedValue
-	r.RegisterIP = boundedRiskValue(r.RegisterIP, 255)
-	r.UserAgent = boundedRiskValue(r.UserAgent, 512)
+	r.RegisterIP = boundedRiskValue(r.RegisterIP, requestmeta.MaxClientIPBytes)
+	r.UserAgent = boundedRiskValue(r.UserAgent, requestmeta.MaxUserAgentBytes)
 	r.IPMetadata = sanitizeIPMetadata(r.IPMetadata)
-	return nil
 }
 
 // Subscribe represents a subscription log entry.
@@ -288,48 +281,18 @@ type Subscribe struct {
 	ActorID         int64  `json:"actor_id,omitempty"`
 }
 
-// Marshal implements the json.Marshaler interface for Subscribe.
-func (s *Subscribe) Marshal() ([]byte, error) {
-	type Alias Subscribe
-	safe := Alias(*s)
-	safe.Token = logger.RedactedValue
-	safe.UserAgent = boundedRiskValue(safe.UserAgent, 512)
-	safe.ClientIP = boundedRiskValue(safe.ClientIP, 255)
-	safe.IPMetadata = sanitizeIPMetadata(safe.IPMetadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: &safe,
-	})
-}
+// Marshal encodes the entry as stored: the token redacted, the request
+// bounded.
+func (s *Subscribe) Marshal() ([]byte, error) { return marshalEntry(s) }
 
-// Unmarshal implements the json.Unmarshaler interface for Subscribe.
-func (s *Subscribe) Unmarshal(data []byte) error {
-	type Alias Subscribe
-	aux := (*Alias)(s)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
+// Unmarshal decodes a stored entry: the token redacted, the request bounded.
+func (s *Subscribe) Unmarshal(data []byte) error { return unmarshalEntry(data, s) }
+
+func (s *Subscribe) clean() {
 	s.Token = logger.RedactedValue
-	s.UserAgent = boundedRiskValue(s.UserAgent, 512)
-	s.ClientIP = boundedRiskValue(s.ClientIP, 255)
+	s.UserAgent = boundedRiskValue(s.UserAgent, requestmeta.MaxUserAgentBytes)
+	s.ClientIP = boundedRiskValue(s.ClientIP, requestmeta.MaxClientIPBytes)
 	s.IPMetadata = sanitizeIPMetadata(s.IPMetadata)
-	return nil
-}
-
-// boundedRiskValue retains exact request metadata used by risk analysis while
-// preventing attacker-controlled headers from growing an audit row without
-// bound. The limits match the existing user_device storage contract.
-func boundedRiskValue(value string, maxBytes int) string {
-	return requestmeta.Bound(value, maxBytes)
-}
-
-func sanitizeRequestMetadata(metadata requestmeta.Metadata) requestmeta.Metadata {
-	return requestmeta.Normalize(metadata)
-}
-
-func sanitizeIPMetadata(metadata requestmeta.IPMetadata) requestmeta.IPMetadata {
-	return requestmeta.Normalize(requestmeta.Metadata{IPMetadata: metadata}).IPMetadata
 }
 
 // ResetSubscribe represents a reset subscription log entry.
@@ -341,28 +304,13 @@ type ResetSubscribe struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// Marshal implements the json.Marshaler interface for ResetSubscribe.
-func (r *ResetSubscribe) Marshal() ([]byte, error) {
-	type Alias ResetSubscribe
-	safe := *r
-	safe.Metadata = sanitizeRequestMetadata(safe.Metadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(&safe),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (r *ResetSubscribe) Marshal() ([]byte, error) { return marshalEntry(r) }
 
-// Unmarshal implements the json.Unmarshaler interface for ResetSubscribe.
-func (r *ResetSubscribe) Unmarshal(data []byte) error {
-	type Alias ResetSubscribe
-	aux := (*Alias)(r)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	r.Metadata = sanitizeRequestMetadata(r.Metadata)
-	return nil
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (r *ResetSubscribe) Unmarshal(data []byte) error { return unmarshalEntry(data, r) }
+
+func (r *ResetSubscribe) clean() { r.Metadata = sanitizeRequestMetadata(r.Metadata) }
 
 // Balance represents a balance log entry.
 type Balance struct {
@@ -374,28 +322,13 @@ type Balance struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// Marshal implements the json.Marshaler interface for Balance.
-func (b *Balance) Marshal() ([]byte, error) {
-	type Alias Balance
-	safe := *b
-	safe.Metadata = sanitizeRequestMetadata(safe.Metadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(&safe),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (b *Balance) Marshal() ([]byte, error) { return marshalEntry(b) }
 
-// Unmarshal implements the json.Unmarshaler interface for Balance.
-func (b *Balance) Unmarshal(data []byte) error {
-	type Alias Balance
-	aux := (*Alias)(b)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	b.Metadata = sanitizeRequestMetadata(b.Metadata)
-	return nil
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (b *Balance) Unmarshal(data []byte) error { return unmarshalEntry(data, b) }
+
+func (b *Balance) clean() { b.Metadata = sanitizeRequestMetadata(b.Metadata) }
 
 // Commission represents a commission log entry.
 type Commission struct {
@@ -406,28 +339,13 @@ type Commission struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// Marshal implements the json.Marshaler interface for Commission.
-func (c *Commission) Marshal() ([]byte, error) {
-	type Alias Commission
-	safe := *c
-	safe.Metadata = sanitizeRequestMetadata(safe.Metadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(&safe),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (c *Commission) Marshal() ([]byte, error) { return marshalEntry(c) }
 
-// Unmarshal implements the json.Unmarshaler interface for Commission.
-func (c *Commission) Unmarshal(data []byte) error {
-	type Alias Commission
-	aux := (*Alias)(c)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	c.Metadata = sanitizeRequestMetadata(c.Metadata)
-	return nil
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (c *Commission) Unmarshal(data []byte) error { return unmarshalEntry(data, c) }
+
+func (c *Commission) clean() { c.Metadata = sanitizeRequestMetadata(c.Metadata) }
 
 // Gift represents a gift log entry.
 type Gift struct {
@@ -440,6 +358,14 @@ type Gift struct {
 	Remark      string `json:"remark,omitempty"`
 	Timestamp   int64  `json:"timestamp"`
 }
+
+// Marshal encodes the entry as stored, its request bounded.
+func (g *Gift) Marshal() ([]byte, error) { return marshalEntry(g) }
+
+// Unmarshal decodes a stored entry, its request bounded.
+func (g *Gift) Unmarshal(data []byte) error { return unmarshalEntry(data, g) }
+
+func (g *Gift) clean() { g.Metadata = sanitizeRequestMetadata(g.Metadata) }
 
 // OrderCreated represents a durable order-creation audit entry. It contains
 // only the order summary needed for operations and risk analysis; coupon
@@ -462,51 +388,13 @@ type OrderCreated struct {
 	Timestamp      int64  `json:"timestamp"`
 }
 
-// Marshal implements the json.Marshaler interface for OrderCreated.
-func (o *OrderCreated) Marshal() ([]byte, error) {
-	type Alias OrderCreated
-	safe := *o
-	safe.Metadata = sanitizeRequestMetadata(safe.Metadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(&safe),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (o *OrderCreated) Marshal() ([]byte, error) { return marshalEntry(o) }
 
-// Unmarshal implements the json.Unmarshaler interface for OrderCreated.
-func (o *OrderCreated) Unmarshal(data []byte) error {
-	type Alias OrderCreated
-	aux := (*Alias)(o)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	o.Metadata = sanitizeRequestMetadata(o.Metadata)
-	return nil
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (o *OrderCreated) Unmarshal(data []byte) error { return unmarshalEntry(data, o) }
 
-// Marshal implements the json.Marshaler interface for Gift.
-func (g *Gift) Marshal() ([]byte, error) {
-	type Alias Gift
-	safe := *g
-	safe.Metadata = sanitizeRequestMetadata(safe.Metadata)
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(&safe),
-	})
-}
-
-// Unmarshal implements the json.Unmarshaler interface for Gift.
-func (g *Gift) Unmarshal(data []byte) error {
-	type Alias Gift
-	aux := (*Alias)(g)
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-	g.Metadata = sanitizeRequestMetadata(g.Metadata)
-	return nil
-}
+func (o *OrderCreated) clean() { o.Metadata = sanitizeRequestMetadata(o.Metadata) }
 
 // UserTraffic represents a user traffic log entry.
 type UserTraffic struct {
@@ -518,43 +406,37 @@ type UserTraffic struct {
 	Total       int64 `json:"total"`        // Total traffic in bytes (Upload + Download)
 }
 
-// Marshal implements the json.Marshaler interface for UserTraffic.
-func (u *UserTraffic) Marshal() ([]byte, error) {
-	type Alias UserTraffic
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(u),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (u *UserTraffic) Marshal() ([]byte, error) { return marshalEntry(u) }
 
-// Unmarshal implements the json.Unmarshaler interface for UserTraffic.
-func (u *UserTraffic) Unmarshal(data []byte) error {
-	type Alias UserTraffic
-	aux := (*Alias)(u)
-	return json.Unmarshal(data, aux)
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (u *UserTraffic) Unmarshal(data []byte) error { return unmarshalEntry(data, u) }
+
+func (u *UserTraffic) clean() { u.Metadata = sanitizeRequestMetadata(u.Metadata) }
 
 // UserTrafficRank represents a user traffic rank entry.
 type UserTrafficRank struct {
 	Rank map[uint8]UserTraffic `json:"rank"` // Key is rank ,type is UserTraffic
 }
 
-// Marshal implements the json.Marshaler interface for UserTrafficRank.
-func (u *UserTrafficRank) Marshal() ([]byte, error) {
-	type Alias UserTrafficRank
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(u),
-	})
-}
+// Marshal encodes the ranking as stored, each entry's request bounded.
+func (u *UserTrafficRank) Marshal() ([]byte, error) { return marshalEntry(u) }
 
-// Unmarshal implements the json.Unmarshaler interface for UserTrafficRank.
-func (u *UserTrafficRank) Unmarshal(data []byte) error {
-	type Alias UserTrafficRank
-	aux := (*Alias)(u)
-	return json.Unmarshal(data, aux)
+// Unmarshal decodes a stored ranking, each entry's request bounded.
+func (u *UserTrafficRank) Unmarshal(data []byte) error { return unmarshalEntry(data, u) }
+
+// clean bounds every entry. It replaces the map, so the copy marshalEntry
+// cleans never writes through to the caller's ranking.
+func (u *UserTrafficRank) clean() {
+	if u.Rank == nil {
+		return
+	}
+	rank := make(map[uint8]UserTraffic, len(u.Rank))
+	for position, entry := range u.Rank {
+		entry.clean()
+		rank[position] = entry
+	}
+	u.Rank = rank
 }
 
 // ServerTraffic represents a server traffic log entry.
@@ -566,43 +448,36 @@ type ServerTraffic struct {
 	Total    int64 `json:"total"`     // Total traffic in bytes (Upload + Download)
 }
 
-// Marshal implements the json.Marshaler interface for ServerTraffic.
-func (s *ServerTraffic) Marshal() ([]byte, error) {
-	type Alias ServerTraffic
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(s),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (s *ServerTraffic) Marshal() ([]byte, error) { return marshalEntry(s) }
 
-// Unmarshal implements the json.Unmarshaler interface for ServerTraffic.
-func (s *ServerTraffic) Unmarshal(data []byte) error {
-	type Alias ServerTraffic
-	aux := (*Alias)(s)
-	return json.Unmarshal(data, aux)
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (s *ServerTraffic) Unmarshal(data []byte) error { return unmarshalEntry(data, s) }
+
+func (s *ServerTraffic) clean() { s.Metadata = sanitizeRequestMetadata(s.Metadata) }
 
 // ServerTrafficRank represents a server traffic rank entry.
 type ServerTrafficRank struct {
 	Rank map[uint8]ServerTraffic `json:"rank"` // Key is rank ,type is ServerTraffic
 }
 
-// Marshal implements the json.Marshaler interface for ServerTrafficRank.
-func (s *ServerTrafficRank) Marshal() ([]byte, error) {
-	type Alias ServerTrafficRank
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(s),
-	})
-}
+// Marshal encodes the ranking as stored, each entry's request bounded.
+func (s *ServerTrafficRank) Marshal() ([]byte, error) { return marshalEntry(s) }
 
-// Unmarshal implements the json.Unmarshaler interface for ServerTrafficRank.
-func (s *ServerTrafficRank) Unmarshal(data []byte) error {
-	type Alias ServerTrafficRank
-	aux := (*Alias)(s)
-	return json.Unmarshal(data, aux)
+// Unmarshal decodes a stored ranking, each entry's request bounded.
+func (s *ServerTrafficRank) Unmarshal(data []byte) error { return unmarshalEntry(data, s) }
+
+// clean bounds every entry; see UserTrafficRank.clean.
+func (s *ServerTrafficRank) clean() {
+	if s.Rank == nil {
+		return
+	}
+	rank := make(map[uint8]ServerTraffic, len(s.Rank))
+	for position, entry := range s.Rank {
+		entry.clean()
+		rank[position] = entry
+	}
+	s.Rank = rank
 }
 
 // TrafficStat represents a daily traffic statistics log entry.
@@ -613,19 +488,10 @@ type TrafficStat struct {
 	Total    int64 `json:"total"`
 }
 
-// Marshal implements the json.Marshaler interface for TrafficStat.
-func (t *TrafficStat) Marshal() ([]byte, error) {
-	type Alias TrafficStat
-	return json.Marshal(&struct {
-		*Alias
-	}{
-		Alias: (*Alias)(t),
-	})
-}
+// Marshal encodes the entry as stored, its request bounded.
+func (t *TrafficStat) Marshal() ([]byte, error) { return marshalEntry(t) }
 
-// Unmarshal implements the json.Unmarshaler interface for TrafficStat.
-func (t *TrafficStat) Unmarshal(data []byte) error {
-	type Alias TrafficStat
-	aux := (*Alias)(t)
-	return json.Unmarshal(data, aux)
-}
+// Unmarshal decodes a stored entry, its request bounded.
+func (t *TrafficStat) Unmarshal(data []byte) error { return unmarshalEntry(data, t) }
+
+func (t *TrafficStat) clean() { t.Metadata = sanitizeRequestMetadata(t.Metadata) }

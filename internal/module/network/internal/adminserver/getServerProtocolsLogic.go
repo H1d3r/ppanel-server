@@ -3,8 +3,8 @@ package adminserver
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
+	"github.com/perfect-panel/server/internal/module/network/internal/protocolmap"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -33,14 +33,15 @@ func (l *GetServerProtocolsLogic) GetServerProtocols(req *dto.GetServerProtocols
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "[GetServerProtocols] FindOneServer Error: %s", err.Error())
 	}
 
-	// handler protocols
-	var protocols []dto.Protocol
 	dst, err := data.UnmarshalProtocols()
 	if err != nil {
-		l.Errorf("[FilterServerList] UnmarshalProtocols Error: %s", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "[FilterServerList] UnmarshalProtocols Error: %s", err.Error())
+		l.Errorf("[GetServerProtocols] UnmarshalProtocols Error: %s", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "unmarshal protocols of server %d", req.Id)
 	}
-	mapping.DeepCopy(&protocols, dst)
+	protocols, err := protocolmap.ToDTO(dst)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "map protocols of server %d", req.Id)
+	}
 
 	return &dto.GetServerProtocolsResponse{
 		Protocols: protocols,

@@ -6,20 +6,19 @@ package portal
 
 import (
 	"context"
-	"fmt"
-	"time"
-	"uuid"
 
-	token2 "github.com/perfect-panel/server/internal/auth/token"
 	"github.com/perfect-panel/server/internal/auth/usersession"
-	"github.com/perfect-panel/server/internal/config"
-	dto "github.com/perfect-panel/server/internal/module/billing/contract"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
+	"github.com/perfect-panel/server/internal/module/billing/internal/pricing"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // PlanReader is the subdomain's port onto the subscription domain's plan
@@ -42,10 +41,54 @@ type SessionStore interface {
 	usersession.Store
 }
 
-// OrderQueue mirrors the facade's order queue port (deferred close only; the
-// checkout logic keeps its own activation port).
+// GuestCheckoutCache provides the one Redis operation needed to validate
+// legacy guest checkout capabilities.
+type GuestCheckoutCache interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+}
+
+// ExchangeRateCache is shared with the rate refresh task. It is deliberately
+// limited to the checkout use case's read/write needs.
+type ExchangeRateCache interface {
+	Get() float64
+	Set(float64)
+}
+
+// Orders is the order persistence the storefront flows use outside a
+// transaction.
+type Orders interface {
+	FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error)
+	CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error)
+	UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string) (bool, error)
+	SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string) (bool, error)
+	UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error)
+}
+
+// PaymentMethods loads and lists payment methods.
+type PaymentMethods interface {
+	FindOne(ctx context.Context, id int64) (*payment.Payment, error)
+	FindAvailableMethods(ctx context.Context) ([]*payment.Payment, error)
+}
+
+// Transactor runs billing-scoped transactions.
+type Transactor interface {
+	InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error
+}
+
+// UserCache drops a user's cached projection after a wallet movement.
+type UserCache interface {
+	ClearUserCache(ctx context.Context, data ...*user.User) error
+}
+
+// OrderQueue mirrors the facade's order queue port: the deferred close of a
+// new guest order and the activation of a balance-paid order.
 type OrderQueue interface {
+	EnqueueActivation(ctx context.Context, orderNo string) error
 	EnqueueDeferredClose(ctx context.Context, orderNo string) error
+}
+
+type Inventory interface {
+	Reserve(context.Context, string, int64) error
 }
 
 // Config is the static configuration snapshot for the portal flows. ClientIP
@@ -78,21 +121,23 @@ type GuestVerification struct {
 type TurnstileVerifier func(ctx context.Context, secret, token, remoteIP string) (bool, error)
 
 type Deps struct {
-	Orders    repository.OrderRepo
-	Coupons   repository.CouponRepo
-	Payments  repository.PaymentRepo
+	Orders    Orders
+	Coupons   pricing.CouponFinder
+	Payments  PaymentMethods
 	UserAuths GuestAccountReader
 	Plans     PlanReader
-	// Store serves billing persistence and read-only identity lookups.
+	Tx        Transactor
+	UserCache UserCache
 	// Inventory changes belong to the separately injected capability.
-	Store              Store
 	Inventory          Inventory
 	Sessions           SessionStore
 	Queue              OrderQueue
 	GuestCheckoutCache GuestCheckoutCache
-	ActivationQueue    ActivationQueue
 	ExchangeRate       ExchangeRateCache
-	Config             Config
+	// Gateways opens the gateway of an order's payment method; nil selects
+	// the production gateways.
+	Gateways *gateway.Registry
+	Config   Config
 	// VerifyTurnstile overrides the Cloudflare siteverify client; nil selects
 	// the default.
 	VerifyTurnstile TurnstileVerifier
@@ -103,33 +148,23 @@ type Service struct {
 }
 
 func NewService(deps Deps) *Service {
+	if deps.Gateways == nil {
+		deps.Gateways = gateway.NewRegistry()
+	}
 	return &Service{deps: deps}
 }
 
-// Checkout drives the gateway or balance payment for a pending order.
-func (s *Service) Checkout(ctx context.Context, req *dto.CheckoutOrderRequest) (*dto.CheckoutOrderResponse, error) {
-	l := NewPurchaseCheckoutLogic(ctx, CheckoutDependencies{
-		Store:              NewCheckoutStore(s.deps.Store),
-		GuestCheckoutCache: s.deps.GuestCheckoutCache,
-		ActivationQueue:    s.deps.ActivationQueue,
-		Config: CheckoutConfig{
-			Host:              s.deps.Config.Host,
-			SiteHost:          s.siteHost(),
-			SiteName:          s.deps.Config.SiteName(),
-			CurrencyUnit:      s.deps.Config.CurrencyUnit(),
-			CurrencyAccessKey: s.deps.Config.CurrencyAccessKey(),
-		},
-		ExchangeRateCache: s.deps.ExchangeRate,
-	})
-	return l.PurchaseCheckout(req)
-}
+func (s *Service) siteName() string       { return snapshot(s.deps.Config.SiteName) }
+func (s *Service) currencyUnit() string   { return snapshot(s.deps.Config.CurrencyUnit) }
+func (s *Service) currencyAccess() string { return snapshot(s.deps.Config.CurrencyAccessKey) }
+func (s *Service) siteHost() string       { return snapshot(s.deps.Config.SiteHost) }
 
-// siteHost snapshots the configured site host; the accessor is optional.
-func (s *Service) siteHost() string {
-	if s.deps.Config.SiteHost == nil {
+// snapshot reads an optional runtime-mutable setting.
+func snapshot(read func() string) string {
+	if read == nil {
 		return ""
 	}
-	return s.deps.Config.SiteHost()
+	return read()
 }
 
 // IssueSession creates the normal authenticated session issued after a guest
@@ -137,45 +172,24 @@ func (s *Service) siteHost() string {
 // capability-exchange endpoint use this helper so their token and Redis
 // session semantics cannot drift.
 func (s *Service) IssueSession(ctx context.Context, userID int64) (string, error) {
-	sessionId := uuid.NewV7().String()
-	// Sessions carry the user's epoch like every other sign-in, so a password
-	// change or reset ends them too.
-	epoch, err := usersession.AcquireEpoch(ctx, s.deps.Sessions, userID)
+	// The same session every sign-in issues: it carries the user's epoch, so a
+	// password change or reset ends it too.
+	token, err := usersession.Issue(ctx, s.deps.Sessions, s.deps.Config.JwtSecret, s.deps.Config.JwtExpire, usersession.Grant{UserID: userID})
 	if err != nil {
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Session epoch error")
+		return "", xerr.Wrapf(err, xerr.ERROR, "issue session: %v", err)
 	}
-	token, err := token2.NewJwtToken(
-		s.deps.Config.JwtSecret,
-		timeutil.Now().Unix(),
-		s.deps.Config.JwtExpire,
-		token2.WithOption("UserId", userID),
-		token2.WithOption("SessionId", sessionId),
-		token2.WithOption(usersession.EpochClaim, epoch),
-	)
-	if err != nil {
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Token generation error")
-	}
-
-	cacheKey := fmt.Sprintf("%v:%v", config.SessionIdKey, sessionId)
-	if err := s.deps.Sessions.Set(ctx, cacheKey, userID, time.Duration(s.deps.Config.JwtExpire)*time.Second).Err(); err != nil {
-		return "", errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Session storage error")
-	}
-
 	return token, nil
 }
 
-// Store is the persistence capability required by this package. It excludes
-// unrelated repositories and application-wide transactions.
-type Store interface {
-	repository.BillingTransactor
-	Log() repository.LogRepo
-	Order() repository.OrderRepo
-	Payment() repository.PaymentRepo
-	User() repository.UserRepo
-	UserCache() repository.UserCacheRepo
-	Wallet() repository.WalletRepo
-}
-
-type Inventory interface {
-	Reserve(context.Context, string, int64) error
+// findOrder loads an order a request names: a missing order is
+// OrderNotExist, a failed lookup a database error.
+func (s *Service) findOrder(ctx context.Context, orderNo string) (*order.Order, error) {
+	orderInfo, err := s.deps.Orders.FindOneByOrderNo(ctx, orderNo)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", orderNo)
+	}
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", orderNo)
+	}
+	return orderInfo, nil
 }

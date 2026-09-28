@@ -50,25 +50,16 @@ func (l *FilterGiftLogLogic) FilterGiftLog(req *dto.FilterGiftLogRequest) (resp 
 			l.Errorf("[FilterGiftLog] failed to unmarshal content: %v", err.Error())
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt gift log %d: %v", datum.Id, err)
 		}
-		list = append(list, dto.GiftLog{
-			Type:             content.Type,
-			UserId:           datum.ObjectID,
-			OrderNo:          content.OrderNo,
-			SubscribeId:      content.SubscribeId,
-			Amount:           content.Amount,
-			Balance:          content.Balance,
-			Remark:           content.Remark,
-			Timestamp:        content.Timestamp,
-			ClientIP:         content.ClientIP,
-			UserAgent:        content.UserAgent,
-			ActorID:          content.ActorID,
-			IPCountryCode:    content.IPCountryCode,
-			IPCountry:        content.IPCountry,
-			IPRegion:         content.IPRegion,
-			IPCity:           content.IPCity,
-			IPASN:            content.IPASN,
-			IPASOrganization: content.IPASOrganization,
-		})
+		list = append(list, withRequestMetadata(&dto.GiftLog{
+			Type:        content.Type,
+			UserId:      datum.ObjectID,
+			OrderNo:     content.OrderNo,
+			SubscribeId: content.SubscribeId,
+			Amount:      content.Amount,
+			Balance:     content.Balance,
+			Remark:      content.Remark,
+			Timestamp:   content.Timestamp,
+		}, content.Metadata))
 	}
 
 	return &dto.FilterGiftLogResponse{

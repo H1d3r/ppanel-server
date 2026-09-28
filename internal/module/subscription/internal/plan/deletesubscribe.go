@@ -4,6 +4,7 @@ import (
 	"context"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -29,7 +30,7 @@ func (l *DeleteSubscribeLogic) DeleteSubscribe(req *dto.DeleteSubscribeRequest) 
 	// Check if the subscribe exists
 	phase := "check"
 	err := l.deps.Store.InSubscriptionTx(l.ctx, func(store repository.SubscriptionStore) error {
-		total, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(l.ctx, req.Id, 1)
+		total, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(l.ctx, req.Id, int64(usersub.SubscribeStatusActive))
 		if err != nil {
 			return err
 		}

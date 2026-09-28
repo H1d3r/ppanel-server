@@ -97,7 +97,7 @@ func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
 	for received.Load() < pushWorkers*pushesPerWorker && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	conn.Close()
+	_ = conn.Close()
 	<-closed
 	if got := received.Load(); got < pushWorkers*pushesPerWorker {
 		t.Errorf("received %d messages, want at least %d", got, pushWorkers*pushesPerWorker)

@@ -154,7 +154,7 @@ func (w *Worker) Start() error {
 		}
 
 		recipient := recipients[index]
-		audit, err := w.beginMessage(recipient)
+		audit, err := w.beginMessage()
 		if err != nil {
 			// Nothing has been delivered yet, so returning the error is safe and
 			// lets the queue retry without duplicating an email.
@@ -228,7 +228,9 @@ func (w *Worker) restoreRequestMetadata(scopeJSON string) {
 	w.ctx = logger.ContextWithRequestMetadata(w.ctx, metadata)
 }
 
-func (w *Worker) beginMessage(recipient string) (*logEntity.SystemLog, error) {
+// beginMessage records the attempt to send one campaign email. The audit
+// entry names no recipient: addresses stay out of the message log.
+func (w *Worker) beginMessage() (*logEntity.SystemLog, error) {
 	if w.logs == nil {
 		return nil, nil
 	}
@@ -284,7 +286,8 @@ func (w *Worker) send(recipient string, content task.EmailContent) error {
 	case <-w.ctx.Done():
 		return w.ctx.Err()
 	}
-	return w.sender.Send([]string{recipient}, content.Subject, content.Content)
+	// Stopping the worker cancels w.ctx, which ends a delivery in flight.
+	return w.sender.SendContext(w.ctx, []string{recipient}, content.Subject, content.Content)
 }
 
 func (w *Worker) persist(taskInfo *task.Task, scope *task.EmailScope) error {

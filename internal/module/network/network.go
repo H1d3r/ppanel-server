@@ -118,12 +118,9 @@ func New(deps Deps) Service {
 			},
 			Multiplier: deps.Multiplier,
 		}),
-		edge: edge.NewService(edge.Deps{
-			Store: deps.Store,
-			Config: func() edge.Snapshot {
-				return edge.Snapshot{Subscribe: deps.Config().Subscribe}
-			},
-		}),
+		edge: edge.NewService(edge.DepsFrom(deps.Store, func() edge.Snapshot {
+			return edge.Snapshot{Subscribe: deps.Config().Subscribe}
+		})),
 	}
 }
 

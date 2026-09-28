@@ -6,7 +6,9 @@ package verifycode
 import (
 	"context"
 
-	dto "github.com/perfect-panel/server/internal/module/identity/contract"
+	"github.com/hibiken/asynq"
+	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
+	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -26,14 +28,25 @@ type Snapshot struct {
 	SiteName               string
 }
 
+// VerificationIdentityStore is the persistence surface the code flows use
+// to tell registration from security codes.
+type VerificationIdentityStore interface {
+	UserAuth() repository.UserAuthRepo
+}
+
+// VerificationTaskQueue publishes verification-code delivery tasks.
+type VerificationTaskQueue interface {
+	EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+}
+
 // Deps declares the subdomain's dependencies; the identity facade forwards
-// them from the composition root and supplies the register policy from the
+// them from the composition root and supplies the account policy from the
 // authentication subdomain.
 type Deps struct {
 	Store  VerificationIdentityStore
 	Redis  *redis.Client
 	Queue  VerificationTaskQueue
-	Policy VerificationCodePolicy
+	Policy registerpolicy.Policy
 	// Config snapshots the runtime-mutable settings per request.
 	Config func() Snapshot
 }
@@ -46,44 +59,4 @@ type Service struct {
 
 func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
-}
-
-func (s *Service) SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (*dto.SendCodeResponse, error) {
-	cfg := s.deps.Config()
-	return NewSendEmailCodeLogic(ctx, SendEmailCodeDependencies{
-		Store: s.deps.Store,
-		Redis: s.deps.Redis,
-		Queue: s.deps.Queue,
-		Config: EmailCodeConfig{
-			DomainSuffixList:   cfg.DomainSuffixList,
-			EnableDomainSuffix: cfg.EnableDomainSuffix,
-			VerifyCodeInterval: cfg.VerifyCodeInterval,
-			VerifyCodeLimit:    cfg.VerifyCodeLimit,
-			VerifyCodeExpire:   cfg.VerifyCodeExpire,
-			SiteLogo:           cfg.SiteLogo,
-			SiteName:           cfg.SiteName,
-		},
-		Policy: s.deps.Policy,
-	}).SendEmailCode(req)
-}
-
-func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) (*dto.SendCodeResponse, error) {
-	cfg := s.deps.Config()
-	return NewSendSmsCodeLogic(ctx, SendSmsCodeDependencies{
-		Store: s.deps.Store,
-		Redis: s.deps.Redis,
-		Queue: s.deps.Queue,
-		Config: SmsCodeConfig{
-			VerifyCodeInterval: cfg.VerifyCodeInterval,
-			VerifyCodeLimit:    cfg.VerifyCodeLimit,
-			VerifyCodeExpire:   cfg.VerifyCodeExpire,
-			WhitelistEnabled:   cfg.MobileWhitelistEnabled,
-			Whitelist:          cfg.MobileWhitelist,
-		},
-		Policy: s.deps.Policy,
-	}).SendSmsCode(req)
-}
-
-func (s *Service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeRespone, error) {
-	return newCheckVerificationCodeLogic(ctx, s.deps).CheckVerificationCode(req)
 }

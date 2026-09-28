@@ -151,7 +151,7 @@ func (r *activationOrderRepo) FindOneByOrderNoForUpdate(ctx context.Context, ord
 	return r.FindOneByOrderNo(ctx, orderNo)
 }
 
-func (r *activationOrderRepo) SetCommission(_ context.Context, orderNo string, amount int64, _ ...*gorm.DB) error {
+func (r *activationOrderRepo) SetCommission(_ context.Context, orderNo string, amount int64) error {
 	if r.order.OrderNo == orderNo {
 		r.order.Commission = amount
 	}
@@ -162,7 +162,7 @@ func (r *activationOrderRepo) HasCommissionedOrder(context.Context, int64, strin
 	return false, nil
 }
 
-func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo string, from, to uint8, _ ...*gorm.DB) (bool, error) {
+func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo string, from, to uint8) (bool, error) {
 	if to == OrderStatusFinished && r.finalizeFailures > 0 {
 		r.finalizeFailures--
 		return false, errors.New("finalize write unavailable")
@@ -198,13 +198,13 @@ func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*w
 	return &copy, nil
 }
 
-func (r *activationWalletRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
+func (r *activationWalletRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet) error {
 	r.wallet.Balance = data.Balance
 	r.wallet.GiftAmount = data.GiftAmount
 	return nil
 }
 
-func (r *activationWalletRepo) UpdateCommission(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
+func (r *activationWalletRepo) UpdateCommission(_ context.Context, data *walletEntity.Wallet) error {
 	r.wallet.Commission = data.Commission
 	return nil
 }
@@ -287,7 +287,7 @@ func (r *activationUserRepo) FindOneForUpdate(_ context.Context, id int64) (*use
 	return r.FindOne(context.Background(), id)
 }
 
-func (r *activationUserRepo) UpdateColumns(_ context.Context, _ int64, _ map[string]interface{}, _ ...*gorm.DB) error {
+func (r *activationUserRepo) UpdateColumns(_ context.Context, _ int64, _ map[string]interface{}) error {
 	return nil
 }
 
@@ -322,7 +322,7 @@ func (r *activationUserRepo) FindOneSubscribeByTokenForUpdate(ctx context.Contex
 	return r.FindOneSubscribeByToken(ctx, token)
 }
 
-func (r *activationUserRepo) UpdateSubscribe(_ context.Context, data *usersub.Subscribe, _ ...*gorm.DB) error {
+func (r *activationUserRepo) UpdateSubscribeColumns(_ context.Context, data *usersub.Subscribe, _ ...string) error {
 	copy := *data
 	r.subscription = &copy
 	return nil

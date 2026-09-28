@@ -29,7 +29,7 @@ type TelegramRedisStore interface {
 
 // TelegramAdminHandler handles administrator Telegram commands.
 type TelegramAdminHandler interface {
-	Handle(msg *models.Message)
+	Handle(ctx context.Context, msg *models.Message)
 }
 
 // TelegramRelayLimiter caps how fast one chat may relay support messages
@@ -41,24 +41,23 @@ type TelegramRelayLimiter interface {
 	Allow(ctx context.Context, chatID int64) (allowed, shouldNotify bool)
 }
 
-// TelegramLogicDependencies explicitly declares the collaborators used by
-// update routing: user command dispatch and account binding in the private
-// chat, and the group-side relays. The group fields may be left zero, which
-// turns every group feature off.
-type TelegramLogicDependencies struct {
-	Messenger TelegramMessenger
-	Sessions  TelegramSessionStore
-	UserAuth  repository.UserAuthRepo
-	UserCache repository.UserCacheRepo
-	Admin     TelegramAdminHandler
+// BotDependencies explicitly declares the collaborators used by update
+// routing: user commands and account binding in the private chat, and the
+// group-side relays. The group fields may be left zero, which turns every
+// group feature off.
+type BotDependencies struct {
+	Messenger     TelegramMessenger
+	Sessions      TelegramSessionStore
+	Accounts      Accounts
+	Subscriptions Subscriptions
+	Admin         TelegramAdminHandler
 
 	// GroupChatID returns the validated admin group; zero disables group
 	// routing. Read per call because re-initialisation may change it.
 	GroupChatID func() int64
 	Topics      repository.TelegramTopicRepo
 	TopicClient TelegramTopicClient
-	Tickets     repository.TicketRepo
-	Users       repository.UserRepo
+	Tickets     Tickets
 	Limiter     TelegramRelayLimiter
 }
 

@@ -85,10 +85,6 @@ func (s *Service) GetInviteConfig(ctx context.Context) (*dto.InviteConfig, error
 	return newGetInviteConfigLogic(ctx, s.deps).GetInviteConfig()
 }
 
-func (s *Service) GetNodeConfig(ctx context.Context) (*dto.NodeConfig, error) {
-	return newGetNodeConfigLogic(ctx, s.deps).GetNodeConfig()
-}
-
 func (s *Service) GetNodeMultiplier(ctx context.Context) (*dto.GetNodeMultiplierResponse, error) {
 	return newGetNodeMultiplierLogic(ctx, s.deps).GetNodeMultiplier()
 }
@@ -117,10 +113,6 @@ func (s *Service) GetVerifyCodeConfig(ctx context.Context) (*dto.VerifyCodeConfi
 	return newGetVerifyCodeConfigLogic(ctx, s.deps).GetVerifyCodeConfig()
 }
 
-func (s *Service) GetVerifyConfig(ctx context.Context) (*dto.VerifyConfig, error) {
-	return newGetVerifyConfigLogic(ctx, s.deps).GetVerifyConfig()
-}
-
 func (s *Service) PreViewNodeMultiplier(ctx context.Context) (*dto.PreViewNodeMultiplierResponse, error) {
 	return newPreViewNodeMultiplierLogic(ctx, s.deps).PreViewNodeMultiplier()
 }
@@ -131,10 +123,6 @@ func (s *Service) SetNodeMultiplier(ctx context.Context, req *dto.SetNodeMultipl
 
 func (s *Service) SettingTelegramBot(ctx context.Context) error {
 	return newSettingTelegramBotLogic(ctx, s.deps).SettingTelegramBot()
-}
-
-func (s *Service) UpdateCurrencyConfig(ctx context.Context, req *dto.CurrencyConfig) error {
-	return newUpdateCurrencyConfigLogic(ctx, s.deps).UpdateCurrencyConfig(req)
 }
 
 func (s *Service) UpdateInviteConfig(ctx context.Context, req *dto.InviteConfig) error {

@@ -39,7 +39,7 @@ func CloseOrderHandler(service billing.Service) app.HandlerFunc {
 		if errors.Is(err, billing.ErrGatewayUnconfirmed) {
 			// Keep the existing response envelope while exposing a retryable
 			// business conflict instead of an opaque internal-server error.
-			err = xerr.NewErrCodeMsg(409, "PAYMENT_STATUS_UNCONFIRMED")
+			err = xerr.Wrapf(err, xerr.PaymentStatusUnconfirmed, "close order %s", req.OrderNo)
 		}
 		httpx.HttpResult(ctx, nil, err)
 	}

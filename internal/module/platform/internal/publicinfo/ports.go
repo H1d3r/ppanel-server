@@ -1,6 +1,10 @@
 package publicinfo
 
 import (
+	"context"
+	"net"
+
+	"github.com/oschwald/geoip2-golang"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -42,6 +46,16 @@ type Deps struct {
 	Redis *redis.Client
 	// Config snapshots the runtime-mutable public configuration per request.
 	Config func() GlobalConfigSnapshot
+	// GeoIP returns the local GeoIP (City) database the node countries are
+	// looked up in, or nil when none is loaded.
+	GeoIP func() *geoip2.Reader
+	// Resolver looks up node hostnames; nil means net.DefaultResolver.
+	Resolver HostResolver
+}
+
+// HostResolver resolves a hostname; *net.Resolver satisfies it.
+type HostResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
 // Store is the persistence capability required by this package. It excludes

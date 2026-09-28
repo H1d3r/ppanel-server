@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 	"uuid"
 
 	"github.com/perfect-panel/server/internal/app"
@@ -131,22 +130,13 @@ func getServers() *lifecycle.Group {
 	trafficDeps := traffic.Dependencies{
 		Store: ctx.Store,
 		Redis: ctx.Redis,
-		Queue: ctx.Queue,
 		Log:   func() config.Log { return runtimeConfig().Log },
+		// The tasks only flush buckets; reports enter through the node API,
+		// which checks the served subscriptions.
 		Aggregator: network.TrafficAggregatorDeps{
 			Usage: subscription.NewTrafficUsage(ctx.Store),
 			Store: ctx.Store,
 			Redis: ctx.Redis,
-			TrafficReportThreshold: func() int64 {
-				return runtimeConfig().Node.TrafficReportThreshold
-			},
-			Multiplier: func(at time.Time) float32 {
-				manager := ctx.Runtime.NodeMultiplierManager()
-				if manager == nil {
-					return 1
-				}
-				return manager.GetMultiplier(at)
-			},
 		},
 	}
 	queueDeps := task.Dependencies{
@@ -194,8 +184,8 @@ func getServers() *lifecycle.Group {
 		SetRestart:             ctx.Runtime.SetRestart,
 		SetReinitializeHandler: ctx.Runtime.SetReinitialize,
 	}))
-	services.Add(task.NewService(c.Redis, queueDeps))
-	services.Add(scheduler.NewService(c.Redis, c.AppLocation))
+	services.Add(task.NewService(app.QueueRedisOpt(c), queueDeps))
+	services.Add(scheduler.NewService(app.QueueRedisOpt(c), c.AppLocation))
 	return services
 }
 

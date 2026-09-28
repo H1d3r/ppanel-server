@@ -2,156 +2,163 @@ package adminserver
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
+	"github.com/perfect-panel/server/internal/module/network/internal/protocolmap"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
-	"github.com/redis/go-redis/v9"
-	"gorm.io/gorm"
 )
 
-type FilterServerListLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
+// serverListReader is what the server list reads of the network data: the
+// servers of a page and their reported status and online users.
+type serverListReader interface {
+	FilterServerList(ctx context.Context, params *node.FilterParams) (int64, []*node.Server, error)
+	StatusCache(ctx context.Context, serverId int64) (node.Status, error)
+	OnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) (node.OnlineUserSubscribe, error)
 }
 
-// NewFilterServerListLogic Filter Server List
-func newFilterServerListLogic(ctx context.Context, deps Deps) *FilterServerListLogic {
-	return &FilterServerListLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
+// onlineSubscriptionReader reads the subscriptions behind the online users.
+type onlineSubscriptionReader interface {
+	FindSubscribeDetailsByIds(ctx context.Context, ids []int64) ([]*usersub.SubscribeDetails, error)
 }
 
-func (l *FilterServerListLogic) FilterServerList(req *dto.FilterServerListRequest) (resp *dto.FilterServerListResponse, err error) {
-	nodeStore := l.deps.Store.Node()
-	total, data, err := nodeStore.FilterServerList(l.ctx, &node.FilterParams{
+// listedServer is a server of the page with the online IPs its nodes
+// reported, by subscription.
+type listedServer struct {
+	server dto.Server
+	online map[int64][]dto.ServerOnlineIP
+}
+
+// FilterServerList lists a page of servers with their protocols, status and
+// online users. The subscriptions behind every online user of the page are
+// read in one query, not one per user.
+func (s *Service) FilterServerList(ctx context.Context, req *dto.FilterServerListRequest) (*dto.FilterServerListResponse, error) {
+	return listServers(ctx, s.deps.Store.Node(), s.deps.Store.UserSubscription(), req)
+}
+
+func listServers(ctx context.Context, servers serverListReader, subscriptions onlineSubscriptionReader, req *dto.FilterServerListRequest) (*dto.FilterServerListResponse, error) {
+	log := logger.WithContext(ctx)
+	total, data, err := servers.FilterServerList(ctx, &node.FilterParams{
 		Page:   req.Page,
 		Size:   req.Size,
 		Search: req.Search,
 	})
 	if err != nil {
-		l.Errorw("[FilterServerList] Query Database Error: ", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "[FilterServerList] Query Database Error")
+		log.Errorw("[FilterServerList] Query Database Error: ", logger.Field("error", err.Error()))
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "filter servers")
 	}
 
-	list := make([]dto.Server, 0)
-
+	page := make([]listedServer, 0, len(data))
+	var subscriptionIDs []int64
 	for _, datum := range data {
 		var server dto.Server
 		mapping.DeepCopy(&server, datum)
-
-		// handler protocols
-		var protocols []dto.Protocol
-		dst, err := datum.UnmarshalProtocols()
+		stored, err := datum.UnmarshalProtocols()
 		if err != nil {
-			l.Errorf("[FilterServerList] UnmarshalProtocols Error: %s", err.Error())
+			log.Errorw("[FilterServerList] Unmarshal protocols failed", logger.Field("error", err.Error()), logger.Field("server_id", datum.Id))
 			continue
 		}
-		mapping.DeepCopy(&protocols, dst)
-		server.Protocols = protocols
-
-		nodeStatus, err := nodeStore.StatusCache(l.ctx, datum.Id)
+		if server.Protocols, err = protocolmap.ToDTO(stored); err != nil {
+			log.Errorw("[FilterServerList] Map protocols failed", logger.Field("error", err.Error()), logger.Field("server_id", datum.Id))
+			continue
+		}
+		status, err := servers.StatusCache(ctx, datum.Id)
 		if err != nil {
-			if !errors.Is(err, redis.Nil) {
-				l.Errorw("[handlerServerStatus] GetNodeStatus Error: ", logger.Field("error", err.Error()), logger.Field("node_id", datum.Id))
-			}
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetNodeStatus Error")
+			log.Errorw("[FilterServerList] Read server status failed", logger.Field("error", err.Error()), logger.Field("server_id", datum.Id))
+			return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "read status of server %d", datum.Id)
 		}
 		server.Status = dto.ServerStatus{
-			Mem:    nodeStatus.Mem,
-			Cpu:    nodeStatus.Cpu,
-			Disk:   nodeStatus.Disk,
-			Online: l.handlerServerStatus(datum.Id, protocols),
-			Status: l.handlerServerStaus(datum.LastReportedAt),
+			Mem:    status.Mem,
+			Cpu:    status.Cpu,
+			Disk:   status.Disk,
+			Status: reportStatus(datum.LastReportedAt),
 		}
-		list = append(list, server)
+		online := onlineIPs(ctx, servers, datum.Id, server.Protocols)
+		for id := range online {
+			subscriptionIDs = append(subscriptionIDs, id)
+		}
+		page = append(page, listedServer{server: server, online: online})
 	}
 
-	return &dto.FilterServerListResponse{
-		List:  list,
-		Total: total,
-	}, nil
+	users := onlineSubscriptions(ctx, subscriptions, subscriptionIDs)
+	list := make([]dto.Server, 0, len(page))
+	for _, item := range page {
+		item.server.Status.Online = onlineUsers(item.online, users)
+		list = append(list, item.server)
+	}
+	return &dto.FilterServerListResponse{List: list, Total: total}, nil
 }
 
-func (l *FilterServerListLogic) handlerServerStatus(id int64, protocols []dto.Protocol) []dto.ServerOnlineUser {
-	result := make([]dto.ServerOnlineUser, 0)
-	nodeStore := l.deps.Store.Node()
-	userSubscriptions := l.deps.Store.UserSubscription()
-
+// onlineIPs gathers the IPs the server's protocols report online, merged by
+// subscription.
+func onlineIPs(ctx context.Context, servers serverListReader, serverID int64, protocols []dto.Protocol) map[int64][]dto.ServerOnlineIP {
+	online := make(map[int64][]dto.ServerOnlineIP)
 	for _, protocol := range protocols {
-		// query online user
-		data, err := nodeStore.OnlineUserSubscribe(l.ctx, id, protocol.Type)
+		data, err := servers.OnlineUserSubscribe(ctx, serverID, protocol.Type)
 		if err != nil {
-			if !errors.Is(err, redis.Nil) {
-				l.Errorw("[handlerServerStatus] OnlineUserSubscribe Error: ", logger.Field("error", err.Error()), logger.Field("node_id", id), logger.Field("protocol", protocol.Type))
-			}
+			logger.WithContext(ctx).Errorw("[FilterServerList] Read online users failed", logger.Field("error", err.Error()), logger.Field("server_id", serverID), logger.Field("protocol", protocol.Type))
 			continue
 		}
-		if len(data) > 0 {
-			for sub, online := range data {
-				var ips []dto.ServerOnlineIP
-				for _, ip := range online {
-					ips = append(ips, dto.ServerOnlineIP{
-						IP:       ip,
-						Protocol: protocol.Type,
-					})
-				}
+		for subscriptionID, ips := range data {
+			for _, ip := range ips {
+				online[subscriptionID] = append(online[subscriptionID], dto.ServerOnlineIP{IP: ip, Protocol: protocol.Type})
+			}
+		}
+	}
+	return online
+}
 
-				result = append(result, dto.ServerOnlineUser{
-					IP:          ips,
-					SubscribeId: sub,
-				})
-			}
+// onlineSubscriptions reads the online users' subscriptions with their plans
+// in one query. Without them the users are left out, as a missing
+// subscription always was.
+func onlineSubscriptions(ctx context.Context, subscriptions onlineSubscriptionReader, ids []int64) map[int64]dto.ServerOnlineUser {
+	users := make(map[int64]dto.ServerOnlineUser, len(ids))
+	if len(ids) == 0 {
+		return users
+	}
+	details, err := subscriptions.FindSubscribeDetailsByIds(ctx, ids)
+	if err != nil {
+		logger.WithContext(ctx).Errorw("[FilterServerList] Read online subscriptions failed", logger.Field("error", err.Error()), logger.Field("count", len(ids)))
+		return users
+	}
+	for _, info := range details {
+		user := dto.ServerOnlineUser{
+			UserId:      info.UserId,
+			SubscribeId: info.Id,
+			Traffic:     info.Download + info.Upload,
+			ExpiredAt:   info.ExpireTime.UnixMilli(),
 		}
-	}
-	// merge same subscribe
-	var mapResult = make(map[int64]dto.ServerOnlineUser)
-	for _, item := range result {
-		if exist, ok := mapResult[item.SubscribeId]; ok {
-			// merge
-			exist.Traffic += item.Traffic
-			exist.IP = append(exist.IP, item.IP...)
-			mapResult[item.SubscribeId] = exist
-		} else {
-			// get subscribe info
-			info, err := userSubscriptions.FindOneUserSubscribe(l.ctx, item.SubscribeId)
-			if err != nil {
-				if !errors.Is(err, gorm.ErrRecordNotFound) {
-					l.Errorw("[handlerServerStatus] FindOneSubscribe Error: ", logger.Field("error", err.Error()), logger.Field("subscribe_id", item.SubscribeId))
-				}
-				continue
-			}
-			data := dto.ServerOnlineUser{
-				IP:          item.IP,
-				UserId:      info.UserId,
-				Subscribe:   "",
-				SubscribeId: item.SubscribeId,
-				Traffic:     info.Download + info.Upload,
-				ExpiredAt:   info.ExpireTime.UnixMilli(),
-			}
-			if info.Subscribe != nil {
-				data.Subscribe = info.Subscribe.Name
-			}
-			// add new
-			mapResult[item.SubscribeId] = data
+		if info.Subscribe != nil {
+			user.Subscribe = info.Subscribe.Name
 		}
+		users[info.Id] = user
 	}
-	// convert map to slice
-	result = make([]dto.ServerOnlineUser, 0, len(mapResult))
-	for _, item := range mapResult {
-		result = append(result, item)
+	return users
+}
+
+// onlineUsers lists a server's online users in subscription order.
+func onlineUsers(online map[int64][]dto.ServerOnlineIP, subscriptions map[int64]dto.ServerOnlineUser) []dto.ServerOnlineUser {
+	result := make([]dto.ServerOnlineUser, 0, len(online))
+	for id, ips := range online {
+		user, ok := subscriptions[id]
+		if !ok {
+			continue
+		}
+		user.IP = ips
+		result = append(result, user)
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].SubscribeId < result[j].SubscribeId })
 	return result
 }
 
-func (l *FilterServerListLogic) handlerServerStaus(last *time.Time) string {
+// reportStatus rates a server by its last report: online within three
+// minutes, a warning up to five, offline after that or without any.
+func reportStatus(last *time.Time) string {
 	if last == nil {
 		return "offline"
 	}
@@ -162,5 +169,4 @@ func (l *FilterServerListLogic) handlerServerStaus(last *time.Time) string {
 		return "warning"
 	}
 	return "online"
-
 }

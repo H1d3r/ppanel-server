@@ -48,33 +48,24 @@ func (l *FilterOrderLogLogic) FilterOrderLog(req *dto.FilterOrderLogRequest) (*d
 			l.Errorf("[FilterOrderLog] failed to unmarshal content: %v", err)
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt order log %d: %v", datum.Id, err)
 		}
-		list = append(list, dto.OrderLog{
-			Id:               datum.Id,
-			UserId:           datum.ObjectID,
-			OrderNo:          content.OrderNo,
-			OrderType:        content.OrderType,
-			Quantity:         content.Quantity,
-			Price:            content.Price,
-			Amount:           content.Amount,
-			GiftAmount:       content.GiftAmount,
-			Discount:         content.Discount,
-			CouponDiscount:   content.CouponDiscount,
-			PaymentId:        content.PaymentID,
-			Method:           content.Method,
-			FeeAmount:        content.FeeAmount,
-			SubscribeId:      content.SubscribeID,
-			Source:           content.Source,
-			Timestamp:        content.Timestamp,
-			ClientIP:         content.ClientIP,
-			UserAgent:        content.UserAgent,
-			ActorID:          content.ActorID,
-			IPCountryCode:    content.IPCountryCode,
-			IPCountry:        content.IPCountry,
-			IPRegion:         content.IPRegion,
-			IPCity:           content.IPCity,
-			IPASN:            content.IPASN,
-			IPASOrganization: content.IPASOrganization,
-		})
+		list = append(list, withRequestMetadata(&dto.OrderLog{
+			Id:             datum.Id,
+			UserId:         datum.ObjectID,
+			OrderNo:        content.OrderNo,
+			OrderType:      content.OrderType,
+			Quantity:       content.Quantity,
+			Price:          content.Price,
+			Amount:         content.Amount,
+			GiftAmount:     content.GiftAmount,
+			Discount:       content.Discount,
+			CouponDiscount: content.CouponDiscount,
+			PaymentId:      content.PaymentID,
+			Method:         content.Method,
+			FeeAmount:      content.FeeAmount,
+			SubscribeId:    content.SubscribeID,
+			Source:         content.Source,
+			Timestamp:      content.Timestamp,
+		}, content.Metadata))
 	}
 
 	return &dto.FilterOrderLogResponse{Total: total, List: list}, nil

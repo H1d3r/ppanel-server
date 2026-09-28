@@ -31,9 +31,6 @@ func TelephoneUserRegisterHandler(service identity.Service) app.HandlerFunc {
 			httpx.ParamErrorResult(c, validateErr)
 			return
 		}
-		// get client ip
-		req.IP = c.ClientIP()
-		req.UserAgent = string(c.UserAgent())
 		resp, err := service.TelephoneUserRegister(ctx, &req)
 		httpx.HttpResult(c, resp, err)
 	}

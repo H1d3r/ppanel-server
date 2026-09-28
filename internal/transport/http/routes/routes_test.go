@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -21,6 +22,13 @@ import (
 )
 
 var routeHandlerName = regexp.MustCompile(`^(.*)\.func[0-9]+$`)
+
+// update rewrites testdata/routes.golden from the registered routes:
+//
+//	go test ./internal/transport/http/routes -run TestRegisterHandlers_routeInventory -update
+var update = flag.Bool("update", false, "rewrite testdata/routes.golden from the registered routes")
+
+const routesGolden = "testdata/routes.golden"
 
 func TestRegisterHandlers_routeInventory(t *testing.T) {
 	// Given
@@ -43,7 +51,12 @@ func TestRegisterHandlers_routeInventory(t *testing.T) {
 	}
 
 	// When
-	expected, err := os.ReadFile("testdata/routes.golden")
+	if *update {
+		if err := os.WriteFile(routesGolden, []byte(actual.String()), 0o644); err != nil {
+			t.Fatalf("update route golden: %v", err)
+		}
+	}
+	expected, err := os.ReadFile(routesGolden)
 	if err != nil {
 		t.Fatalf("read route golden: %v", err)
 	}
@@ -53,7 +66,7 @@ func TestRegisterHandlers_routeInventory(t *testing.T) {
 		t.Fatalf("expected 248 routes, got %d", len(routes))
 	}
 	if !bytes.Equal([]byte(actual.String()), expected) {
-		t.Fatalf("route inventory differs from golden\nactual:\n%s", actual.String())
+		t.Fatalf("route inventory differs from %s (rerun with -update to accept the change)\nactual:\n%s", routesGolden, actual.String())
 	}
 }
 

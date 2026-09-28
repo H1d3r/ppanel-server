@@ -30,7 +30,6 @@ func newSubscriptionModule(store repository.Store, srv *Application) subscriptio
 				srv.DeviceManager.Broadcast(devicesocket.SubscribeUpdate)
 			}
 		},
-		Host: srv.Runtime.Config().Host,
 		IsTrialPlan: func(planID int64) bool {
 			current := srv.Runtime.Config().Register
 			return current.EnableTrial && current.TrialSubscribe == planID
@@ -81,16 +80,16 @@ type lifecycleNotifier struct {
 func (n lifecycleNotifier) enqueue(ctx context.Context, payload taskqueue.SendEmailPayload, userEmail string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		logger.Errorw("[CheckSubscription] Marshal payload failed", logger.Field("error", err.Error()))
+		logger.WithContext(ctx).Errorw("[CheckSubscription] Marshal payload failed", logger.Field("error", err.Error()))
 		return
 	}
 	task := asynq.NewTask(taskqueue.ForthwithSendEmail, body)
 	info, err := n.srv.Queue.EnqueueContext(ctx, task, asynq.MaxRetry(3))
 	if err != nil {
-		logger.Errorw("[CheckSubscription] Enqueue task failed", logger.Field("error", err.Error()), logger.Field("payload", string(body)))
+		logger.WithContext(ctx).Errorw("[CheckSubscription] Enqueue task failed", logger.Field("error", err.Error()), logger.Field("payload", string(body)))
 		return
 	}
-	logger.Infow("[CheckSubscription] Send email success",
+	logger.WithContext(ctx).Infow("[CheckSubscription] Send email success",
 		logger.Field("taskID", info.ID), logger.Field("Email", userEmail))
 }
 
@@ -138,11 +137,11 @@ func (n lifecycleNotifier) NotifySubscriptionExpiring(ctx context.Context, userI
 		"RenewalAmount": fmt.Sprintf("%.2f", float64(renewalAmount)/100),
 	})
 	if err != nil {
-		logger.Errorw("[RemindExpiring] Render template failed", logger.Field("error", err.Error()))
+		logger.WithContext(ctx).Errorw("[RemindExpiring] Render template failed", logger.Field("error", err.Error()))
 		return
 	}
 	if err := n.srv.Notification.NotifyTelegramUser(ctx, userID, text); err != nil {
-		logger.Infow("[RemindExpiring] Telegram notice skipped",
+		logger.WithContext(ctx).Infow("[RemindExpiring] Telegram notice skipped",
 			logger.Field("user_id", userID),
 			logger.Field("reason", err.Error()),
 		)

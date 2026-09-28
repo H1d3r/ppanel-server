@@ -14,28 +14,19 @@ const (
 	unsupported
 )
 
-var platformNames = map[string]Platform{
+var platforms = integration.NewPlatforms(unsupported, map[string]Platform{
 	"AlibabaCloud": AlibabaCloud,
 	"smsbao":       Smsbao,
 	"abosend":      Abosend,
 	"twilio":       Twilio,
-	"unsupported":  unsupported,
-}
+})
 
 func (p Platform) String() string {
-	for k, v := range platformNames {
-		if v == p {
-			return k
-		}
-	}
-	return "unsupported"
+	return platforms.Name(p)
 }
 
 func parsePlatform(s string) Platform {
-	if p, ok := platformNames[s]; ok {
-		return p
-	}
-	return unsupported
+	return platforms.Parse(s)
 }
 
 func GetSupportedPlatforms() []integration.Info {

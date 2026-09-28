@@ -28,7 +28,7 @@ func newWithdrawalAdminLogic(ctx context.Context, deps Deps) *WithdrawalAdminLog
 func (l *WithdrawalAdminLogic) GetWithdrawalList(req *dto.GetWithdrawalListRequest) (*dto.GetWithdrawalListResponse, error) {
 	data, total, err := l.deps.Withdrawals.QueryWithdrawalList(l.ctx, req.UserId, req.Status, req.Page, req.Size)
 	if err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query withdrawals failed: %v", err)
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "query withdrawals failed")
 	}
 	list := make([]dto.WithdrawalLog, 0, len(data))
 	for _, item := range data {
@@ -52,10 +52,10 @@ func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest
 	return l.deps.Tx.InBillingTx(l.ctx, func(store repository.BillingStore) error {
 		withdrawal, err := store.UserWithdrawal().FindWithdrawalForUpdate(l.ctx, req.Id)
 		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find withdrawal failed: %v", err)
+			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find withdrawal failed")
 		}
 		if withdrawal.Status != walletEntity.WithdrawalStatusPending {
-			return errors.Wrap(xerr.NewErrCodeMsg(409, "WITHDRAWAL_ALREADY_REVIEWED"), "withdrawal is no longer pending")
+			return errors.Wrap(xerr.NewErrCode(xerr.WithdrawalAlreadyReviewed), "withdrawal is no longer pending")
 		}
 
 		if req.Status == walletEntity.WithdrawalStatusRejected {
@@ -68,7 +68,7 @@ func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest
 			}
 			account.Commission += withdrawal.Amount
 			if err := store.Wallet().UpdateCommission(l.ctx, account); err != nil {
-				return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "refund withdrawal commission failed: %v", err)
+				return xerr.Wrapf(err, xerr.DatabaseUpdateError, "refund withdrawal commission failed")
 			}
 			entry := log.Commission{Type: log.CommissionTypeWithdraw, Amount: withdrawal.Amount, Timestamp: timeutil.Now().UnixMilli()}
 			content, err := entry.Marshal()
@@ -79,7 +79,7 @@ func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest
 				Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format("2006-01-02"),
 				ObjectID: withdrawal.UserId, Content: string(content), CreatedAt: timeutil.Now(),
 			}); err != nil {
-				return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "record withdrawal refund failed: %v", err)
+				return xerr.Wrapf(err, xerr.DatabaseInsertError, "record withdrawal refund failed")
 			}
 		}
 
@@ -87,10 +87,10 @@ func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest
 			l.ctx, withdrawal.Id, walletEntity.WithdrawalStatusPending, req.Status, reason,
 		)
 		if err != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update withdrawal failed: %v", err)
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update withdrawal failed")
 		}
 		if !updated {
-			return errors.Wrap(xerr.NewErrCodeMsg(409, "WITHDRAWAL_ALREADY_REVIEWED"), "withdrawal changed concurrently")
+			return errors.Wrap(xerr.NewErrCode(xerr.WithdrawalAlreadyReviewed), "withdrawal changed concurrently")
 		}
 		return nil
 	})

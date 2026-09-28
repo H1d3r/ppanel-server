@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/storefront"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/sweep"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/trafficreset"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/trial"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
@@ -32,6 +33,11 @@ type Service interface {
 	// soon. It is a daily pass, not part of the minute-by-minute sweep: the
 	// notice is once per expiry and reaching users at a civil hour matters.
 	RemindExpiringSubscriptions(ctx context.Context) error
+	// ResetCalendarTraffic clears the traffic of the subscriptions whose
+	// plan's calendar reset (1st of the month, monthly, yearly) falls on
+	// today, each at most once per day however often a failed run is
+	// repeated.
+	ResetCalendarTraffic(ctx context.Context) error
 	// ProcessQuotaTask executes an admin-scheduled quota grant (time
 	// extension / gift credit) for the task's subscription scope.
 	ProcessQuotaTask(ctx context.Context, taskID int64) error
@@ -100,6 +106,9 @@ type Service interface {
 	ResetUserSubscribeToken(ctx context.Context, req *dto.ResetUserSubscribeTokenRequest) error
 	ResetUserSubscribeTraffic(ctx context.Context, req *dto.ResetUserSubscribeTrafficRequest) error
 	ToggleUserSubscribeStatus(ctx context.Context, req *dto.ToggleUserSubscribeStatusRequest) error
+	// ChangeUserSubscribeStatus stops or resumes a subscription the caller
+	// saw in status from, refusing when the status changed meanwhile.
+	ChangeUserSubscribeStatus(ctx context.Context, id int64, from, to uint8) error
 }
 
 // RequestMeta re-exports the delivery subdomain's transport details.
@@ -120,8 +129,6 @@ type Deps struct {
 	Store    SubscriptionTransactor
 	// NotifyPlanChanged broadcasts a plan update to connected devices.
 	NotifyPlanChanged func()
-	// Host is the site host list (first line is used for node fallbacks).
-	Host string
 	// IsTrialPlan reports whether the plan is the configured trial plan.
 	IsTrialPlan func(planID int64) bool
 
@@ -190,6 +197,10 @@ func New(deps Deps) Service {
 		quota: quotatask.NewService(quotatask.Deps{
 			Store: deps.Operations,
 		}),
+		trafficReset: trafficreset.NewService(trafficreset.Deps{
+			Store: deps.Operations,
+			Plans: deps.Plans,
+		}),
 		sweeper: sweep.NewService(sweep.Deps{
 			UserSubs: deps.UserSubs,
 			Plans:    deps.Plans,
@@ -226,7 +237,7 @@ func New(deps Deps) Service {
 			Cache:       deps.Cache,
 			Logs:        deps.Logs,
 			Inbox:       deps.Inbox,
-			Store:       deps.Operations,
+			Store:       selfsub.NewStore(deps.Operations),
 			SingleModel: deps.SingleModel,
 		}),
 		userSubs: usersub.NewService(usersub.Deps{
@@ -244,23 +255,23 @@ func New(deps Deps) Service {
 			Plans:       deps.Plans,
 			UserSubs:    deps.UserSubs,
 			Nodes:       deps.Nodes,
-			Host:        deps.Host,
 			IsTrialPlan: deps.IsTrialPlan,
 		}),
 	}
 }
 
 type service struct {
-	trials     *trial.Service
-	fulfil     *fulfillment.Service
-	quota      *quotatask.Service
-	sweeper    *sweep.Service
-	apps       *application.Service
-	plans      *plan.Service
-	storefront *storefront.Service
-	delivery   *delivery.Service
-	userSubs   *usersub.Service
-	selfSubs   *selfsub.Service
+	trials       *trial.Service
+	fulfil       *fulfillment.Service
+	quota        *quotatask.Service
+	trafficReset *trafficreset.Service
+	sweeper      *sweep.Service
+	apps         *application.Service
+	plans        *plan.Service
+	storefront   *storefront.Service
+	delivery     *delivery.Service
+	userSubs     *usersub.Service
+	selfSubs     *selfsub.Service
 }
 
 func (s *service) CreateSubscribe(ctx context.Context, req *dto.CreateSubscribeRequest) error {
@@ -383,6 +394,10 @@ func (s *service) ToggleUserSubscribeStatus(ctx context.Context, req *dto.Toggle
 	return s.userSubs.ToggleUserSubscribeStatus(ctx, req)
 }
 
+func (s *service) ChangeUserSubscribeStatus(ctx context.Context, id int64, from, to uint8) error {
+	return s.userSubs.ChangeUserSubscribeStatus(ctx, id, from, to)
+}
+
 func (s *service) QueryUserSubscribe(ctx context.Context) (*dto.QueryUserSubscribeListResponse, error) {
 	return s.selfSubs.QueryUserSubscribe(ctx)
 }
@@ -435,6 +450,10 @@ func (s *service) RemindExpiringSubscriptions(ctx context.Context) error {
 	return s.sweeper.RemindExpiringSubscribes(ctx)
 }
 
+func (s *service) ResetCalendarTraffic(ctx context.Context) error {
+	return s.trafficReset.ResetDue(ctx)
+}
+
 func (s *service) ProcessQuotaTask(ctx context.Context, taskID int64) error {
 	return s.quota.ProcessQuotaTask(ctx, taskID)
 }
@@ -473,9 +492,10 @@ func (s *service) GrantTrial(ctx context.Context, userID int64) error {
 // unrelated repositories and application-wide transactions.
 type Store interface {
 	usersub.Store
-	selfsub.Store
+	selfsub.AppStore
 	sweep.Store
 	trial.Store
 	fulfillment.Store
 	quotatask.Store
+	trafficreset.Store
 }

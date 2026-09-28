@@ -2,8 +2,6 @@ package telegram
 
 import (
 	"context"
-
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,229 +10,22 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/notification/entity/telegramtopic"
 	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
-
-// ───────────────────────── fakes ─────────────────────────
-
-type fakeAdminHandler struct {
-	handled []*models.Message
-}
-
-func (h *fakeAdminHandler) Handle(msg *models.Message) {
-	h.handled = append(h.handled, msg)
-}
-
-type fakeTopicRepo struct {
-	rows   []*telegramtopic.Topic
-	nextID int64
-}
-
-func (r *fakeTopicRepo) Insert(_ context.Context, data *telegramtopic.Topic) error {
-	for _, row := range r.rows {
-		if row.ChatId == data.ChatId && row.Kind == data.Kind && row.RefId == data.RefId {
-			return errors.New("duplicate kind/ref")
-		}
-		if row.ChatId == data.ChatId && row.ThreadId == data.ThreadId {
-			return errors.New("duplicate thread")
-		}
-	}
-	r.nextID++
-	data.Id = r.nextID
-	copied := *data
-	r.rows = append(r.rows, &copied)
-	return nil
-}
-
-func (r *fakeTopicRepo) FindByKindRef(_ context.Context, chatID int64, kind uint8, refID int64) (*telegramtopic.Topic, error) {
-	for _, row := range r.rows {
-		if row.ChatId == chatID && row.Kind == kind && row.RefId == refID {
-			copied := *row
-			return &copied, nil
-		}
-	}
-	return nil, gorm.ErrRecordNotFound
-}
-
-func (r *fakeTopicRepo) FindByThread(_ context.Context, chatID, threadID int64) (*telegramtopic.Topic, error) {
-	for _, row := range r.rows {
-		if row.ChatId == chatID && row.ThreadId == threadID {
-			copied := *row
-			return &copied, nil
-		}
-	}
-	return nil, gorm.ErrRecordNotFound
-}
-
-func (r *fakeTopicRepo) UpdateThread(_ context.Context, id, threadID int64) error {
-	for _, row := range r.rows {
-		if row.Id == id {
-			row.ThreadId = threadID
-			row.Status = telegramtopic.StatusActive
-			return nil
-		}
-	}
-	return gorm.ErrRecordNotFound
-}
-
-func (r *fakeTopicRepo) UpdateStatus(_ context.Context, id int64, status uint8) error {
-	for _, row := range r.rows {
-		if row.Id == id {
-			row.Status = status
-			return nil
-		}
-	}
-	return gorm.ErrRecordNotFound
-}
-
-type forwardedMessage struct {
-	chatID, threadID, fromChatID int64
-	messageID                    int
-}
-
-type copiedMessage struct {
-	toChatID, fromChatID int64
-	messageID            int
-}
-
-type fakeTopicClient struct {
-	nextThread   int64
-	createdNames []string
-	forwards     []forwardedMessage
-	copies       []copiedMessage
-	closed       []int64
-	reopened     []int64
-	deleted      []int64
-	// deadThreads simulates topics deleted inside Telegram; closedThreads
-	// simulates topics closed inside Telegram.
-	deadThreads   map[int64]bool
-	closedThreads map[int64]bool
-}
-
-func (c *fakeTopicClient) ValidateAdminGroup(context.Context, int64) error { return nil }
-
-func (c *fakeTopicClient) CreateTopic(_ context.Context, _ int64, name string) (int64, error) {
-	c.nextThread++
-	c.createdNames = append(c.createdNames, name)
-	return c.nextThread, nil
-}
-
-func (c *fakeTopicClient) DeleteTopic(_ context.Context, _ int64, threadID int64) error {
-	c.deleted = append(c.deleted, threadID)
-	return nil
-}
-
-func (c *fakeTopicClient) CloseTopic(_ context.Context, _ int64, threadID int64) error {
-	c.closed = append(c.closed, threadID)
-	return nil
-}
-
-func (c *fakeTopicClient) ReopenTopic(_ context.Context, _ int64, threadID int64) error {
-	c.reopened = append(c.reopened, threadID)
-	delete(c.closedThreads, threadID)
-	return nil
-}
-
-func (c *fakeTopicClient) ForwardToThread(_ context.Context, chatID, threadID, fromChatID int64, messageID int) error {
-	if c.deadThreads[threadID] {
-		return errors.New("Bad Request: message thread not found")
-	}
-	if c.closedThreads[threadID] {
-		return errors.New("Bad Request: TOPIC_CLOSED")
-	}
-	c.forwards = append(c.forwards, forwardedMessage{chatID, threadID, fromChatID, messageID})
-	return nil
-}
-
-func (c *fakeTopicClient) CopyTo(_ context.Context, toChatID, fromChatID int64, messageID int) error {
-	c.copies = append(c.copies, copiedMessage{toChatID, fromChatID, messageID})
-	return nil
-}
-
-type fakeRoutingAuth struct {
-	repository.UserAuthRepo
-	byOpenID map[string]*user.AuthMethods // authType:openID
-	byUser   map[string]*user.AuthMethods // authType:userID
-}
-
-func (f *fakeRoutingAuth) FindUserAuthMethodByOpenID(_ context.Context, authType, openID string) (*user.AuthMethods, error) {
-	if m, ok := f.byOpenID[authType+":"+openID]; ok {
-		copied := *m
-		return &copied, nil
-	}
-	return nil, gorm.ErrRecordNotFound
-}
-
-func (f *fakeRoutingAuth) FindUserAuthMethodByPlatform(_ context.Context, userID int64, platform string) (*user.AuthMethods, error) {
-	if m, ok := f.byUser[platform+":"+strconv.FormatInt(userID, 10)]; ok {
-		copied := *m
-		return &copied, nil
-	}
-	return nil, gorm.ErrRecordNotFound
-}
-
-func (f *fakeRoutingAuth) FindUserAuthMethodByUserId(_ context.Context, method string, userID int64) (*user.AuthMethods, error) {
-	if m, ok := f.byUser[method+":"+strconv.FormatInt(userID, 10)]; ok {
-		copied := *m
-		return &copied, nil
-	}
-	return nil, gorm.ErrRecordNotFound
-}
-
-type ticketStatusChange struct {
-	id     int64
-	status uint8
-}
-
-type fakeRelayTickets struct {
-	repository.TicketRepo
-	follows  []*ticket.Follow
-	statuses []ticketStatusChange
-}
-
-func (f *fakeRelayTickets) InsertTicketFollow(_ context.Context, data *ticket.Follow) error {
-	copied := *data
-	f.follows = append(f.follows, &copied)
-	return nil
-}
-
-func (f *fakeRelayTickets) UpdateTicketStatus(_ context.Context, id, _ int64, status uint8) error {
-	f.statuses = append(f.statuses, ticketStatusChange{id: id, status: status})
-	return nil
-}
-
-type stubLimiter struct{ allow, notify bool }
-
-func (l stubLimiter) Allow(context.Context, int64) (bool, bool) { return l.allow, l.notify }
-
-type sinkMessenger struct {
-	sent []sentTelegramMessage
-}
-
-func (m *sinkMessenger) Send(chatID, threadID int64, message string) error {
-	m.sent = append(m.sent, sentTelegramMessage{chatID: chatID, threadID: threadID, message: message})
-	return nil
-}
-
-func (m *sinkMessenger) SendMarkdown(chatID, threadID int64, message string) error {
-	return m.Send(chatID, threadID, message)
-}
 
 // ───────────────────────── harness ─────────────────────────
 
 const testGroupID int64 = -1001234
 
 type routingHarness struct {
-	logic     *TelegramLogic
+	bot       *Bot
 	admin     *fakeAdminHandler
-	messenger *sinkMessenger
+	messenger *recordingMessenger
 	topics    *fakeTopicRepo
 	client    *fakeTopicClient
-	auth      *fakeRoutingAuth
-	tickets   *fakeRelayTickets
-	users     *fakeTelegramAdminUsers
+	accounts  *fakeAccounts
+	tickets   *fakeTickets
 }
 
 func newRoutingHarness() *routingHarness {
@@ -243,38 +34,34 @@ func newRoutingHarness() *routingHarness {
 	enabled := true
 	h := &routingHarness{
 		admin:     &fakeAdminHandler{},
-		messenger: &sinkMessenger{},
+		messenger: &recordingMessenger{},
 		topics:    &fakeTopicRepo{},
 		client:    &fakeTopicClient{deadThreads: map[int64]bool{}, closedThreads: map[int64]bool{}},
-		tickets:   &fakeRelayTickets{},
-		auth: &fakeRoutingAuth{
-			byOpenID: map[string]*user.AuthMethods{
-				// chat 1001 is user 7 (a bound customer); sender 500 is user 9 (a bound administrator)
-				"telegram:1001": {UserId: 7, AuthType: "telegram", AuthIdentifier: "1001"},
-				"telegram:500":  {UserId: 9, AuthType: "telegram", AuthIdentifier: "500"},
-			},
-			byUser: map[string]*user.AuthMethods{
-				"email:7":    {UserId: 7, AuthType: "email", AuthIdentifier: "buyer@example.com"},
-				"telegram:7": {UserId: 7, AuthType: "telegram", AuthIdentifier: "1001"},
-			},
-		},
-		users: &fakeTelegramAdminUsers{users: map[int64]*user.User{
-			9: {Id: 9, IsAdmin: &adminFlag, Enable: &enabled},
-			7: {Id: 7, IsAdmin: &notAdmin, Enable: &enabled},
-		}},
+		tickets:   newFakeTickets(&ticket.Ticket{Id: 321, Status: ticket.Pending}),
+		accounts:  newFakeAccounts(),
 	}
-	h.logic = NewTelegramLogic(context.Background(), TelegramLogicDependencies{
+	// chat 1001 is user 7 (a bound customer); sender 500 is user 9 (a bound
+	// administrator)
+	h.accounts.addBinding(7, "telegram", "1001")
+	h.accounts.addBinding(7, "email", "buyer@example.com")
+	h.accounts.addBinding(9, "telegram", "500")
+	h.accounts.users[9] = &user.User{Id: 9, IsAdmin: &adminFlag, Enable: &enabled}
+	h.accounts.users[7] = &user.User{Id: 7, IsAdmin: &notAdmin, Enable: &enabled}
+	h.rebuild(stubLimiter{allow: true})
+	return h
+}
+
+func (h *routingHarness) rebuild(limiter TelegramRelayLimiter) {
+	h.bot = NewBot(BotDependencies{
 		Messenger:   h.messenger,
-		UserAuth:    h.auth,
+		Accounts:    h.accounts,
 		Admin:       h.admin,
 		GroupChatID: func() int64 { return testGroupID },
 		Topics:      h.topics,
 		TopicClient: h.client,
 		Tickets:     h.tickets,
-		Users:       h.users,
-		Limiter:     stubLimiter{allow: true},
+		Limiter:     limiter,
 	})
-	return h
 }
 
 func privateMessage(chatID int64, text string) *models.Message {
@@ -310,7 +97,7 @@ func withCommand(msg *models.Message) *models.Message {
 }
 
 func (h *routingHarness) dispatch(msg *models.Message) {
-	h.logic.TelegramLogic(&models.Update{Message: msg})
+	h.bot.HandleUpdate(context.Background(), &models.Update{Message: msg})
 }
 
 // ───────────────────────── routing ─────────────────────────
@@ -405,7 +192,7 @@ func TestSupportRelayReusesExistingTopic(t *testing.T) {
 
 func TestSupportRelayRateLimitRejects(t *testing.T) {
 	h := newRoutingHarness()
-	h.logic.deps.Limiter = stubLimiter{allow: false, notify: true}
+	h.rebuild(stubLimiter{allow: false, notify: true})
 	h.dispatch(privateMessage(1001, "flood"))
 
 	if len(h.client.forwards) != 0 {
@@ -420,7 +207,7 @@ func TestSupportRelayRateLimitRejects(t *testing.T) {
 // flood of incoming messages becomes a flood of outgoing notices.
 func TestSupportRelayRateLimitNotifiesOnlyOnce(t *testing.T) {
 	h := newRoutingHarness()
-	h.logic.deps.Limiter = stubLimiter{allow: false, notify: false}
+	h.rebuild(stubLimiter{allow: false, notify: false})
 	h.dispatch(privateMessage(1001, "flood"))
 
 	if len(h.client.forwards) != 0 || len(h.messenger.sent) != 0 {
@@ -491,15 +278,14 @@ func TestAdminReplyInTicketTopicBecomesFollow(t *testing.T) {
 	h.seedTopic(telegramtopic.KindTicket, 321, 12, telegramtopic.StatusActive)
 	h.dispatch(groupMessage(500, 12, "请重启客户端再试"))
 
-	if len(h.tickets.follows) != 1 {
-		t.Fatalf("follows = %d, want 1", len(h.tickets.follows))
+	// The reply runs the support use case like /rp, but the topic already
+	// shows it, so it is not mirrored back.
+	want := ticketReply{id: 321, from: staffAuthor, content: "请重启客户端再试", inTopic: true}
+	if len(h.tickets.replies) != 1 || h.tickets.replies[0] != want {
+		t.Fatalf("replies = %+v, want %+v", h.tickets.replies, want)
 	}
-	follow := h.tickets.follows[0]
-	if follow.TicketId != 321 || follow.From != "admin" || follow.Content != "请重启客户端再试" {
-		t.Fatalf("follow = %+v, want an admin reply on ticket 321", follow)
-	}
-	if len(h.tickets.statuses) != 1 || h.tickets.statuses[0] != (ticketStatusChange{id: 321, status: ticket.Waiting}) {
-		t.Fatalf("statuses = %+v, want ticket 321 flipped to Waiting", h.tickets.statuses)
+	if got := h.tickets.tickets[321].Status; got != ticket.Waiting {
+		t.Fatalf("status = %d, want ticket 321 flipped to Waiting", got)
 	}
 }
 
@@ -535,8 +321,8 @@ func TestClosingTicketTopicClosesTicket(t *testing.T) {
 	h.seedTopic(telegramtopic.KindTicket, 321, 12, telegramtopic.StatusActive)
 	h.dispatch(topicClosedBy(500, 12)) // 500 is the bound administrator
 
-	if len(h.tickets.statuses) != 1 || h.tickets.statuses[0] != (ticketStatusChange{id: 321, status: ticket.Closed}) {
-		t.Fatalf("statuses = %+v, want ticket 321 closed", h.tickets.statuses)
+	if len(h.tickets.statuses) != 1 || h.tickets.statuses[0] != (ticketStatusChange{id: 321, status: ticket.Closed, inTopic: true}) {
+		t.Fatalf("statuses = %+v, want ticket 321 closed without a mirror back into the topic", h.tickets.statuses)
 	}
 	mapped, err := h.topics.FindByThread(context.Background(), testGroupID, 12)
 	if err != nil || mapped.Status != telegramtopic.StatusClosed {
@@ -607,7 +393,7 @@ func TestInactiveAdminLosesGroupAuthority(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newRoutingHarness()
-			deactivate(h.users.users[9])
+			deactivate(h.accounts.users[9])
 			h.seedTopic(telegramtopic.KindSupport, 7, 11, telegramtopic.StatusActive)
 			h.seedTopic(telegramtopic.KindTicket, 321, 12, telegramtopic.StatusActive)
 
@@ -615,8 +401,8 @@ func TestInactiveAdminLosesGroupAuthority(t *testing.T) {
 			h.dispatch(groupMessage(500, 12, "ticket reply"))
 			h.dispatch(topicClosedBy(500, 12))
 
-			if len(h.client.copies) != 0 || len(h.tickets.follows) != 0 || len(h.tickets.statuses) != 0 {
-				t.Fatalf("copies = %+v, follows = %+v, statuses = %+v, want no effect", h.client.copies, h.tickets.follows, h.tickets.statuses)
+			if len(h.client.copies) != 0 || len(h.tickets.replies) != 0 || len(h.tickets.statuses) != 0 {
+				t.Fatalf("copies = %+v, replies = %+v, statuses = %+v, want no effect", h.client.copies, h.tickets.replies, h.tickets.statuses)
 			}
 			if len(h.messenger.sent) != 3 {
 				t.Fatalf("sent = %+v, want one spoken refusal per action", h.messenger.sent)
@@ -680,7 +466,7 @@ func TestHumanReopeningTicketTopicReopensTicket(t *testing.T) {
 		ForumTopicReopened: &models.ForumTopicReopened{},
 	})
 
-	if len(h.tickets.statuses) != 1 || h.tickets.statuses[0] != (ticketStatusChange{id: 321, status: ticket.Pending}) {
+	if len(h.tickets.statuses) != 1 || h.tickets.statuses[0] != (ticketStatusChange{id: 321, status: ticket.Pending, inTopic: true}) {
 		t.Fatalf("statuses = %+v, want ticket 321 reopened to Pending", h.tickets.statuses)
 	}
 	mapped, err := h.topics.FindByThread(context.Background(), testGroupID, 12)

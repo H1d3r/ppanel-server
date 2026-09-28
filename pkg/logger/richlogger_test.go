@@ -15,6 +15,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+const testlog = "Stay hungry, stay foolish."
+
+var testobj = map[string]any{"foo": "bar"}
+
 func TestTraceLog(t *testing.T) {
 	setRichLoggerTestLevel(t, InfoLevel)
 	w := new(mockWriter)
@@ -273,7 +277,7 @@ func TestLogWithCallerSkip(t *testing.T) {
 		writer.Store(old)
 	}()
 
-	l := WithCallerSkip(1).WithCallerSkip(0)
+	l := new(richLogger).WithCallerSkip(1).WithCallerSkip(0)
 	p := func(v string) {
 		l.Infow(v)
 	}
@@ -283,14 +287,14 @@ func TestLogWithCallerSkip(t *testing.T) {
 	assert.True(t, w.Contains(fmt.Sprintf("%s:%d", file, line+1)))
 
 	w.Reset()
-	l = WithCallerSkip(0).WithCallerSkip(1)
+	l = new(richLogger).WithCallerSkip(0).WithCallerSkip(1)
 	file, line = getFileLine()
 	p(testlog)
 	assert.True(t, w.Contains(fmt.Sprintf("%s:%d", file, line+1)))
 }
 
 func TestLogWithCallerSkipCopy(t *testing.T) {
-	log1 := WithCallerSkip(2)
+	log1 := new(richLogger).WithCallerSkip(2)
 	log2 := log1.WithCallerSkip(3)
 	log3 := log2.WithCallerSkip(-1)
 	assert.Equal(t, 2, log1.(*richLogger).callerSkip)

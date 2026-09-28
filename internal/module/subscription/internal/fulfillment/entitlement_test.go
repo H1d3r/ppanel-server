@@ -15,12 +15,14 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/repo"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/selfsub"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/subtest"
 	adminsub "github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -30,13 +32,17 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// periodTestStore is the fulfillment's subscription store over the test
+// database, with a plan catalogue the tests steer.
 type periodTestStore struct {
-	repository.SubscriptionStore
 	db         *gorm.DB
 	rds        *redis.Client
 	plans      *periodTestPlans
 	failCommit bool
 }
+
+var _ repository.SubscriptionStore = (*periodTestStore)(nil)
+var _ Store = (*periodTestStore)(nil)
 
 func (s *periodTestStore) InSubscriptionTx(ctx context.Context, fn func(repository.SubscriptionStore) error) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -53,32 +59,25 @@ func (s *periodTestStore) Entitlement() repository.EntitlementRepo {
 func (s *periodTestStore) UserSubscription() repository.UserSubscriptionRepo {
 	return repo.NewUserSubscriptionRepo(repository.ModuleConn{DB: s.db, Redis: s.rds}.Conn())
 }
+func (s *periodTestStore) SubscriptionTraffic() repository.SubscriptionTrafficRepo {
+	return repo.NewUserSubscriptionRepo(repository.ModuleConn{DB: s.db, Redis: s.rds}.Conn())
+}
 func (s *periodTestStore) Subscribe() repository.SubscribeRepo { return s.plans }
-func (s *periodTestStore) Inbox() repository.InboxRepo         { return &periodTestInbox{db: s.db} }
+func (s *periodTestStore) Inbox() repository.InboxRepo         { return subtest.NewInbox(s.db) }
+func (s *periodTestStore) Log() repository.LogRepo             { return subtest.NewLogs(s.db) }
 
-type periodTestInbox struct {
-	repository.InboxRepo
-	db *gorm.DB
-}
+// Outbox is not part of the fulfillment.
+func (s *periodTestStore) Outbox() repository.OutboxRepo { return nil }
 
-func (r *periodTestInbox) Find(ctx context.Context, consumer, key string) (*inbox.Record, error) {
-	var row inbox.Record
-	err := r.db.WithContext(ctx).First(&row, "consumer = ? AND event_key = ?", consumer, key).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	return &row, err
-}
-func (r *periodTestInbox) Insert(ctx context.Context, consumer, key, result string) error {
-	return r.db.WithContext(ctx).Create(&inbox.Record{Consumer: consumer, EventKey: key, Result: result}).Error
-}
-
+// periodTestPlans is a plan catalogue the tests steer: every id is a plan
+// with the configured quota, unit and reset cycle. The fulfillment only reads
+// plans and drops their caches; the other operations are unsupported.
 type periodTestPlans struct {
-	repository.SubscribeRepo
 	mu         sync.Mutex
 	cleared    []int64
 	traffic    int64
 	resetCycle int64
+	unitTime   string
 }
 
 func (p *periodTestPlans) FindOne(_ context.Context, id int64) (*subscribe.Subscribe, error) {
@@ -86,7 +85,11 @@ func (p *periodTestPlans) FindOne(_ context.Context, id int64) (*subscribe.Subsc
 	if traffic == 0 {
 		traffic = 100
 	}
-	return &subscribe.Subscribe{Id: id, Name: "monthly", Traffic: traffic, UnitTime: "Month", ResetCycle: p.resetCycle}, nil
+	unitTime := p.unitTime
+	if unitTime == "" {
+		unitTime = "Month"
+	}
+	return &subscribe.Subscribe{Id: id, Name: "monthly", Traffic: traffic, UnitTime: unitTime, ResetCycle: p.resetCycle}, nil
 }
 func (p *periodTestPlans) ClearCache(_ context.Context, ids ...int64) error {
 	p.mu.Lock()
@@ -95,10 +98,56 @@ func (p *periodTestPlans) ClearCache(_ context.Context, ids ...int64) error {
 	return nil
 }
 
+var (
+	_ repository.SubscribeRepo = (*periodTestPlans)(nil)
+
+	errPlanCatalogue = errors.New("not supported by the test plan catalogue")
+)
+
+func (p *periodTestPlans) Insert(context.Context, *subscribe.Subscribe) error {
+	return errPlanCatalogue
+}
+func (p *periodTestPlans) Update(context.Context, *subscribe.Subscribe) error {
+	return errPlanCatalogue
+}
+func (p *periodTestPlans) ReserveInventory(context.Context, int64) (bool, error) {
+	return false, errPlanCatalogue
+}
+func (p *periodTestPlans) RestoreInventory(context.Context, int64) error { return errPlanCatalogue }
+func (p *periodTestPlans) Delete(context.Context, int64) error           { return errPlanCatalogue }
+func (p *periodTestPlans) FilterList(context.Context, *subscribe.FilterParams) (int64, []*subscribe.Subscribe, error) {
+	return 0, nil, errPlanCatalogue
+}
+func (p *periodTestPlans) FindByNodeScope(context.Context, []int64, []string) ([]*subscribe.Subscribe, error) {
+	return nil, errPlanCatalogue
+}
+func (p *periodTestPlans) QuerySubscribeMinSortByIds(context.Context, []int64) (int64, error) {
+	return 0, errPlanCatalogue
+}
+func (p *periodTestPlans) QueryResetCycleSubscribeIds(context.Context, int) ([]int64, error) {
+	return nil, errPlanCatalogue
+}
+func (p *periodTestPlans) UpdateSort(context.Context, []*subscribe.Subscribe) error {
+	return errPlanCatalogue
+}
+func (p *periodTestPlans) QueryGroupList(context.Context) (int64, []*subscribe.Group, error) {
+	return 0, nil, errPlanCatalogue
+}
+func (p *periodTestPlans) CreateGroup(context.Context, *subscribe.Group) error {
+	return errPlanCatalogue
+}
+func (p *periodTestPlans) UpdateGroup(context.Context, *subscribe.Group) error {
+	return errPlanCatalogue
+}
+func (p *periodTestPlans) DeleteGroup(context.Context, int64) error        { return errPlanCatalogue }
+func (p *periodTestPlans) BatchDeleteGroup(context.Context, []int64) error { return errPlanCatalogue }
+
+// periodTestCache fails the cache invalidation while fail is set.
 type periodTestCache struct {
-	repository.UserCacheRepo
 	fail bool
 }
+
+var _ CacheInvalidator = (*periodTestCache)(nil)
 
 func (c *periodTestCache) ClearSubscribeCache(context.Context, ...*usersub.Subscribe) error {
 	if c.fail {
@@ -107,10 +156,12 @@ func (c *periodTestCache) ClearSubscribeCache(context.Context, ...*usersub.Subsc
 	return nil
 }
 
+// periodTestOrders holds the paid orders by id.
 type periodTestOrders struct {
-	repository.OrderRepo
 	rows map[int64]*order.Order
 }
+
+var _ OrderReader = (*periodTestOrders)(nil)
 
 func (r *periodTestOrders) FindOne(_ context.Context, id int64) (*order.Order, error) {
 	row := r.rows[id]
@@ -169,13 +220,13 @@ func newPeriodFixture(t *testing.T) *periodFixture {
 	}
 	if err := db.Exec(fmt.Sprintf(`CREATE TABLE user_subscribe (
  id %s, user_id BIGINT, order_id BIGINT, subscribe_id BIGINT,
- start_time TIMESTAMP, expire_time TIMESTAMP, finished_at TIMESTAMP,
+ start_time TIMESTAMP, expire_time TIMESTAMP, finished_at TIMESTAMP, traffic_reset_at TIMESTAMP,
  traffic BIGINT, download BIGINT DEFAULT 0, upload BIGINT DEFAULT 0,
  token VARCHAR(255) UNIQUE, uuid VARCHAR(255) UNIQUE, status INTEGER,
  note TEXT, entitlement_source VARCHAR(32) NOT NULL DEFAULT '', created_at TIMESTAMP, updated_at TIMESTAMP)`, idType)).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []any{&entitlement.State{}, &entitlement.Period{}, &entitlement.Revision{}, &inbox.Record{}} {
+	for _, model := range []any{&entitlement.State{}, &entitlement.Period{}, &entitlement.Revision{}, &inbox.Record{}, &log.SystemLog{}} {
 		if err := db.AutoMigrate(model); err != nil {
 			t.Fatal(err)
 		}
@@ -611,7 +662,8 @@ func TestProviderLocalManagementAndStaleLifecycleWorkers(t *testing.T) {
 	c.RevokedAt = &revoked
 	f.sync(t, c)
 	traffic := f.store.UserSubscription().(repository.SubscriptionTrafficRepo)
-	if err := traffic.ResetSubscribeTrafficByIds(ctx, []int64{r.UserSubscribeID}); err != nil {
+	now := time.Now()
+	if _, err := traffic.ResetSubscribeTrafficOnce(ctx, []int64{r.UserSubscribeID}, now, now.Truncate(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if sub := f.sub(t, r.UserSubscribeID); sub.Status != 3 {

@@ -2,359 +2,184 @@ package billing_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/module/billing"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
-	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
-	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
-	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
-	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
-	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
-	"gorm.io/gorm"
+	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/internal/billingtest"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/subscription"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-type fakeOrderRepo struct {
-	repository.OrderRepo
-	order        *orderEntity.Order
-	details      *orderEntity.Details
-	pendingCount int64
-	inserted     *orderEntity.Order
-	markedPaid   bool
-	closed       bool
+// facade is the billing module assembled like the application assembles it,
+// over the real repositories.
+type facade struct {
+	billing.Service
+	h     *billingtest.Harness
+	queue *billingtest.Queue
 }
 
-func (f *fakeOrderRepo) FindOneDetailsByOrderNo(_ context.Context, orderNo string) (*orderEntity.Details, error) {
-	if f.details == nil || f.details.OrderNo != orderNo {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *f.details
-	return &copy, nil
-}
-
-func (f *fakeOrderRepo) FindOne(_ context.Context, id int64) (*orderEntity.Order, error) {
-	if f.order == nil || f.order.Id != id {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *f.order
-	return &copy, nil
-}
-
-func (f *fakeOrderRepo) FindOneByOrderNo(_ context.Context, orderNo string) (*orderEntity.Order, error) {
-	if f.order == nil || f.order.OrderNo != orderNo {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *f.order
-	return &copy, nil
-}
-
-func (f *fakeOrderRepo) FindOneByOrderNoForUpdate(_ context.Context, orderNo string) (*orderEntity.Order, error) {
-	if f.order == nil || f.order.OrderNo != orderNo {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *f.order
-	return &copy, nil
-}
-
-func (f *fakeOrderRepo) Insert(_ context.Context, data *orderEntity.Order, _ ...*gorm.DB) error {
-	f.inserted = data
-	return nil
-}
-
-func (f *fakeOrderRepo) Update(_ context.Context, data *orderEntity.Order, _ ...*gorm.DB) error {
-	f.order = data
-	return nil
-}
-
-func (f *fakeOrderRepo) MarkOrderPaid(_ context.Context, orderNo, tradeNo string, _ ...*gorm.DB) (bool, error) {
-	if f.order.OrderNo != orderNo || f.order.Status != 1 {
-		return false, nil
-	}
-	f.order.Status = 2
-	f.order.TradeNo = tradeNo
-	f.markedPaid = true
-	return true, nil
-}
-
-func (f *fakeOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo string, from, to uint8, _ ...*gorm.DB) (bool, error) {
-	if f.order.OrderNo != orderNo || f.order.Status != from {
-		return false, nil
-	}
-	f.order.Status = to
-	f.closed = true
-	return true, nil
-}
-
-func (f *fakeOrderRepo) CountPendingByPaymentID(_ context.Context, _ int64) (int64, error) {
-	return f.pendingCount, nil
-}
-
-type fakePaymentRepo struct {
-	repository.PaymentRepo
-	method  *paymentEntity.Payment
-	deleted []int64
-}
-
-func (f *fakePaymentRepo) FindOne(_ context.Context, id int64) (*paymentEntity.Payment, error) {
-	if f.method == nil || f.method.Id != id {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *f.method
-	return &copy, nil
-}
-
-func (f *fakePaymentRepo) Delete(_ context.Context, id int64, _ ...*gorm.DB) error {
-	f.deleted = append(f.deleted, id)
-	return nil
-}
-
-type fakeBillingTx struct {
-	orders   *fakeOrderRepo
-	payments *fakePaymentRepo
-}
-
-func (f fakeBillingTx) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
-	return fn(billingStoreView{orders: f.orders, payments: f.payments})
-}
-
-// billingStoreView satisfies repository.BillingStore for the fakes.
-type billingStoreView struct {
-	repository.BillingStore
-	orders   *fakeOrderRepo
-	payments *fakePaymentRepo
-	coupons  *fakeReleaseCouponRepo
-	wallets  *fakeWalletRepo
-	logs     *fakeLogRepo
-}
-
-func (v billingStoreView) Order() repository.OrderRepo     { return v.orders }
-func (v billingStoreView) Payment() repository.PaymentRepo { return v.payments }
-func (v billingStoreView) Coupon() repository.CouponRepo   { return v.coupons }
-func (v billingStoreView) Wallet() repository.WalletRepo   { return v.wallets }
-func (v billingStoreView) Log() repository.LogRepo         { return v.logs }
-
-// fakeCloseStore serves the checkout close flow the admin close runs through.
-type fakeCloseStore struct {
-	billing.Store
-	view billingStoreView
-}
-
-func (s fakeCloseStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
-	return fn(s.view)
-}
-
-type fakeReleaseCouponRepo struct {
-	repository.CouponRepo
-	released []string
-}
-
-func (f *fakeReleaseCouponRepo) ReleaseUsage(_ context.Context, code string, _ ...*gorm.DB) error {
-	f.released = append(f.released, code)
-	return nil
-}
-
-type fakeWalletRepo struct {
-	repository.WalletRepo
-	wallet *walletEntity.Wallet
-}
-
-func (f *fakeWalletRepo) FindOneForUpdate(_ context.Context, userID int64) (*walletEntity.Wallet, error) {
-	if f.wallet == nil || f.wallet.UserId != userID {
-		return nil, gorm.ErrRecordNotFound
-	}
-	copy := *f.wallet
-	return &copy, nil
-}
-
-func (f *fakeWalletRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet, _ ...*gorm.DB) error {
-	f.wallet.Balance, f.wallet.GiftAmount = data.Balance, data.GiftAmount
-	return nil
-}
-
-type fakeLogRepo struct {
-	repository.LogRepo
-}
-
-func (fakeLogRepo) Insert(context.Context, *logEntity.SystemLog) error { return nil }
-
-type fakeInventory struct {
-	restored []string
-}
-
-func (f *fakeInventory) Reserve(context.Context, string, int64) error { return nil }
-
-func (f *fakeInventory) Restore(_ context.Context, orderNo string, _ int64) error {
-	f.restored = append(f.restored, orderNo)
-	return nil
-}
-
-type fakeActivationQueue struct {
-	enqueued []string
-}
-
-func (f *fakeActivationQueue) EnqueueActivation(_ context.Context, orderNo string) error {
-	f.enqueued = append(f.enqueued, orderNo)
-	return nil
-}
-
-func (f *fakeActivationQueue) EnqueueDeferredClose(_ context.Context, _ string) error { return nil }
-
-type billingFakes struct {
-	orders   *fakeOrderRepo
-	payments *fakePaymentRepo
-	queue    *fakeActivationQueue
-}
-
-func newBillingService(orders *fakeOrderRepo, payments *fakePaymentRepo) (billing.Service, *billingFakes) {
-	fakes := &billingFakes{orders: orders, payments: payments, queue: &fakeActivationQueue{}}
+func newFacade(t *testing.T) *facade {
+	t.Helper()
+	h := billingtest.New(t)
+	queue := &billingtest.Queue{}
 	svc := billing.New(billing.Deps{
-		Orders:   orders,
-		Payments: payments,
-		Tx:       fakeBillingTx{orders: orders, payments: payments},
-		Store:    fakeCloseStore{view: billingStoreView{orders: orders, payments: payments}},
-		Queue:    fakes.queue,
-		Host:     "panel.example.com",
+		Orders: h.Store.Order(), OrderEvents: h.Store.OrderEvent(), Payments: h.Store.Payment(), Coupons: h.Store.Coupon(),
+		Withdrawals: h.Store.UserWithdrawal(), Plans: h.Store.Subscribe(), UserSubs: h.Store.UserSubscription(),
+		Store: h.Store, Inventory: subscription.NewInventory(h.Store), Tx: h.Store, Queue: queue, Redis: h.Redis,
+		SingleModel: func() bool { return false }, CurrencyUnit: func() string { return "CNY" }, Host: "panel.example.com",
+		Logs: h.Store.Log(), UserCache: h.Store.UserCache(), Affiliates: h.Store.User(), AuthMethods: h.Store.UserAuth(),
+		UserProfiles: h.Store.User(), InvitePolicy: func() (uint8, bool) { return 0, false },
+		PortalPlans: h.Store.Subscribe(), GuestAccounts: h.Store.UserAuth(), Sessions: h.Redis, GuestCheckoutCache: h.Redis,
+		ExchangeRate: billing.NewCurrencyRateCache(0),
+		Portal: billing.PortalConfig{
+			Host: "panel.example.com", CurrencyUnit: func() string { return "CNY" }, JwtSecret: "secret", JwtExpire: 3600,
+		},
 	})
-	return svc, fakes
+	return &facade{Service: svc, h: h, queue: queue}
 }
 
-func newBillingServiceWithCoupons(coupons *fakeCouponRepo) billing.Service {
-	return billing.New(billing.Deps{
-		Orders:   &fakeOrderRepo{},
-		Payments: &fakePaymentRepo{},
-		Coupons:  coupons,
-		Queue:    &fakeActivationQueue{},
-	})
+const epayConfig = `{"pid":"1001","url":"https://pay.example","key":"secret","type":"alipay"}`
+
+// adminContext is an administrator who owns none of the orders.
+var adminContext = user.NewContext(context.Background(), &user.User{Id: 9999})
+
+func assertCode(t *testing.T, err error, want uint32) {
+	t.Helper()
+	if got := xerr.CodeOf(err); err == nil || got != want {
+		t.Fatalf("error = %v (code %d), want code %d", err, got, want)
+	}
 }
 
 func TestUpdateOrderStatusRejectsInvalidTransitions(t *testing.T) {
-	orders := &fakeOrderRepo{order: &orderEntity.Order{Id: 1, OrderNo: "o-1", Status: 1}}
-	svc, fakes := newBillingService(orders, &fakePaymentRepo{})
-
-	for _, req := range []*dto.UpdateOrderStatusRequest{
-		{Id: 1, Status: 5, TradeNo: "t"},               // arbitrary terminal state
-		{Id: 1, Status: 2},                             // paid without trade number
-		{Id: 1, Status: 3, TradeNo: "t"},               // close with payment fields
-		{Id: 1, Status: 3, PaymentId: 9},               // close with payment fields
-		{Id: 1, Status: 1, TradeNo: "t", PaymentId: 0}, // no-op transition
+	f := newFacade(t)
+	o := f.h.Order(&order.Order{OrderNo: "o-1", Status: order.StatusPending})
+	for _, tt := range []struct {
+		req  *dto.UpdateOrderStatusRequest
+		code uint32
+	}{
+		{&dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusFinished, TradeNo: "t"}, xerr.InvalidOrderTransition},
+		{&dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPending, TradeNo: "t"}, xerr.InvalidOrderTransition},
+		{&dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid}, xerr.TradeNoRequired},
+		{&dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed, TradeNo: "t"}, xerr.InvalidOrderCloseRequest},
+		{&dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed, PaymentId: 9}, xerr.InvalidOrderCloseRequest},
+		{&dto.UpdateOrderStatusRequest{Id: o.Id + 100, Status: order.StatusClosed}, xerr.OrderNotExist},
 	} {
-		if err := svc.UpdateOrderStatus(context.Background(), req); err == nil {
-			t.Fatalf("transition %+v must be rejected", req)
-		}
+		assertCode(t, f.UpdateOrderStatus(adminContext, tt.req), tt.code)
 	}
-	if orders.order.Status != 1 || len(fakes.queue.enqueued) != 0 {
-		t.Fatalf("rejected transitions must not mutate state: %+v", orders.order)
+	if f.h.ReloadOrder("o-1").Status != order.StatusPending || len(f.queue.Activations) != 0 {
+		t.Fatal("a rejected transition changed the order")
 	}
 }
 
 func TestUpdateOrderStatusMarksPaidAndEnqueuesActivation(t *testing.T) {
-	orders := &fakeOrderRepo{order: &orderEntity.Order{Id: 1, OrderNo: "o-2", Status: 1}}
-	svc, fakes := newBillingService(orders, &fakePaymentRepo{})
+	f := newFacade(t)
+	o := f.h.Order(&order.Order{OrderNo: "o-2", Status: order.StatusPending})
 
-	if err := svc.UpdateOrderStatus(context.Background(), &dto.UpdateOrderStatusRequest{Id: 1, Status: 2, TradeNo: "trade-1"}); err != nil {
+	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-1"}); err != nil {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
-	if !orders.markedPaid || orders.order.TradeNo != "trade-1" {
-		t.Fatalf("order not marked paid: %+v", orders.order)
+	if paid := f.h.ReloadOrder("o-2"); paid.Status != order.StatusPaid || paid.TradeNo != "trade-1" {
+		t.Fatalf("order = %+v, want paid with the trade number", paid)
 	}
-	if len(fakes.queue.enqueued) != 1 || fakes.queue.enqueued[0] != "o-2" {
-		t.Fatalf("activation not enqueued: %v", fakes.queue.enqueued)
+	if len(f.queue.Activations) != 1 || f.queue.Activations[0] != "o-2" {
+		t.Fatalf("activations = %v", f.queue.Activations)
+	}
+	assertCode(t, f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-2"}), xerr.OrderStatusError)
+}
+
+// Marking an order paid commits the order; a queue that is down only delays
+// the activation, which the paid-order reconciler re-drives.
+func TestUpdateOrderStatusReportsThePaidOrderWhenTheQueueIsDown(t *testing.T) {
+	f := newFacade(t)
+	f.queue.ActivationErr = errors.New("queue unavailable")
+	o := f.h.Order(&order.Order{OrderNo: "o-3", Status: order.StatusPending})
+
+	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-3"}); err != nil {
+		t.Fatalf("UpdateOrderStatus = %v, want the committed outcome", err)
+	}
+	if paid := f.h.ReloadOrder("o-3"); paid.Status != order.StatusPaid {
+		t.Fatalf("order = %+v, want paid", paid)
 	}
 }
 
-func TestUpdateOrderStatusCloseDoesNotEnqueue(t *testing.T) {
-	orders := &fakeOrderRepo{order: &orderEntity.Order{Id: 1, OrderNo: "o-3", Status: 1}}
-	svc, fakes := newBillingService(orders, &fakePaymentRepo{})
-
-	if err := svc.UpdateOrderStatus(context.Background(), &dto.UpdateOrderStatusRequest{Id: 1, Status: 3}); err != nil {
-		t.Fatalf("UpdateOrderStatus: %v", err)
-	}
-	if !orders.closed {
-		t.Fatalf("order not closed: %+v", orders.order)
-	}
-	if len(fakes.queue.enqueued) != 0 {
-		t.Fatal("closing must not enqueue activation")
-	}
-}
-
-// An administrator's close runs the shared close flow. The bare status update
-// it replaced kept the coupon use, the gift deduction and the plan stock.
+// An administrator's close runs the shared close flow: the bare status
+// update it replaced kept the coupon use, the gift deduction and the stock.
 func TestUpdateOrderStatusCloseReleasesReservations(t *testing.T) {
-	orders := &fakeOrderRepo{order: &orderEntity.Order{
-		Id: 1, OrderNo: "o-4", Status: 1, Type: 1, UserId: 7, SubscribeId: 9,
-		GiftAmount: 300, Coupon: "SPRING", CouponReserved: true,
-	}}
-	payments := &fakePaymentRepo{}
-	coupons := &fakeReleaseCouponRepo{}
-	wallets := &fakeWalletRepo{wallet: &walletEntity.Wallet{UserId: 7, GiftAmount: 100}}
-	inventory := &fakeInventory{}
-	svc := billing.New(billing.Deps{
-		Orders:   orders,
-		Payments: payments,
-		Tx:       fakeBillingTx{orders: orders, payments: payments},
-		Store: fakeCloseStore{view: billingStoreView{
-			orders: orders, payments: payments, coupons: coupons, wallets: wallets, logs: &fakeLogRepo{},
-		}},
-		Inventory: inventory,
-		Queue:     &fakeActivationQueue{},
-	})
-	// The administrator is not the order's owner.
-	ctx := context.WithValue(context.Background(), requestctx.CtxKeyUser, &userEntity.User{Id: 99})
+	f := newFacade(t)
+	buyer := f.h.User()
+	f.h.Wallet(buyer.Id, 0, 400)
+	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 3 })
+	method := f.h.Payment("EPay", epayConfig)
+	f.h.Coupon("SPRING", func(c *coupon.Coupon) { c.Count = 5 })
+	resp, err := f.Purchase(billingtest.UserContext(buyer), &dto.PurchaseOrderRequest{SubscribeId: plan.Id, Quantity: 1, Payment: method.Id, Coupon: "SPRING"})
+	if err != nil {
+		t.Fatalf("Purchase: %v", err)
+	}
+	o := f.h.ReloadOrder(resp.OrderNo)
 
-	if err := svc.UpdateOrderStatus(ctx, &dto.UpdateOrderStatusRequest{Id: 1, Status: 3}); err != nil {
+	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}); err != nil {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
-	if orders.order.Status != 3 {
-		t.Fatalf("status = %d, want closed", orders.order.Status)
+	if f.h.ReloadOrder(o.OrderNo).Status != order.StatusClosed || len(f.queue.Activations) != 0 {
+		t.Fatal("the order was not closed")
 	}
-	if len(coupons.released) != 1 || coupons.released[0] != "SPRING" {
-		t.Fatalf("released coupons = %v, want [SPRING]", coupons.released)
+	if f.h.ReloadCoupon("SPRING").UsedCount != 0 || f.h.ReloadWallet(buyer.Id).GiftAmount != 400 || f.h.ReloadPlan(plan.Id).Inventory != 3 {
+		t.Fatal("the close kept the coupon use, gift credit or stock")
 	}
-	if wallets.wallet.GiftAmount != 400 {
-		t.Fatalf("gift amount = %d, want the 300 deduction refunded", wallets.wallet.GiftAmount)
-	}
-	if len(inventory.restored) != 1 || inventory.restored[0] != "o-4" {
-		t.Fatalf("restored inventory = %v, want [o-4]", inventory.restored)
-	}
-
-	if err := svc.UpdateOrderStatus(ctx, &dto.UpdateOrderStatusRequest{Id: 1, Status: 3}); err == nil {
-		t.Fatal("closing an order that is no longer pending must be rejected")
-	}
-	if len(coupons.released) != 1 {
-		t.Fatal("a repeated close must not release the coupon again")
+	assertCode(t, f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}), xerr.OrderStatusError)
+	if f.h.ReloadWallet(buyer.Id).GiftAmount != 400 {
+		t.Fatal("a repeated close refunded the gift credit again")
 	}
 }
 
 func TestDeletePaymentMethodGuardsPendingOrders(t *testing.T) {
-	orders := &fakeOrderRepo{pendingCount: 2}
-	payments := &fakePaymentRepo{method: &paymentEntity.Payment{Id: 5}}
-	svc, _ := newBillingService(orders, payments)
+	f := newFacade(t)
+	method := f.h.Payment("EPay", epayConfig)
+	o := f.h.Order(&order.Order{OrderNo: "o-5", Status: order.StatusPending, PaymentId: method.Id, Method: "EPay"})
 
-	if err := svc.DeletePaymentMethod(context.Background(), &dto.DeletePaymentMethodRequest{Id: 5}); err == nil {
-		t.Fatal("deleting a payment method with pending orders must be rejected")
+	assertCode(t, f.DeletePaymentMethod(adminContext, &dto.DeletePaymentMethodRequest{Id: method.Id}), xerr.PaymentMethodHasPendingOrders)
+	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}); err != nil {
+		t.Fatal(err)
 	}
-	if len(payments.deleted) != 0 {
-		t.Fatal("payment method must not be deleted")
-	}
-
-	orders.pendingCount = 0
-	if err := svc.DeletePaymentMethod(context.Background(), &dto.DeletePaymentMethodRequest{Id: 5}); err != nil {
+	if err := f.DeletePaymentMethod(adminContext, &dto.DeletePaymentMethodRequest{Id: method.Id}); err != nil {
 		t.Fatalf("DeletePaymentMethod: %v", err)
 	}
-	if len(payments.deleted) != 1 {
-		t.Fatal("payment method deletion missing")
+	var remaining int64
+	if err := f.h.DB.Table("payment").Where("id = ?", method.Id).Count(&remaining).Error; err != nil || remaining != 0 {
+		t.Fatalf("payment rows = %d (%v), want the method deleted", remaining, err)
 	}
 }
 
 func TestCreatePaymentMethodValidatesFeeAndPlatform(t *testing.T) {
-	svc, _ := newBillingService(&fakeOrderRepo{}, &fakePaymentRepo{})
+	f := newFacade(t)
+	enabled := true
+	_, err := f.CreatePaymentMethod(adminContext, &dto.CreatePaymentMethodRequest{Name: "n", Platform: "Nope", Config: map[string]any{}, Enable: &enabled})
+	assertCode(t, err, xerr.UnsupportedPaymentPlatform)
+	_, err = f.CreatePaymentMethod(adminContext, &dto.CreatePaymentMethodRequest{
+		Name: "n", Platform: "EPay", FeeMode: 9, Enable: &enabled,
+		Config: map[string]any{"pid": "1001", "url": "https://pay.example", "key": "secret", "type": "alipay"},
+	})
+	assertCode(t, err, xerr.InvalidPaymentFee)
+}
 
-	if _, err := svc.CreatePaymentMethod(context.Background(), &dto.CreatePaymentMethodRequest{Platform: "Nope"}); err == nil {
-		t.Fatal("unsupported platform must be rejected")
+// The facade routes a callback to the gateway of its platform; a platform
+// without a gateway has no callback.
+func TestPaymentCallbackStyles(t *testing.T) {
+	f := newFacade(t)
+	for _, platform := range []string{"EPay", "AlipayF2F", "Stripe", "Cryptomus"} {
+		if _, ok := f.PaymentCallbackStyle(platform); !ok {
+			t.Fatalf("%s has no callback style", platform)
+		}
 	}
-	if _, err := svc.CreatePaymentMethod(context.Background(), &dto.CreatePaymentMethodRequest{Platform: "EPay", FeeMode: 9}); err == nil {
-		t.Fatal("invalid fee mode must be rejected")
+	for _, platform := range []string{"balance", "Unknown", ""} {
+		if _, ok := f.PaymentCallbackStyle(platform); ok {
+			t.Fatalf("%s must not accept callbacks", platform)
+		}
 	}
 }

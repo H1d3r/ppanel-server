@@ -49,10 +49,6 @@ func (s *Service) GetAuthMethodConfig(ctx context.Context, req *dto.GetAuthMetho
 	return newGetAuthMethodConfigLogic(ctx, s.deps).GetAuthMethodConfig(req)
 }
 
-func (s *Service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAuthMethodConfigRequest) (*dto.AuthMethodConfig, error) {
-	return newUpdateAuthMethodConfigLogic(ctx, s.deps).UpdateAuthMethodConfig(req)
-}
-
 func (s *Service) GetEmailPlatform(ctx context.Context) (*dto.AuthPlatformResponse, error) {
 	return newGetEmailPlatformLogic(ctx, s.deps).GetEmailPlatform()
 }

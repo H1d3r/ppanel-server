@@ -2,6 +2,14 @@ package coupon
 
 import "time"
 
+// Coupon types, the values of the Type column.
+const (
+	// TypePercentage coupons take Discount percent of the order amount.
+	TypePercentage uint8 = 1
+	// TypeFixed coupons take Discount minor units off the order amount.
+	TypeFixed uint8 = 2
+)
+
 type Coupon struct {
 	Id         int64     `gorm:"primaryKey"`
 	Name       string    `gorm:"type:varchar(255);not null;default:'';comment:Coupon Name"`

@@ -9,6 +9,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/hibiken/asynq"
+	"github.com/perfect-panel/server/internal/infra/taskqueue"
 	"github.com/robfig/cron/v3"
 )
 
@@ -120,10 +121,45 @@ func TestEnqueueCollapsesReplicaTickAfterSlotCompleted(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	newTestReplica(t, redis, base.Add(1500*time.Millisecond)).enqueue(task, schedule)
-	time.Sleep(1500 * time.Millisecond)
+	// The lagging replica's enqueue collides with the retained task ID, so
+	// nothing is queued that the worker could run a second time.
+	if newTestReplica(t, redis, base.Add(1500*time.Millisecond)).enqueue(task, schedule) {
+		t.Fatal("lagging replica enqueued the completed slot again")
+	}
 	if pending, err := inspector.ListPendingTasks("default"); err != nil || len(pending) != 0 || runs.Load() != 1 {
 		t.Fatalf("lagging replica re-ran the slot: runs=%d pending=%d err=%v", runs.Load(), len(pending), err)
+	}
+}
+
+// Tasks that fail are retried by asynq with the budget their schedule sets:
+// the calendar reset retries (each subscription resets once per day however
+// often it runs), the minute-by-minute sweep leaves the retry to its next
+// tick.
+func TestPeriodicTaskRetryBudgets(t *testing.T) {
+	want := map[string]int{
+		taskqueue.SchedulerResetTraffic:      3,
+		taskqueue.SchedulerCheckSubscription: 0,
+	}
+	for _, task := range periodicTasks {
+		budget, ok := want[task.taskType]
+		if !ok {
+			continue
+		}
+		delete(want, task.taskType)
+		redis := miniredis.RunT(t)
+		replica := newTestReplica(t, redis, time.Date(2026, 9, 27, 0, 30, 0, 0, time.UTC))
+		if !replica.enqueue(task, mustSchedule(t, task.spec)) {
+			t.Fatalf("%s was not enqueued", task.name)
+		}
+		inspector := asynq.NewInspector(asynq.RedisClientOpt{Addr: redis.Addr()})
+		pending, err := inspector.ListPendingTasks("default")
+		_ = inspector.Close()
+		if err != nil || len(pending) != 1 || pending[0].MaxRetry != budget {
+			t.Fatalf("%s: pending %d, err %v, want max retry %d", task.name, len(pending), err, budget)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("periodic tasks missing: %v", want)
 	}
 }
 

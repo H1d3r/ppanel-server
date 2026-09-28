@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 )
 

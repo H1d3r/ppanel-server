@@ -3,10 +3,10 @@ package adminserver
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	"github.com/perfect-panel/server/internal/module/network/internal/geolocation"
+	"github.com/perfect-panel/server/internal/module/network/internal/protocolmap"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -64,8 +64,10 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 		if item.Type == "" {
 			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols type is empty"), "protocols type is empty")
 		}
-		var protocol node.Protocol
-		mapping.DeepCopy(&protocol, item)
+		protocol, err := protocolmap.FromDTO(item)
+		if err != nil {
+			return err
+		}
 		if existing, ok := existingProtocolLookup[normalizedProtocolType(item.Type)]; ok {
 			protocol, err = mergeMissingProtocolFields(protocol, existing, protocolFieldSetAt(req.ProtocolFieldSets, index))
 			if err != nil {
@@ -79,7 +81,7 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "generate reality key error: %v", err)
 		}
 		ensureRealityProtocolDefaults(&protocol)
-		protocol, err := node.NormalizeProtocolForStorage(protocol)
+		protocol, err = node.NormalizeProtocolForStorage(protocol)
 		if err != nil {
 			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, err.Error()), "protocols normalize error: %v", err)
 		}

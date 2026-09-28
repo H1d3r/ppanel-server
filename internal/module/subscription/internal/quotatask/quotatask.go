@@ -28,16 +28,6 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
-const (
-	UnitTimeNoLimit = "NoLimit" // Unlimited time subscription
-	UnitTimeYear    = "Year"    // Annual subscription
-	UnitTimeMonth   = "Month"   // Monthly subscription
-	UnitTimeDay     = "Day"     // Daily subscription
-	UnitTimeHour    = "Hour"    // Hourly subscription
-	UnitTimeMinute  = "Minute"  // Per-minute subscription
-
-)
-
 // Inbox consumer names for the two idempotent stages. These are persisted
 // identities: renaming one makes committed grants replay.
 const (
@@ -336,9 +326,9 @@ func applyQuotaGrant(sub *usersub.Subscribe, content task.QuotaContent, now time
 
 	if content.Days != 0 {
 		switch {
-		case sub.ExpireTime.Unix() == 0:
-			// Unix epoch is the NoLimit sentinel. Adding finite days must
-			// never downgrade an unlimited subscription to a finite term.
+		case usersub.NoExpiry(sub.ExpireTime):
+			// Adding finite days must never downgrade an unlimited
+			// subscription to a finite term.
 			activate()
 		case sub.ExpireTime.Before(now):
 			// Already expired: the extension starts now.
@@ -349,18 +339,15 @@ func applyQuotaGrant(sub *usersub.Subscribe, content task.QuotaContent, now time
 			columns = append(columns, "expire_time")
 		}
 		// A term extended into the future reactivates the subscription.
-		if sub.ExpireTime.Unix() != 0 && sub.ExpireTime.After(now) {
+		if !sub.ExpiredAt(now) {
 			activate()
 		}
 	}
 
 	if content.ResetTraffic {
-		sub.Download = 0
-		sub.Upload = 0
-		columns = append(columns, "download", "upload")
-		if sub.Status == usersub.SubscribeStatusFinished {
-			activate()
-		}
+		// The rule every traffic reset follows: an exhausted subscription
+		// inside its term is active again.
+		columns = append(columns, sub.ResetTraffic(now)...)
 	}
 	return columns
 }
@@ -525,13 +512,6 @@ func validateContent(content task.QuotaContent) error {
 		return fmt.Errorf("quota task gift value overflow")
 	}
 	return nil
-}
-
-func (l *QuotaTaskLogic) getStartTime(sub *usersub.Subscribe, now time.Time) time.Time {
-	if sub.StartTime.Unix() == 0 {
-		return now
-	}
-	return sub.StartTime
 }
 
 func (l *QuotaTaskLogic) createGiftLog(ctx context.Context, logs repository.LogRepo, subscribeId, userId, amount, balance int64, now time.Time) error {

@@ -4,20 +4,31 @@ package adminorder
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
+	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 	"github.com/perfect-panel/server/internal/module/billing/internal/orderaudit"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
+	"gorm.io/gorm"
 )
+
+// Orders is the order persistence administration reads outside a
+// transaction.
+type Orders interface {
+	FindOne(ctx context.Context, id int64) (*order.Order, error)
+	QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error)
+	QueryDailyReport(ctx context.Context, date time.Time) (*order.DailyReport, error)
+}
 
 // Transactor mirrors the facade's billing-scoped transaction port.
 type Transactor interface {
@@ -41,32 +52,33 @@ type OrderCloser interface {
 	CloseByAdmin(ctx context.Context, orderNo string, adminID int64) (bool, error)
 }
 
-type Service struct {
-	orders   repository.OrderRepo
-	payments repository.PaymentRepo
-	tx       Transactor
-	queue    ActivationEnqueuer
-	// plans resolves plan names for the daily report; optional so callers
+type Deps struct {
+	Orders   Orders
+	Payments gateway.MethodFinder
+	Tx       Transactor
+	Queue    ActivationEnqueuer
+	// Plans resolves plan names for the daily report; optional so callers
 	// that only manage orders need not provide it.
-	plans  PlanNameReader
-	closer OrderCloser
+	Plans  PlanNameReader
+	Closer OrderCloser
 }
 
-func NewService(orders repository.OrderRepo, payments repository.PaymentRepo, tx Transactor, queue ActivationEnqueuer, plans PlanNameReader, closer OrderCloser) *Service {
-	return &Service{orders: orders, payments: payments, tx: tx, queue: queue, plans: plans, closer: closer}
+type Service struct {
+	deps Deps
+}
+
+func NewService(deps Deps) *Service {
+	return &Service{deps: deps}
 }
 
 func (s *Service) Create(ctx context.Context, req *dto.CreateOrderRequest) error {
-	log := logger.WithContext(ctx)
-	if req.Status != 0 && req.Status != 1 {
-		return errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_INITIAL_ORDER_STATUS"), "admin-created orders must start pending")
+	if req.Status != 0 && req.Status != order.StatusPending {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidInitialOrderStatus), "admin-created orders must start pending")
 	}
-	paymentMethod, err := s.payments.FindOne(ctx, req.PaymentId)
+	paymentMethod, err := findPaymentMethod(ctx, s.deps.Payments, req.PaymentId)
 	if err != nil {
-		log.Error("[CreateOrder] PaymentMethod Not Found", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "PaymentMethod not found: %v", err.Error())
+		return err
 	}
-
 	orderInfo := &order.Order{
 		UserId:         req.UserId,
 		OrderNo:        order.GenerateTradeNo(),
@@ -81,26 +93,24 @@ func (s *Service) Create(ctx context.Context, req *dto.CreateOrderRequest) error
 		Method:         paymentMethod.Platform,
 		FeeAmount:      req.FeeAmount,
 		TradeNo:        req.TradeNo,
-		Status:         1,
+		Status:         order.StatusPending,
 		SubscribeId:    req.SubscribeId,
 	}
-	if err := s.tx.InBillingTx(ctx, func(txStore repository.BillingStore) error {
+	if err := s.deps.Tx.InBillingTx(ctx, func(txStore repository.BillingStore) error {
 		if err := txStore.Order().Insert(ctx, orderInfo); err != nil {
 			return err
 		}
 		return orderaudit.InsertCreated(ctx, txStore.Log(), orderInfo, orderaudit.SourceAdmin)
 	}); err != nil {
-		log.Error("[CreateOrder] Database Error", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "Insert error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseInsertError, "create order")
 	}
 	return nil
 }
 
 func (s *Service) List(ctx context.Context, req *dto.GetOrderListRequest) (*dto.GetOrderListResponse, error) {
-	total, list, err := s.orders.QueryOrderListByPage(ctx, int(req.Page), int(req.Size), req.Status, req.UserId, req.SubscribeId, req.Search)
+	total, list, err := s.deps.Orders.QueryOrderListByPage(ctx, int(req.Page), int(req.Size), req.Status, req.UserId, req.SubscribeId, req.Search)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[GetOrderList] Database Error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryOrderListByPage error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "query order list")
 	}
 	resp := &dto.GetOrderListResponse{}
 	resp.List = make([]dto.Order, 0)
@@ -109,71 +119,70 @@ func (s *Service) List(ctx context.Context, req *dto.GetOrderListRequest) (*dto.
 	return resp, nil
 }
 
+// UpdateStatus applies an administrator's decision on a pending order: mark
+// it paid with the gateway's trade number, or close it.
 func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRequest) error {
-	log := logger.WithContext(ctx)
-	info, err := s.orders.FindOne(ctx, req.Id)
-	if err != nil {
-		log.Errorw("[UpdateOrderStatus] FindOne error", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOne error: %v", err.Error())
+	info, err := s.deps.Orders.FindOne(ctx, req.Id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order %d not found", req.Id)
 	}
-
+	if err != nil {
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %d", req.Id)
+	}
 	// Orders have a deliberately narrow state machine. Arbitrary status writes
 	// could resurrect terminal orders or skip the activation workflow.
-	if req.Status != 2 && req.Status != 3 {
-		return errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_ORDER_TRANSITION"), "only pending orders may be marked paid or closed")
+	if req.Status != order.StatusPaid && req.Status != order.StatusClosed {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidOrderTransition), "only pending orders may be marked paid or closed")
 	}
-	if req.Status == 2 && req.TradeNo == "" {
-		return errors.Wrapf(xerr.NewErrCodeMsg(400, "TRADE_NO_REQUIRED"), "trade_no is required when marking an order paid")
+	if req.Status == order.StatusPaid && req.TradeNo == "" {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.TradeNoRequired), "trade_no is required when marking an order paid")
 	}
-	if req.Status == 3 && (req.PaymentId != 0 || req.TradeNo != "") {
-		return errors.Wrapf(xerr.NewErrCodeMsg(400, "INVALID_ORDER_CLOSE_REQUEST"), "payment_id and trade_no are not allowed when closing an order")
+	if req.Status == order.StatusClosed && (req.PaymentId != 0 || req.TradeNo != "") {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidOrderCloseRequest), "payment_id and trade_no are not allowed when closing an order")
 	}
-	if req.Status == 3 {
+	if req.Status == order.StatusClosed {
 		return s.close(ctx, info)
 	}
 
-	var transitioned bool
-	err = s.tx.InBillingTx(ctx, func(txStore repository.BillingStore) error {
+	err = s.deps.Tx.InBillingTx(ctx, func(txStore repository.BillingStore) error {
 		orderStore := txStore.Order()
 		current, err := orderStore.FindOneByOrderNoForUpdate(ctx, info.OrderNo)
 		if err != nil {
-			return err
+			return xerr.Wrapf(err, xerr.DatabaseQueryError, "lock order %s", info.OrderNo)
 		}
-		if current.Status != 1 {
-			return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+		if current.Status != order.StatusPending {
+			return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
 		}
-
 		if req.PaymentId != 0 {
-			paymentMethod, err := txStore.Payment().FindOne(ctx, req.PaymentId)
+			paymentMethod, err := findPaymentMethod(ctx, txStore.Payment(), req.PaymentId)
 			if err != nil {
-				return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method not found: %v", err)
+				return err
 			}
 			current.PaymentId = paymentMethod.Id
 			current.Method = paymentMethod.Platform
 			if err := orderStore.Update(ctx, current); err != nil {
-				return err
+				return xerr.Wrapf(err, xerr.DatabaseUpdateError, "rebind order %s", info.OrderNo)
 			}
 		}
-		transitioned, err = orderStore.MarkOrderPaid(ctx, current.OrderNo, req.TradeNo)
+		transitioned, err := orderStore.MarkOrderPaid(ctx, current.OrderNo, req.TradeNo)
 		if err != nil {
-			return err
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "mark order %s paid", info.OrderNo)
 		}
 		if !transitioned {
-			return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+			return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
 		}
 		return nil
 	})
 	if err != nil {
-		log.Errorw("[UpdateOrderStatus] Transaction error", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Transaction error: %v", err.Error())
+		return err
 	}
-	if !transitioned {
-		return nil
-	}
-	if err := s.queue.EnqueueActivation(ctx, info.OrderNo); err != nil {
-		// The committed Paid state is a durable outbox; reconciliation will
-		// repair an enqueue failure without reversing a real payment.
-		return errors.Wrapf(xerr.NewErrCode(xerr.QueueEnqueueError), "enqueue activation: %v", err)
+	if err := s.deps.Queue.EnqueueActivation(ctx, info.OrderNo); err != nil {
+		// The order is committed as paid, which is what the administrator
+		// asked for; the paid-order reconciler re-drives the activation. A
+		// reported failure would only invite a retry that the order, no
+		// longer pending, refuses.
+		logger.WithContext(ctx).Errorw("[UpdateOrderStatus] enqueue activation failed; the paid-order reconciler retries it",
+			logger.Field("order_no", info.OrderNo), logger.Field("error", err.Error()))
 	}
 	return nil
 }
@@ -184,19 +193,30 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 // is settled instead, and the close reports the order as no longer pending.
 func (s *Service) close(ctx context.Context, info *order.Order) error {
 	var adminID int64
-	if admin, ok := ctx.Value(requestctx.CtxKeyUser).(*user.User); ok && admin != nil {
+	if admin, ok := user.FromContext(ctx); ok {
 		adminID = admin.Id
 	}
-	closed, err := s.closer.CloseByAdmin(ctx, info.OrderNo, adminID)
+	closed, err := s.deps.Closer.CloseByAdmin(ctx, info.OrderNo, adminID)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[UpdateOrderStatus] Close order error", logger.Field("error", err.Error()), logger.Field("orderNo", info.OrderNo))
-		if errors.Is(err, checkout.ErrGatewayUnconfirmed) {
-			return errors.Wrapf(xerr.NewErrCodeMsg(409, "PAYMENT_STATUS_UNCONFIRMED"), "close order: %v", err)
-		}
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "close order: %v", err)
+		// A gateway that cannot confirm the payment carries its own code
+		// (PaymentStatusUnconfirmed) through the generic wrap.
+		return xerr.Wrapf(err, xerr.ERROR, "close order %s", info.OrderNo)
 	}
 	if !closed {
-		return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
 	}
 	return nil
+}
+
+// findPaymentMethod loads the method an administrator binds an order to. A
+// disabled method may still be bound by hand; a missing one may not.
+func findPaymentMethod(ctx context.Context, methods gateway.MethodFinder, id int64) (*paymentEntity.Payment, error) {
+	method, err := methods.FindOne(ctx, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method %d not found", id)
+	}
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find payment method %d", id)
+	}
+	return method, nil
 }

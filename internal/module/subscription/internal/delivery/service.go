@@ -3,6 +3,8 @@ package delivery
 import (
 	"context"
 
+	"github.com/perfect-panel/server/internal/module/network/entity/node"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/repository"
 )
@@ -24,10 +26,20 @@ type Deps struct {
 	UserSubs repository.UserSubscriptionRepo
 	// Users is the identity read port for the account-enabled gate.
 	Users repository.UserRepo
-	Nodes repository.NodeRepo
-	Logs  repository.LogRepo
+	Nodes NodeLister
+	Logs  AuditLog
 	// ConfigSnapshot reads the current delivery configuration.
 	ConfigSnapshot func() Config
+}
+
+// NodeLister is the network read port: the nodes a plan's scope selects.
+type NodeLister interface {
+	ListNodesByScope(ctx context.Context, nodeIDs []int64, tags []string, enabled *bool, preload bool) ([]*node.Node, error)
+}
+
+// AuditLog records the subscription fetches.
+type AuditLog interface {
+	Insert(ctx context.Context, data *log.SystemLog) error
 }
 
 func (d Deps) config() Config {

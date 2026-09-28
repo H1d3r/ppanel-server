@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/oschwald/geoip2-golang"
+	"github.com/perfect-panel/server/internal/infra/geoip/geoiptest"
 )
 
 func TestDownloadGeoIPDatabaseInstallsVerifiedDatabase(t *testing.T) {
@@ -109,90 +109,8 @@ func assertOnlyFile(t *testing.T, dir, name string) {
 	}
 }
 
-// buildTestMMDB encodes a minimal IPv4 MaxMind DB: one search-tree node
-// whose both records point at the single data record.
+// buildTestMMDB encodes a minimal IPv4 MaxMind DB that answers every
+// address with record.
 func buildTestMMDB(databaseType string, record map[string]any) []byte {
-	var data, metadata mmdbEncoder
-	data.value(record)
-	metadata.value(map[string]any{
-		"binary_format_major_version": uint16(2),
-		"binary_format_minor_version": uint16(0),
-		"build_epoch":                 uint64(1700000000),
-		"database_type":               databaseType,
-		"description":                 map[string]any{"en": "test database"},
-		"ip_version":                  uint16(4),
-		"languages":                   []string{"en"},
-		"node_count":                  uint32(1),
-		"record_size":                 uint16(24),
-	})
-	// A record value above node_count points into the data section at
-	// offset value - node_count - 16 (the separator).
-	const firstRecord = 1 + 16
-	var db bytes.Buffer
-	db.Write([]byte{0, 0, firstRecord, 0, 0, firstRecord})
-	db.Write(make([]byte, 16))
-	db.Write(data.Bytes())
-	db.WriteString("\xAB\xCD\xEFMaxMind.com")
-	db.Write(metadata.Bytes())
-	return db.Bytes()
-}
-
-// mmdbEncoder writes the MaxMind DB data format for the handful of types
-// the test databases use; every size stays below 29.
-type mmdbEncoder struct {
-	bytes.Buffer
-}
-
-func (e *mmdbEncoder) control(typ byte, size int) {
-	if size >= 29 {
-		panic("test encoder supports sizes below 29 only")
-	}
-	if typ <= 7 {
-		e.WriteByte(typ<<5 | byte(size))
-		return
-	}
-	// Extended type: zero type bits, then the type number minus 7.
-	e.WriteByte(byte(size))
-	e.WriteByte(typ - 7)
-}
-
-func (e *mmdbEncoder) unsigned(typ byte, v uint64) {
-	var raw []byte
-	for ; v > 0; v >>= 8 {
-		raw = append([]byte{byte(v)}, raw...)
-	}
-	e.control(typ, len(raw))
-	e.Write(raw)
-}
-
-func (e *mmdbEncoder) value(v any) {
-	switch v := v.(type) {
-	case string:
-		e.control(2, len(v))
-		e.WriteString(v)
-	case uint16:
-		e.unsigned(5, uint64(v))
-	case uint32:
-		e.unsigned(6, uint64(v))
-	case uint64:
-		e.unsigned(9, v)
-	case []string:
-		e.control(11, len(v))
-		for _, item := range v {
-			e.value(item)
-		}
-	case map[string]any:
-		keys := make([]string, 0, len(v))
-		for key := range v {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		e.control(7, len(v))
-		for _, key := range keys {
-			e.value(key)
-			e.value(v[key])
-		}
-	default:
-		panic("unsupported test value")
-	}
+	return geoiptest.MMDB(databaseType, record, record)
 }

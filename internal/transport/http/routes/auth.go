@@ -12,13 +12,13 @@ func registerAuthRoutes(router *server.Hertz, deps Dependencies) {
 	{
 		authGroupRouter.GET("/check", auth.CheckUserHandler(deps.Identity))
 		authGroupRouter.GET("/check/telephone", auth.CheckUserTelephoneHandler(deps.Identity))
-		authGroupRouter.POST("/login", auth.UserLoginHandler(deps.Identity, deps.verifyConfig))
+		authGroupRouter.POST("/login", auth.UserLoginHandler(deps.Identity))
 		authGroupRouter.POST("/login/device", auth.DeviceLoginHandler(deps.Identity))
-		authGroupRouter.POST("/login/telephone", auth.TelephoneLoginHandler(deps.Identity, deps.verifyConfig))
+		authGroupRouter.POST("/login/telephone", auth.TelephoneLoginHandler(deps.Identity))
 		authGroupRouter.POST("/register", auth.UserRegisterHandler(deps.Identity))
 		authGroupRouter.POST("/register/telephone", auth.TelephoneUserRegisterHandler(deps.Identity))
-		authGroupRouter.POST("/reset", auth.ResetPasswordHandler(deps.Identity, deps.verifyConfig))
-		authGroupRouter.POST("/reset/telephone", auth.TelephoneResetPasswordHandler(deps.Identity, deps.verifyConfig))
+		authGroupRouter.POST("/reset", auth.ResetPasswordHandler(deps.Identity))
+		authGroupRouter.POST("/reset/telephone", auth.TelephoneResetPasswordHandler(deps.Identity))
 	}
 
 	authOauthGroupRouter := router.Group("/v1/auth/oauth")

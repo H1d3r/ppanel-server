@@ -18,7 +18,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/slicesx"
+	"github.com/perfect-panel/server/pkg/xerr"
 	"gorm.io/gorm"
 )
 
@@ -43,7 +43,7 @@ func newManifestLogic(ctx context.Context, deps Deps) *ManifestLogic {
 }
 
 func (l *ManifestLogic) Manifest(token string) (*dto.EdgeManifestResponse, error) {
-	userSubscribe, err := l.deps.Store.UserSubscription().FindOneSubscribeByToken(l.ctx, token)
+	userSubscribe, err := l.deps.Subscriptions.FindOneSubscribeByToken(l.ctx, token)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrManifestNotFound
@@ -53,7 +53,7 @@ func (l *ManifestLogic) Manifest(token string) (*dto.EdgeManifestResponse, error
 	if userSubscribe == nil {
 		return nil, ErrManifestNotFound
 	}
-	account, err := l.deps.Store.User().FindAccountState(l.ctx, userSubscribe.UserId)
+	account, err := l.deps.Accounts.FindAccountState(l.ctx, userSubscribe.UserId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrManifestNotFound
@@ -63,7 +63,7 @@ func (l *ManifestLogic) Manifest(token string) (*dto.EdgeManifestResponse, error
 	if account == nil || account.DeletedAt.Valid || account.Enable == nil || !*account.Enable {
 		return nil, ErrManifestNotFound
 	}
-	plan, err := l.deps.Store.Subscribe().FindOne(l.ctx, userSubscribe.SubscribeId)
+	plan, err := l.deps.Plans.FindOne(l.ctx, userSubscribe.SubscribeId)
 	if err != nil {
 		return nil, err
 	}
@@ -92,13 +92,15 @@ func (l *ManifestLogic) Manifest(token string) (*dto.EdgeManifestResponse, error
 }
 
 func (l *ManifestLogic) proxies(userSubscribe *usersub.Subscribe, plan *subscribe.Subscribe) ([]dto.EdgeManifestProxy, []string, error) {
-	nodeIDs := slicesx.StringToInt64Slice(plan.Nodes)
-	tags := cleanTags(strings.Split(plan.NodeTags, ","))
+	nodeIDs, tags, err := plan.NodeScope()
+	if err != nil {
+		return nil, nil, xerr.Wrapf(err, xerr.ERROR, "plan nodes: %v", err)
+	}
 	if len(nodeIDs) == 0 && len(tags) == 0 {
 		return []dto.EdgeManifestProxy{}, nil, nil
 	}
 	enabled := true
-	nodes, err := l.deps.Store.Node().ListNodesByScope(l.ctx, nodeIDs, tags, &enabled, true)
+	nodes, err := l.deps.Nodes.ListNodesByScope(l.ctx, nodeIDs, tags, &enabled, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,7 +135,7 @@ func subscriptionDTO(plan *subscribe.Subscribe, userSubscribe *usersub.Subscribe
 		Download:     userSubscribe.Download,
 		WebPageURL:   strings.TrimSpace(cfg.ProfileWebPageURL),
 	}
-	if userSubscribe.ExpireTime.Unix() > 0 {
+	if !usersub.NoExpiry(userSubscribe.ExpireTime) {
 		result.ExpiresAt = userSubscribe.ExpireTime.UTC().Format(time.RFC3339)
 	}
 	if cfg.ProfileUpdateInterval > 0 {
@@ -142,29 +144,27 @@ func subscriptionDTO(plan *subscribe.Subscribe, userSubscribe *usersub.Subscribe
 	return result
 }
 
+// subscriptionState is the manifest state of the subscription at now. Only
+// "active" lists proxies, by the rule the node user list and delivery apply
+// (usersub.AvailabilityAt), so the Worker never offers a node that refuses
+// the user.
 func subscriptionState(item *usersub.Subscribe, now time.Time) string {
 	if item == nil {
 		return "disabled"
 	}
-	switch item.Status {
-	case 0, 4:
-		return "disabled"
-	case 2, 3:
-		return "expired"
-	case 5:
+	switch item.AvailabilityAt(now) {
+	case usersub.Available:
+		return "active"
+	case usersub.Stopped:
 		return "suspended"
-	case 1:
-		// Continue with expiration and traffic checks below.
+	case usersub.Expired:
+		return "expired"
+	case usersub.TrafficExhausted:
+		return "traffic_exhausted"
 	default:
+		// Refunded, or a status no rule serves.
 		return "disabled"
 	}
-	if item.ExpireTime.Unix() > 0 && !item.ExpireTime.After(now) {
-		return "expired"
-	}
-	if item.Traffic > 0 && item.Upload+item.Download >= item.Traffic {
-		return "traffic_exhausted"
-	}
-	return "active"
 }
 
 func stateNotice(state string) string {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	identifier2 "github.com/perfect-panel/server/internal/auth/identifier"
+	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -24,13 +24,13 @@ import (
 
 func (m *UserRepo) FindOneByEmail(ctx context.Context, email string) (*user.User, error) {
 	var u user.User
-	canonicalEmail, err := canonicalAuthIdentifier(identifier2.Email, email)
+	canonicalEmail, err := lookupIdentifier(identifier.Email, email)
 	if err != nil {
 		return &u, err
 	}
 	key := fmt.Sprintf("%s%v", cacheUserEmailPrefix, canonicalEmail)
 	err = m.QueryCtx(ctx, &u, key, func(conn *gorm.DB, v interface{}) error {
-		data, err := findUserAuthMethodByIdentifier(conn, identifier2.Email, canonicalEmail)
+		data, err := findUserAuthMethodByIdentifier(conn, identifier.Email, canonicalEmail)
 		if err != nil {
 			return err
 		}
@@ -39,18 +39,15 @@ func (m *UserRepo) FindOneByEmail(ctx context.Context, email string) (*user.User
 	return &u, err
 }
 
-func (m *UserRepo) Insert(ctx context.Context, data *user.User, tx ...*gorm.DB) error {
+func (m *UserRepo) Insert(ctx context.Context, data *user.User) error {
 	for index := range data.AuthMethods {
-		identifier, err := canonicalAuthIdentifier(data.AuthMethods[index].AuthType, data.AuthMethods[index].AuthIdentifier)
+		canonical, err := storedIdentifier(data.AuthMethods[index].AuthType, data.AuthMethods[index].AuthIdentifier)
 		if err != nil {
 			return err
 		}
-		data.AuthMethods[index].AuthIdentifier = identifier
+		data.AuthMethods[index].AuthIdentifier = canonical
 	}
 	err := m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		for index := range data.AuthMethods {
 			if err := guardEmailIdentityWrite(conn, &data.AuthMethods[index]); err != nil {
 				return err
@@ -113,7 +110,7 @@ func (m *UserRepo) FindOneForUpdate(ctx context.Context, id int64) (*user.User, 
 // the fields they change, so a stale snapshot, such as the request's
 // authenticated user, cannot write back an enable flag, admin flag, password
 // or deletion that changed meanwhile, and a soft-deleted row stays deleted.
-func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[string]interface{}, tx ...*gorm.DB) error {
+func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[string]interface{}) error {
 	if len(columns) == 0 {
 		return nil
 	}
@@ -122,9 +119,6 @@ func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[stri
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&user.User{}).Where("id = ?", id).Updates(columns).Error
 	}, m.getCacheKeys(old)...)
 }
@@ -152,7 +146,7 @@ func (m *UserRepo) UpgradePasswordHash(ctx context.Context, id int64, currentHas
 	return updated, err
 }
 
-func (m *UserRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *UserRepo) Delete(ctx context.Context, id int64) error {
 	data, err := m.FindOne(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -170,9 +164,6 @@ func (m *UserRepo) Delete(ctx context.Context, id int64, tx ...*gorm.DB) error {
 	}()
 
 	return m.TransactCtx(ctx, func(db *gorm.DB) error {
-		if len(tx) > 0 {
-			db = tx[0]
-		}
 		// Soft deletion of user information without any processing of other information (Determine whether to allow login/subscription based on the user's deletion status)
 		if err := db.Model(&user.User{}).Where("id = ?", id).Delete(&user.User{}).Error; err != nil {
 			return err
@@ -421,15 +412,12 @@ func (m *UserRepo) CountEmailRecipients(ctx context.Context, filter *user.EmailR
 	return total, err
 }
 
-func (m *UserRepo) BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm.DB) error {
+func (m *UserRepo) BatchDeleteUser(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	var users []*user.User
 	err := m.QueryNoCacheCtx(ctx, &users, func(conn *gorm.DB, v interface{}) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		// The auth methods carry the email lookup's cache key.
 		return conn.Where("id in ?", ids).Preload("AuthMethods").Find(&users).Error
 	})
@@ -437,14 +425,11 @@ func (m *UserRepo) BatchDeleteUser(ctx context.Context, ids []int64, tx ...*gorm
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Where("id in ?", ids).Delete(&user.User{}).Error
 	}, m.batchGetCacheKeys(users...)...)
 }
 
-func (m *UserRepo) QueryResisterUserTotalByDate(ctx context.Context, date time.Time) (int64, error) {
+func (m *UserRepo) QueryRegisterUserTotalByDate(ctx context.Context, date time.Time) (int64, error) {
 	var total int64
 	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	end := start.AddDate(0, 0, 1)
@@ -454,7 +439,7 @@ func (m *UserRepo) QueryResisterUserTotalByDate(ctx context.Context, date time.T
 	return total, err
 }
 
-func (m *UserRepo) QueryResisterUserTotalByMonthly(ctx context.Context, date time.Time) (int64, error) {
+func (m *UserRepo) QueryRegisterUserTotalByMonthly(ctx context.Context, date time.Time) (int64, error) {
 	var total int64
 	start := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
 	end := start.AddDate(0, 1, 0)
@@ -464,12 +449,27 @@ func (m *UserRepo) QueryResisterUserTotalByMonthly(ctx context.Context, date tim
 	return total, err
 }
 
-func (m *UserRepo) QueryResisterUserTotal(ctx context.Context) (int64, error) {
+func (m *UserRepo) QueryRegisterUserTotal(ctx context.Context) (int64, error) {
 	var total int64
 	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.User{}).Count(&total).Error
 	})
 	return total, err
+}
+
+// Deprecated: use QueryRegisterUserTotal.
+func (m *UserRepo) QueryResisterUserTotal(ctx context.Context) (int64, error) {
+	return m.QueryRegisterUserTotal(ctx)
+}
+
+// Deprecated: use QueryRegisterUserTotalByDate.
+func (m *UserRepo) QueryResisterUserTotalByDate(ctx context.Context, date time.Time) (int64, error) {
+	return m.QueryRegisterUserTotalByDate(ctx, date)
+}
+
+// Deprecated: use QueryRegisterUserTotalByMonthly.
+func (m *UserRepo) QueryResisterUserTotalByMonthly(ctx context.Context, date time.Time) (int64, error) {
+	return m.QueryRegisterUserTotalByMonthly(ctx, date)
 }
 
 func (m *UserRepo) CountEnabledUsers(ctx context.Context) (int64, error) {
@@ -488,6 +488,7 @@ func (m *UserRepo) QueryAdminUsers(ctx context.Context) ([]*user.User, error) {
 	return data, err
 }
 
+// Deprecated: UpdateUserCache only ever cleared the cache; use ClearUserCache.
 func (m *UserRepo) UpdateUserCache(ctx context.Context, data *user.User) error {
 	return m.ClearUserCache(ctx, data)
 }
@@ -602,8 +603,8 @@ func (m *UserRepo) FindUserAuthMethodsByUserIds(ctx context.Context, method stri
 // covers inserted Gmail dots and "+tag" subaddresses; its literal first
 // character keeps the lookup on the (auth_type, auth_identifier) index.
 func (m *UserRepo) FindEmailAlias(ctx context.Context, email string) (*user.AuthMethods, error) {
-	canonical := identifier2.CanonicalEmail(email)
-	key := identifier2.EmailMailboxKey(canonical)
+	canonical := identifier.CanonicalEmail(email)
+	key := identifier.EmailMailboxKey(canonical)
 	at := strings.LastIndex(key, "@")
 	if at <= 0 {
 		return nil, gorm.ErrRecordNotFound
@@ -623,7 +624,7 @@ func (m *UserRepo) FindEmailAlias(ctx context.Context, email string) (*user.Auth
 			args = append(args, emailAliasPattern(local, d))
 		}
 		return joinUndeletedUsers(conn.Model(&user.AuthMethods{})).
-			Where(authMethodsColumn(conn, "auth_type")+" = ?", identifier2.Email).
+			Where(authMethodsColumn(conn, "auth_type")+" = ?", identifier.Email).
 			Where("("+strings.Join(conditions, " OR ")+")", args...).
 			Find(v).Error
 	})
@@ -631,7 +632,7 @@ func (m *UserRepo) FindEmailAlias(ctx context.Context, email string) (*user.Auth
 		return nil, err
 	}
 	for _, candidate := range candidates {
-		if candidate.AuthIdentifier != canonical && identifier2.EmailMailboxKey(candidate.AuthIdentifier) == key {
+		if candidate.AuthIdentifier != canonical && identifier.EmailMailboxKey(candidate.AuthIdentifier) == key {
 			return candidate, nil
 		}
 	}
@@ -671,21 +672,18 @@ func (m *UserRepo) FindUserAuthMethodByPlatform(ctx context.Context, userId int6
 	return &data, err
 }
 
-func (m *UserRepo) InsertUserAuthMethods(ctx context.Context, data *user.AuthMethods, tx ...*gorm.DB) error {
-	identifier, err := canonicalAuthIdentifier(data.AuthType, data.AuthIdentifier)
+func (m *UserRepo) InsertUserAuthMethods(ctx context.Context, data *user.AuthMethods) error {
+	canonical, err := storedIdentifier(data.AuthType, data.AuthIdentifier)
 	if err != nil {
 		return err
 	}
-	data.AuthIdentifier = identifier
+	data.AuthIdentifier = canonical
 	u, err := m.FindOne(ctx, data.UserId)
 	if err != nil {
 		return err
 	}
 
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		if err = guardEmailIdentityWrite(conn, data); err != nil {
 			return err
 		}
@@ -699,21 +697,18 @@ func (m *UserRepo) InsertUserAuthMethods(ctx context.Context, data *user.AuthMet
 	})
 }
 
-func (m *UserRepo) UpdateUserAuthMethods(ctx context.Context, data *user.AuthMethods, tx ...*gorm.DB) error {
-	identifier, err := canonicalAuthIdentifier(data.AuthType, data.AuthIdentifier)
+func (m *UserRepo) UpdateUserAuthMethods(ctx context.Context, data *user.AuthMethods) error {
+	canonical, err := storedIdentifier(data.AuthType, data.AuthIdentifier)
 	if err != nil {
 		return err
 	}
-	data.AuthIdentifier = identifier
+	data.AuthIdentifier = canonical
 	u, err := m.FindOne(ctx, data.UserId)
 	if err != nil {
 		return err
 	}
 
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		if err = guardEmailIdentityWrite(conn, data); err != nil {
 			return err
 		}
@@ -728,7 +723,7 @@ func (m *UserRepo) UpdateUserAuthMethods(ctx context.Context, data *user.AuthMet
 	})
 }
 
-func (m *UserRepo) DeleteUserAuthMethods(ctx context.Context, userId int64, platform string, tx ...*gorm.DB) error {
+func (m *UserRepo) DeleteUserAuthMethods(ctx context.Context, userId int64, platform string) error {
 	u, err := m.FindOne(ctx, userId)
 	if err != nil {
 		return err
@@ -739,15 +734,12 @@ func (m *UserRepo) DeleteUserAuthMethods(ctx context.Context, userId int64, plat
 		}
 	}()
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&user.AuthMethods{}).Where("user_id = ? AND auth_type = ?", userId, platform).Delete(&user.AuthMethods{}).Error
 	})
 }
 
-func (m *UserRepo) UpdateUserAuthMethodOwner(ctx context.Context, authType, identifier string, userId int64, tx ...*gorm.DB) error {
-	authMethod, err := m.FindUserAuthMethodByOpenID(ctx, authType, identifier)
+func (m *UserRepo) UpdateUserAuthMethodOwner(ctx context.Context, authType, authIdentifier string, userId int64) error {
+	authMethod, err := m.FindUserAuthMethodByOpenID(ctx, authType, authIdentifier)
 	if err != nil {
 		return err
 	}
@@ -765,17 +757,14 @@ func (m *UserRepo) UpdateUserAuthMethodOwner(ctx context.Context, authType, iden
 		}
 	}()
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&user.AuthMethods{}).
 			Where("id = ?", authMethod.Id).
 			Update("user_id", userId).Error
 	})
 }
 
-func (m *UserRepo) DeleteUserAuthMethodByIdentifier(ctx context.Context, authType, identifier string, tx ...*gorm.DB) error {
-	authMethod, err := m.FindUserAuthMethodByOpenID(ctx, authType, identifier)
+func (m *UserRepo) DeleteUserAuthMethodByIdentifier(ctx context.Context, authType, authIdentifier string) error {
+	authMethod, err := m.FindUserAuthMethodByOpenID(ctx, authType, authIdentifier)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
@@ -792,9 +781,6 @@ func (m *UserRepo) DeleteUserAuthMethodByIdentifier(ctx context.Context, authTyp
 		}
 	}()
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&user.AuthMethods{}).
 			Where("id = ?", authMethod.Id).
 			Delete(&user.AuthMethods{}).Error
@@ -934,7 +920,7 @@ func (m *UserRepo) updateDeviceField(ctx context.Context, id int64, field string
 	}, old.GetCacheKeys()...)
 }
 
-func (m *UserRepo) DeleteDevice(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *UserRepo) DeleteDevice(ctx context.Context, id int64) error {
 	data, err := m.FindOneDevice(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -943,25 +929,21 @@ func (m *UserRepo) DeleteDevice(ctx context.Context, id int64, tx ...*gorm.DB) e
 		return err
 	}
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Delete(&user.Device{}, id).Error
 	}, data.GetCacheKeys()...)
 	return err
 }
 
-func (m *UserRepo) InsertDevice(ctx context.Context, data *user.Device, tx ...*gorm.DB) error {
+func (m *UserRepo) InsertDevice(ctx context.Context, data *user.Device) error {
 	defer func() {
+		// The insert is the source of truth; a stale lookup cache only
+		// delays seeing the new device.
 		if clearErr := m.ClearDeviceCache(ctx, data); clearErr != nil {
-			// log cache clear error
+			logger.WithContext(ctx).Errorw("[UserModel] clear device cache failed", logger.Field("error", clearErr.Error()))
 		}
 	}()
 
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Create(data).Error
 	})
 }
@@ -976,11 +958,8 @@ func (m *UserRepo) FindDeviceOnlineRecord(ctx context.Context, userId int64, sta
 	return &record, err
 }
 
-func (m *UserRepo) InsertDeviceOnlineRecord(ctx context.Context, data *user.DeviceOnlineRecord, tx ...*gorm.DB) error {
+func (m *UserRepo) InsertDeviceOnlineRecord(ctx context.Context, data *user.DeviceOnlineRecord) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Create(data).Error
 	})
 }

@@ -7,49 +7,28 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/repository"
 )
 
-type cleanupTrafficRepo struct {
-	repository.TrafficRepo
+// cleanupRepo records the batch deletions of one table, deleting one row
+// per batch or failing with err.
+type cleanupRepo struct {
 	threshold time.Time
 	err       error
 	calls     int
 }
 
-func (r *cleanupTrafficRepo) DeleteBeforeBatch(_ context.Context, threshold time.Time, _ int) (int64, error) {
+var _ batchDeleter = (*cleanupRepo)(nil)
+
+func (r *cleanupRepo) DeleteBeforeBatch(_ context.Context, threshold time.Time, _ int) (int64, error) {
 	r.threshold = threshold
 	r.calls++
 	return 1, r.err
 }
-
-type cleanupLogRepo struct {
-	repository.LogRepo
-	threshold time.Time
-	err       error
-	calls     int
-}
-
-func (r *cleanupLogRepo) DeleteBeforeBatch(_ context.Context, threshold time.Time, _ int) (int64, error) {
-	r.threshold = threshold
-	r.calls++
-	return 1, r.err
-}
-
-type cleanupNetworkStore struct {
-	repository.NetworkStore
-	traffic repository.TrafficRepo
-	logs    repository.LogRepo
-}
-
-func (s cleanupNetworkStore) TrafficLog() repository.TrafficRepo { return s.traffic }
-func (s cleanupNetworkStore) Log() repository.LogRepo            { return s.logs }
 
 func TestLogCleanupRunsIndependentlyAndPropagatesFailures(t *testing.T) {
-	trafficRepo := &cleanupTrafficRepo{}
-	logRepo := &cleanupLogRepo{}
-	store := cleanupNetworkStore{traffic: trafficRepo, logs: logRepo}
-	logic := NewLogCleanupLogic(store, func() config.Log { return config.Log{AutoClear: true, ClearDays: 7} })
+	trafficRepo := &cleanupRepo{}
+	logRepo := &cleanupRepo{}
+	logic := newLogCleanupLogic(trafficRepo, logRepo, func() config.Log { return config.Log{AutoClear: true, ClearDays: 7} })
 
 	if err := logic.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatal(err)
@@ -65,9 +44,9 @@ func TestLogCleanupRunsIndependentlyAndPropagatesFailures(t *testing.T) {
 }
 
 func TestLogCleanupRejectsUnsafeRetentionWithoutDeleting(t *testing.T) {
-	trafficRepo := &cleanupTrafficRepo{}
-	logRepo := &cleanupLogRepo{}
-	logic := NewLogCleanupLogic(cleanupNetworkStore{traffic: trafficRepo, logs: logRepo}, func() config.Log { return config.Log{AutoClear: true, ClearDays: -1} })
+	trafficRepo := &cleanupRepo{}
+	logRepo := &cleanupRepo{}
+	logic := newLogCleanupLogic(trafficRepo, logRepo, func() config.Log { return config.Log{AutoClear: true, ClearDays: -1} })
 	if err := logic.ProcessTask(context.Background(), nil); err == nil {
 		t.Fatal("unsafe retention was accepted")
 	}

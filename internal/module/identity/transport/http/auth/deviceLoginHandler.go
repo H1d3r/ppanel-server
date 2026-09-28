@@ -27,8 +27,6 @@ func DeviceLoginHandler(service identity.Service) app.HandlerFunc {
 			httpx.ParamErrorResult(c, err)
 			return
 		}
-		req.IP = c.ClientIP()
-		req.UserAgent = string(c.UserAgent())
 		validateErr := validation.Validate(&req)
 		if validateErr != nil {
 			httpx.ParamErrorResult(c, validateErr)

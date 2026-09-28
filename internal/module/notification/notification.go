@@ -1,7 +1,11 @@
-// Package notification is the facade of the notification module. It starts
-// with the Telegram bot: update handling (webhook and polling), the unbind
-// notice and the message templates other domains render. Additional channels
-// (email, SMS broadcast) join as migration proceeds (ADR-001 step 4).
+// Package notification is the facade of the notification module's Telegram
+// bot: update handling (webhook and polling), the administrators' group and
+// its topics, user and administrator notices, the webhook secret and the
+// message templates other domains render. The module's email and SMS
+// delivery is not behind this facade: providers live in internal/infra/mail
+// and internal/infra/sms, and the queue task handlers in
+// internal/transport/task/email and internal/transport/task/sms send through
+// them.
 package notification
 
 import (
@@ -35,7 +39,7 @@ type Service interface {
 	// never crosses into the HTTP layer.
 	HandleTelegramWebhook(ctx context.Context, payload []byte) error
 	// NotifyTelegramUnbind sends the best-effort unbind notice to the chat.
-	NotifyTelegramUnbind(userID, chatID int64) error
+	NotifyTelegramUnbind(ctx context.Context, userID, chatID int64) error
 	// NotifyTelegramUser sends already-rendered MarkdownV2 text to the
 	// user's bound Telegram chat; render it with RenderTelegramMarkdown so
 	// the data is escaped. It reports an error when the user has no binding
@@ -86,6 +90,16 @@ const (
 	SubscribeExpireNotify = telegram.SubscribeExpireNotify
 )
 
+// The bot's ports onto the domains it serves, declared by the bot and kept to
+// the calls it makes; the composition root provides them.
+type (
+	Accounts      = telegram.Accounts
+	Tickets       = telegram.Tickets
+	Subscriptions = telegram.Subscriptions
+	Billing       = telegram.Billing
+	AuditLogs     = telegram.AuditLogs
+)
+
 // Deps declares everything the module needs; the composition root
 // (internal/app) provides them.
 type Deps struct {
@@ -101,16 +115,11 @@ type Deps struct {
 	// conversation each carries.
 	Topics        repository.TelegramTopicRepo
 	Redis         *redis.Client
-	Users         repository.UserRepo
-	UserAuth      repository.UserAuthRepo
-	UserCache     repository.UserCacheRepo
-	Tickets       repository.TicketRepo
-	Orders        repository.OrderRepo
-	Subscriptions repository.UserSubscriptionRepo
-	Plans         repository.SubscribeRepo
-	Logs          repository.LogRepo
-	// Wallet is the billing-domain read port for balance display.
-	Wallet repository.WalletRepo
+	Accounts      Accounts
+	Tickets       Tickets
+	Subscriptions Subscriptions
+	Billing       Billing
+	AuditLogs     AuditLogs
 }
 
 func New(deps Deps) Service {
@@ -143,49 +152,33 @@ func (s *service) HandleTelegramWebhook(ctx context.Context, payload []byte) err
 func (s *service) HandleTelegramUpdate(ctx context.Context, update *models.Update) {
 	// Without a client every adapter below would carry a nil bot that only
 	// fails (with a panic) at send time; no bot means no updates to handle.
-	if s.deps.Bot() == nil {
+	bot := s.deps.Bot()
+	if bot == nil {
 		return
 	}
-	messenger := telegram.NewTelegramBotMessenger(s.deps.Bot())
+	messenger := telegram.NewTelegramBotMessenger(bot)
 	sessions := telegram.NewTelegramRedisStore(s.deps.Redis)
-	admin := telegram.NewTelegramAdmin(ctx, telegram.TelegramAdminDependencies{
-		Messenger: messenger,
-		Actions:   sessions,
-		MirrorTicketStatus: func(ticketID int64, status uint8) {
-			if err := s.NotifyTicketStatusChanged(ctx, ticketID, status); err != nil {
-				logger.WithContext(ctx).Infow("[Telegram] ticket status mirror skipped",
-					logger.Field("reason", err.Error()), logger.Field("ticket_id", ticketID))
-			}
-		},
-		MirrorTicketReply: func(ticketID int64, content string) {
-			if err := s.NotifyTicketReplied(ctx, ticketID, "admin", content); err != nil {
-				logger.WithContext(ctx).Infow("[Telegram] ticket reply mirror skipped",
-					logger.Field("reason", err.Error()), logger.Field("ticket_id", ticketID))
-			}
-		},
+	admin := telegram.NewAdmin(telegram.AdminDependencies{
+		Messenger:     messenger,
+		Actions:       sessions,
+		Accounts:      s.deps.Accounts,
 		Tickets:       s.deps.Tickets,
-		Orders:        s.deps.Orders,
-		Users:         s.deps.Users,
-		UserAuth:      s.deps.UserAuth,
 		Subscriptions: s.deps.Subscriptions,
-		UserCache:     s.deps.UserCache,
-		Plans:         s.deps.Plans,
-		Logs:          s.deps.Logs,
-		Wallet:        s.deps.Wallet,
+		Billing:       s.deps.Billing,
+		AuditLogs:     s.deps.AuditLogs,
 	})
-	telegram.NewTelegramLogic(ctx, telegram.TelegramLogicDependencies{
-		Messenger:   messenger,
-		Sessions:    sessions,
-		UserAuth:    s.deps.UserAuth,
-		UserCache:   s.deps.UserCache,
-		Admin:       admin,
-		GroupChatID: s.deps.GroupChatID,
-		Topics:      s.deps.Topics,
-		TopicClient: telegram.NewTelegramTopicClient(s.deps.Bot()),
-		Tickets:     s.deps.Tickets,
-		Users:       s.deps.Users,
-		Limiter:     sessions,
-	}).TelegramLogic(update)
+	telegram.NewBot(telegram.BotDependencies{
+		Messenger:     messenger,
+		Sessions:      sessions,
+		Accounts:      s.deps.Accounts,
+		Subscriptions: s.deps.Subscriptions,
+		Admin:         admin,
+		GroupChatID:   s.deps.GroupChatID,
+		Topics:        s.deps.Topics,
+		TopicClient:   telegram.NewTelegramTopicClient(bot),
+		Tickets:       s.deps.Tickets,
+		Limiter:       sessions,
+	}).HandleUpdate(ctx, update)
 }
 
 func (s *service) PublishTelegramCommands() error {
@@ -193,8 +186,9 @@ func (s *service) PublishTelegramCommands() error {
 	if bot == nil {
 		return errors.New("telegram bot is not configured")
 	}
+	// Called once the client is ready, outside any request.
 	return telegram.NewTelegramBotCommandRegistrar(bot).
-		SetCommands(0, telegram.PublicCommands())
+		SetCommands(context.Background(), 0, telegram.PublicCommands())
 }
 
 // topicService assembles the per-call topic layer; the bot client is read
@@ -233,7 +227,7 @@ func (s *service) SetupTelegramGroup(ctx context.Context) error {
 	}
 	// The menu is a convenience: the commands work without it.
 	if err := telegram.NewTelegramBotCommandRegistrar(bot).
-		SetGroupAdminCommands(group, telegram.AdminCommands()); err != nil {
+		SetGroupAdminCommands(ctx, group, telegram.AdminCommands()); err != nil {
 		logger.WithContext(ctx).Error("[Telegram] publish group admin menu failed",
 			logger.Field("error", err.Error()))
 	}
@@ -280,7 +274,7 @@ func (s *service) NotifyTicketStatusChanged(ctx context.Context, ticketID int64,
 // userLabel names a user for staff-facing text: the email when bound, the
 // numeric id otherwise.
 func (s *service) userLabel(ctx context.Context, userID int64) string {
-	if method, err := s.deps.UserAuth.FindUserAuthMethodByUserId(ctx, "email", userID); err == nil && method.AuthIdentifier != "" {
+	if method, err := s.deps.Accounts.FindUserBinding(ctx, userID, "email"); err == nil && method.AuthIdentifier != "" {
 		return method.AuthIdentifier
 	}
 	return fmt.Sprintf("ID:%d", userID)
@@ -291,7 +285,7 @@ func (s *service) NotifyTelegramUser(ctx context.Context, userID int64, text str
 	if bot == nil {
 		return errors.New("telegram bot is not configured")
 	}
-	method, err := s.deps.UserAuth.FindUserAuthMethodByUserId(ctx, "telegram", userID)
+	method, err := s.deps.Accounts.FindUserBinding(ctx, userID, "telegram")
 	if err != nil {
 		return err
 	}
@@ -307,7 +301,7 @@ func (s *service) NotifyTelegramUser(ctx context.Context, userID int64, text str
 	return err
 }
 
-func (s *service) NotifyTelegramUnbind(userID, chatID int64) error {
+func (s *service) NotifyTelegramUnbind(ctx context.Context, userID, chatID int64) error {
 	text, err := telegram.RenderMarkdownV2(telegram.UnbindNotify, map[string]string{
 		"Id":   strconv.FormatInt(userID, 10),
 		"Time": timeutil.Now().Format("2006-01-02 15:04:05"),
@@ -319,7 +313,7 @@ func (s *service) NotifyTelegramUnbind(userID, chatID int64) error {
 	if bot == nil {
 		return errors.New("telegram bot is not configured")
 	}
-	_, err = bot.SendMessage(context.Background(), &tgbot.SendMessageParams{
+	_, err = bot.SendMessage(ctx, &tgbot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
 		ParseMode: models.ParseModeMarkdown,

@@ -11,9 +11,8 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 )
 
-// newPlatformModule wires the platform module against the legacy store. The
-// log-retention callbacks read and mutate the running configuration exactly
-// as the legacy logic did.
+// newPlatformModule wires the platform module against the application store;
+// the callbacks read and update the running configuration.
 func newPlatformModule(store repository.Store, srv *Application) platform.Service {
 	return platform.New(platform.Deps{
 		Logs:    store.Log(),

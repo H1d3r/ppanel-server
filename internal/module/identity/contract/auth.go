@@ -14,12 +14,12 @@ type AuthMethodConfig struct {
 }
 
 type BindOAuthCallbackRequest struct {
-	Method   string      `json:"method" validate:"required,oneof=google apple telegram github"`
+	Method   string      `json:"method" validate:"required,oneof=google apple telegram github facebook"`
 	Callback interface{} `json:"callback" validate:"required"`
 }
 
 type BindOAuthRequest struct {
-	Method   string `json:"method" validate:"required,oneof=google apple telegram github"`
+	Method   string `json:"method" validate:"required,oneof=google apple telegram github facebook"`
 	Redirect string `json:"redirect" validate:"required"`
 }
 
@@ -47,16 +47,14 @@ type CheckVerificationCodeRequest struct {
 	Type    uint8  `json:"type" validate:"required,oneof=1 2"`
 }
 
-type CheckVerificationCodeRespone struct {
+type CheckVerificationCodeResponse struct {
 	Status bool `json:"status"`
-}
+} // @name dto.CheckVerificationCodeRespone
 
 type DeviceLoginRequest struct {
 	Identifier string `json:"identifier" validate:"required,max=255"`
-	Invite     string `json:"invite,optional"`
-	IP         string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent  string `header:"User-Agent" json:"-" swaggerignore:"true"`
-	CfToken    string `json:"cf_token,optional"`
+	Invite     string `json:"invite"`
+	CfToken    string `json:"cf_token"`
 }
 
 type GetAuthMethodConfigRequest struct {
@@ -75,16 +73,16 @@ type LoginResponse struct {
 	Token string `json:"token"`
 }
 
-type OAthLoginRequest struct {
+type OAuthLoginRequest struct {
 	Method   string `json:"method" validate:"required"` // google, facebook, apple, telegram, github etc.
 	Redirect string `json:"redirect"`
-}
+} // @name dto.OAthLoginRequest
 
 type OAuthLoginGetTokenRequest struct {
 	Method   string      `json:"method" validate:"required"` // google, facebook, apple, telegram, github etc.
 	Callback interface{} `json:"callback" validate:"required"`
-	Invite   string      `json:"invite,optional"`
-	CfToken  string      `json:"cf_token,optional"`
+	Invite   string      `json:"invite"`
+	CfToken  string      `json:"cf_token"`
 }
 
 type OAuthLoginResponse struct {
@@ -95,11 +93,9 @@ type ResetPasswordRequest struct {
 	Identifier string `json:"identifier"`
 	Email      string `json:"email" validate:"required,email"`
 	Password   string `json:"password" validate:"required,min=8,max=128"`
-	Code       string `json:"code,optional"`
-	IP         string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent  string `header:"User-Agent" swaggerignore:"true"`
+	Code       string `json:"code"`
 	LoginType  string `header:"Login-Type" swaggerignore:"true"`
-	CfToken    string `json:"cf_token,optional"`
+	CfToken    string `json:"cf_token"`
 }
 
 type SendCodeRequest struct {
@@ -133,10 +129,8 @@ type TelephoneLoginRequest struct {
 	TelephoneCode     string `json:"telephone_code"`
 	TelephoneAreaCode string `json:"telephone_area_code" validate:"required"`
 	Password          string `json:"password"`
-	IP                string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent         string `header:"User-Agent" swaggerignore:"true"`
 	LoginType         string `header:"Login-Type" swaggerignore:"true"`
-	CfToken           string `json:"cf_token,optional"`
+	CfToken           string `json:"cf_token"`
 }
 
 type TelephoneRegisterRequest struct {
@@ -144,12 +138,10 @@ type TelephoneRegisterRequest struct {
 	Telephone         string `json:"telephone" validate:"required"`
 	TelephoneAreaCode string `json:"telephone_area_code" validate:"required"`
 	Password          string `json:"password" validate:"required,min=8,max=128"`
-	Invite            string `json:"invite,optional"`
-	Code              string `json:"code,optional"`
-	IP                string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent         string `header:"User-Agent" swaggerignore:"true"`
-	LoginType         string `header:"Login-Type,optional" swaggerignore:"true"`
-	CfToken           string `json:"cf_token,optional"`
+	Invite            string `json:"invite"`
+	Code              string `json:"code"`
+	LoginType         string `header:"Login-Type" swaggerignore:"true"`
+	CfToken           string `json:"cf_token"`
 }
 
 type TelephoneResetPasswordRequest struct {
@@ -157,11 +149,9 @@ type TelephoneResetPasswordRequest struct {
 	Telephone         string `json:"telephone" validate:"required"`
 	TelephoneAreaCode string `json:"telephone_area_code" validate:"required"`
 	Password          string `json:"password" validate:"required,min=8,max=128"`
-	Code              string `json:"code,optional"`
-	IP                string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent         string `header:"User-Agent" swaggerignore:"true"`
-	LoginType         string `header:"Login-Type,optional" swaggerignore:"true"`
-	CfToken           string `json:"cf_token,optional"`
+	Code              string `json:"code"`
+	LoginType         string `header:"Login-Type" swaggerignore:"true"`
+	CfToken           string `json:"cf_token"`
 }
 
 type TestEmailSendRequest struct {
@@ -188,22 +178,18 @@ type UserLoginRequest struct {
 	Identifier string `json:"identifier"`
 	Email      string `json:"email" validate:"required,email"`
 	Password   string `json:"password" validate:"required"`
-	IP         string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent  string `header:"User-Agent" swaggerignore:"true"`
 	LoginType  string `header:"Login-Type" swaggerignore:"true"`
-	CfToken    string `json:"cf_token,optional"`
+	CfToken    string `json:"cf_token"`
 }
 
 type UserRegisterRequest struct {
 	Identifier string `json:"identifier"`
 	Email      string `json:"email" validate:"required,email"`
 	Password   string `json:"password" validate:"required,min=8,max=128"`
-	Invite     string `json:"invite,optional"`
-	Code       string `json:"code,optional"`
-	IP         string `header:"X-Original-Forwarded-For" swaggerignore:"true"`
-	UserAgent  string `header:"User-Agent" swaggerignore:"true"`
+	Invite     string `json:"invite"`
+	Code       string `json:"code"`
 	LoginType  string `header:"Login-Type" swaggerignore:"true"`
-	CfToken    string `json:"cf_token,optional"`
+	CfToken    string `json:"cf_token"`
 }
 
 type VerifyEmailRequest struct {

@@ -19,10 +19,10 @@ func TestFulfillPaidOrderKeepsRefundedAndStoppedSubscriptionsDown(t *testing.T) 
 		status    uint8
 		orderType uint8
 	}{
-		{"renewal of a refunded subscription", usersub.SubscribeStatusDeducted, OrderTypeRenewal},
-		{"reset of a refunded subscription", usersub.SubscribeStatusDeducted, OrderTypeResetTraffic},
-		{"renewal of a stopped subscription", usersub.SubscribeStatusStopped, OrderTypeRenewal},
-		{"reset of a stopped subscription", usersub.SubscribeStatusStopped, OrderTypeResetTraffic},
+		{"renewal of a refunded subscription", usersub.SubscribeStatusDeducted, order.TypeRenewal},
+		{"reset of a refunded subscription", usersub.SubscribeStatusDeducted, order.TypeResetTraffic},
+		{"renewal of a stopped subscription", usersub.SubscribeStatusStopped, order.TypeRenewal},
+		{"reset of a stopped subscription", usersub.SubscribeStatusStopped, order.TypeResetTraffic},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPeriodFixture(t)

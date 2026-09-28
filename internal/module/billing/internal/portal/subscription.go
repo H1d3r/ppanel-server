@@ -7,9 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // GetSubscription lists the storefront's visible subscription plans.
@@ -26,8 +24,7 @@ func (s *Service) GetSubscription(ctx context.Context, req *dto.GetSubscriptionR
 		DefaultLanguage: true,
 	})
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[Site GetSubscription]", logger.Field("err", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get subscription list error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "get subscription list")
 	}
 	list := make([]dto.BillingSubscribeSnapshot, len(data))
 	for i, item := range data {

@@ -17,6 +17,9 @@ import (
 
 type SendEmailLogic struct {
 	deps Dependencies
+	// senders keeps the provider client between messages; it is rebuilt
+	// when the email configuration changes.
+	senders mail.Senders
 }
 
 func emailLogContent(emailType string, _ map[string]interface{}) map[string]interface{} {
@@ -70,7 +73,7 @@ func (l *SendEmailLogic) ProcessTask(ctx context.Context, task *asynq.Task) erro
 	}
 	ctx = requestmeta.With(ctx, payload.Metadata)
 	ctx = logger.ContextWithRequestMetadata(ctx, payload.Metadata)
-	sender, err := mail.NewSender(l.deps.Email().Platform, l.deps.Email().PlatformConfig, l.deps.SiteName())
+	sender, err := l.senders.Get(l.deps.Email().Platform, l.deps.Email().PlatformConfig, l.deps.SiteName())
 	if err != nil {
 		logger.WithContext(ctx).Error("[SendEmailLogic] NewSender failed", logger.Field("error", err.Error()))
 		return nil
@@ -150,7 +153,7 @@ func (l *SendEmailLogic) ProcessTask(ctx context.Context, task *asynq.Task) erro
 		return err
 	}
 
-	err = sender.Send([]string{payload.Email}, subject, content)
+	err = sender.SendContext(ctx, []string{payload.Email}, subject, content)
 	if err != nil {
 		messageLog.Status = 2
 		logger.WithContext(ctx).Error("[SendEmailLogic] Send email failed", logger.Field("error", err.Error()))

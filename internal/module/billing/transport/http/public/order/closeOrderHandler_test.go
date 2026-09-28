@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/perfect-panel/server/internal/module/billing"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 type unconfirmedCloseService struct{ billing.Service }
@@ -32,7 +33,7 @@ func TestCloseOrderReportsUnconfirmedPaymentConflict(t *testing.T) {
 	if err := json.Unmarshal(ctx.Response.Body(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if ctx.Response.StatusCode() != http.StatusOK || response.Code != 409 || response.Message != "PAYMENT_STATUS_UNCONFIRMED" {
+	if ctx.Response.StatusCode() != http.StatusOK || response.Code != int(xerr.PaymentStatusUnconfirmed) || response.Message != "PAYMENT_STATUS_UNCONFIRMED" {
 		t.Fatalf("unexpected conflict response: %s", ctx.Response.Body())
 	}
 }

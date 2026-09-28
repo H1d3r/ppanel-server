@@ -59,3 +59,28 @@ func TestAlibabaCloudConfig_Unmarshal(t *testing.T) {
 	}
 	assert.Equal(t, "AccessKeyId", v.Access)
 }
+
+// A configuration that does not parse is reported, not silently replaced;
+// the receiver still ends up at the defaults for callers that must go on.
+func TestEmailAndMobileConfigUnmarshalReportParseErrors(t *testing.T) {
+	email := new(EmailAuthConfig)
+	if err := email.Unmarshal(`{"enable_verify":"yes"}`); err == nil {
+		t.Fatal("EmailAuthConfig.Unmarshal accepted a config that does not parse")
+	}
+	assert.Equal(t, "smtp", email.Platform)
+	assert.True(t, email.EnableVerify)
+	assert.Equal(t, mail.DefaultEmailVerifyTemplate, email.VerifyEmailTemplate)
+
+	mobile := new(MobileAuthConfig)
+	if err := mobile.Unmarshal(`{"whitelist":"86"}`); err == nil {
+		t.Fatal("MobileAuthConfig.Unmarshal accepted a config that does not parse")
+	}
+	assert.Equal(t, "alibaba_cloud", mobile.Platform)
+	assert.Empty(t, mobile.Whitelist)
+
+	if err := mobile.Unmarshal(`{"platform":"twilio","enable_whitelist":true,"whitelist":["86"]}`); err != nil {
+		t.Fatalf("valid mobile config: %v", err)
+	}
+	assert.Equal(t, "twilio", mobile.Platform)
+	assert.Equal(t, []string{"86"}, mobile.Whitelist)
+}

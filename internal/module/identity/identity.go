@@ -9,8 +9,9 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/internal/adminuser"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authmethodadmin"
-	authn "github.com/perfect-panel/server/internal/module/identity/internal/authn"
+	"github.com/perfect-panel/server/internal/module/identity/internal/authn"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/oauth"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthflow"
 	"github.com/perfect-panel/server/internal/module/identity/internal/profile"
 	"github.com/perfect-panel/server/internal/module/identity/internal/repo"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verifycode"
@@ -31,11 +32,11 @@ type Service interface {
 	DeleteUserAuthMethod(ctx context.Context, req *dto.DeleteUserAuthMethodRequest) error
 	GetUserAuthMethod(ctx context.Context, req *dto.GetUserAuthMethodRequest) (*dto.GetUserAuthMethodResponse, error)
 	UpdateUserAuthMethod(ctx context.Context, req *dto.UpdateUserAuthMethodRequest) error
-	DeleteUserDevice(ctx context.Context, req *dto.DeleteUserDeivceRequest) error
+	DeleteUserDevice(ctx context.Context, req *dto.DeleteUserDeviceRequest) error
 	UpdateUserDevice(ctx context.Context, req *dto.UserDevice) error
 	KickOfflineByUserDevice(ctx context.Context, req *dto.KickOfflineRequest) error
 	GetUserLoginLogs(ctx context.Context, req *dto.GetUserLoginLogsRequest) (*dto.GetUserLoginLogsResponse, error)
-	UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBasiceInfoRequest) error
+	UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBasicInfoRequest) error
 	UpdateUserNotifySetting(ctx context.Context, req *dto.UpdateUserNotifySettingRequest) error
 
 	// The profile flows resolve the current user from the request context:
@@ -61,20 +62,20 @@ type Service interface {
 	UpdateBindMobile(ctx context.Context, req *dto.UpdateBindMobileRequest) error
 
 	// The authentication flows: existence checks, credential/telephone/device
-	// login and registration, password resets and the OAuth handshakes.
-	// Transport concerns (client IP, user agent, login turnstile) stay in the
-	// handlers.
+	// login and registration, password resets and the OAuth handshakes. They
+	// read the client address and user agent from the request metadata and
+	// apply the configured Turnstile checks themselves.
 	CheckUser(ctx context.Context, req *dto.CheckUserRequest) (*dto.CheckUserResponse, error)
 	CheckUserTelephone(ctx context.Context, req *dto.TelephoneCheckUserRequest) (*dto.TelephoneCheckUserResponse, error)
 	UserLogin(ctx context.Context, req *dto.UserLoginRequest) (*dto.LoginResponse, error)
 	UserRegister(ctx context.Context, req *dto.UserRegisterRequest) (*dto.LoginResponse, error)
-	TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginRequest, ip, userAgent string) (*dto.LoginResponse, error)
+	TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginRequest) (*dto.LoginResponse, error)
 	TelephoneUserRegister(ctx context.Context, req *dto.TelephoneRegisterRequest) (*dto.LoginResponse, error)
 	ResetPassword(ctx context.Context, req *dto.ResetPasswordRequest) (*dto.LoginResponse, error)
 	TelephoneResetPassword(ctx context.Context, req *dto.TelephoneResetPasswordRequest) (*dto.LoginResponse, error)
 	DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) (*dto.LoginResponse, error)
-	OAuthLogin(ctx context.Context, req *dto.OAthLoginRequest) (*dto.OAuthLoginResponse, error)
-	OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest, ip, userAgent string) (*dto.LoginResponse, error)
+	OAuthLogin(ctx context.Context, req *dto.OAuthLoginRequest) (*dto.OAuthLoginResponse, error)
+	OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest) (*dto.LoginResponse, error)
 	AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCallbackRequest) (*AppleLoginRedirect, error)
 
 	// The admin-side authentication-method management: configuration,
@@ -91,7 +92,7 @@ type Service interface {
 	// gating registration and account mutations.
 	SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (*dto.SendCodeResponse, error)
 	SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) (*dto.SendCodeResponse, error)
-	CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeRespone, error)
+	CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeResponse, error)
 }
 
 // AuthSnapshot re-exports the authentication subdomain's per-request view of
@@ -110,11 +111,11 @@ type Deps struct {
 	UserAuths repository.UserAuthRepo
 	Devices   repository.UserDeviceRepo
 	Cache     repository.UserCacheRepo
-	UserSubs  repository.UserSubscriptionRepo
-	Plans     repository.SubscribeRepo
-	Traffic   repository.TrafficRepo
-	Logs      repository.LogRepo
-	Store     Store
+	// UserSubs is the subscription read port the admin account views and
+	// the deletion cache cascade use.
+	UserSubs repository.UserSubscriptionRepo
+	Logs     repository.LogRepo
+	Store    Store
 	// KickDevice force-disconnects a bound device.
 	KickDevice func(userID int64, identifier string)
 
@@ -130,7 +131,7 @@ type Deps struct {
 	// TelegramBotName snapshots the runtime-mutable Telegram bot name.
 	TelegramBotName func() string
 	// NotifyTelegramUnbind sends the best-effort unbind notice.
-	NotifyTelegramUnbind func(userID, chatID int64) error
+	NotifyTelegramUnbind func(ctx context.Context, userID, chatID int64) error
 	// AuthConfig snapshots the runtime-mutable settings consumed by the
 	// authentication flows per request.
 	AuthConfig func() AuthSnapshot
@@ -175,10 +176,17 @@ func NewRepoBuilder() repository.IdentityBuilder {
 }
 
 func New(deps Deps) Service {
+	// Sign-in and account binding share the OAuth round trip.
+	oauthFlow := oauthflow.New(oauthflow.Deps{
+		Auths:    deps.Auths,
+		Redis:    deps.Redis,
+		SiteHost: func() string { return deps.AuthConfig().SiteHost },
+	})
 	authSvc := authn.NewService(authn.Deps{
 		Store:  deps.Store,
 		Redis:  deps.Redis,
 		Config: deps.AuthConfig,
+		OAuth:  oauthFlow,
 	})
 	return &service{
 		authn: authSvc,
@@ -189,8 +197,6 @@ func New(deps Deps) Service {
 			Devices:    deps.Devices,
 			Cache:      deps.Cache,
 			UserSubs:   deps.UserSubs,
-			Plans:      deps.Plans,
-			Traffic:    deps.Traffic,
 			Logs:       deps.Logs,
 			Store:      deps.Store,
 			KickDevice: deps.KickDevice,
@@ -219,8 +225,8 @@ func New(deps Deps) Service {
 			Redis:           deps.Redis,
 			Store:           deps.Store,
 			Policy:          authSvc.Policy(),
+			OAuth:           oauthFlow,
 			EmailDomains:    deps.EmailDomains,
-			SiteHost:        func() string { return deps.AuthConfig().SiteHost },
 			TelegramBotName: deps.TelegramBotName,
 			NotifyUnbind:    deps.NotifyTelegramUnbind,
 			KickDevice:      deps.KickDevice,
@@ -276,7 +282,7 @@ func (s *service) UpdateUserAuthMethod(ctx context.Context, req *dto.UpdateUserA
 	return s.adminUsers.UpdateUserAuthMethod(ctx, req)
 }
 
-func (s *service) DeleteUserDevice(ctx context.Context, req *dto.DeleteUserDeivceRequest) error {
+func (s *service) DeleteUserDevice(ctx context.Context, req *dto.DeleteUserDeviceRequest) error {
 	return s.adminUsers.DeleteUserDevice(ctx, req)
 }
 
@@ -292,7 +298,7 @@ func (s *service) GetUserLoginLogs(ctx context.Context, req *dto.GetUserLoginLog
 	return s.adminUsers.GetUserLoginLogs(ctx, req)
 }
 
-func (s *service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBasiceInfoRequest) error {
+func (s *service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBasicInfoRequest) error {
 	return s.adminUsers.UpdateUserBasicInfo(ctx, req)
 }
 
@@ -384,8 +390,8 @@ func (s *service) UserRegister(ctx context.Context, req *dto.UserRegisterRequest
 	return s.authn.UserRegister(ctx, req)
 }
 
-func (s *service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginRequest, ip, userAgent string) (*dto.LoginResponse, error) {
-	return s.authn.TelephoneLogin(ctx, req, ip, userAgent)
+func (s *service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginRequest) (*dto.LoginResponse, error) {
+	return s.authn.TelephoneLogin(ctx, req)
 }
 
 func (s *service) TelephoneUserRegister(ctx context.Context, req *dto.TelephoneRegisterRequest) (*dto.LoginResponse, error) {
@@ -404,12 +410,12 @@ func (s *service) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) 
 	return s.authn.DeviceLogin(ctx, req)
 }
 
-func (s *service) OAuthLogin(ctx context.Context, req *dto.OAthLoginRequest) (*dto.OAuthLoginResponse, error) {
+func (s *service) OAuthLogin(ctx context.Context, req *dto.OAuthLoginRequest) (*dto.OAuthLoginResponse, error) {
 	return s.authn.OAuthLogin(ctx, req)
 }
 
-func (s *service) OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest, ip, userAgent string) (*dto.LoginResponse, error) {
-	return s.authn.OAuthLoginGetToken(ctx, req, ip, userAgent)
+func (s *service) OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest) (*dto.LoginResponse, error) {
+	return s.authn.OAuthLoginGetToken(ctx, req)
 }
 
 func (s *service) AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCallbackRequest) (*AppleLoginRedirect, error) {
@@ -424,7 +430,7 @@ func (s *service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 	return s.verify.SendSmsCode(ctx, req)
 }
 
-func (s *service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeRespone, error) {
+func (s *service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeResponse, error) {
 	return s.verify.CheckVerificationCode(ctx, req)
 }
 

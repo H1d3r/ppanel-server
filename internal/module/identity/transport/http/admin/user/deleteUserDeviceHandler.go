@@ -17,12 +17,12 @@ import (
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param request body dto.DeleteUserDeivceRequest true "Request parameters"
+// @Param request body dto.DeleteUserDeviceRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/admin/user/device [delete]
 func DeleteUserDeviceHandler(service identity.Service) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		var req dto.DeleteUserDeivceRequest
+		var req dto.DeleteUserDeviceRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {
 			httpx.ParamErrorResult(c, err)
 			return

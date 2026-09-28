@@ -2,12 +2,36 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/app/server/render"
+	"github.com/perfect-panel/server/pkg/logger/logtest"
 )
+
+type failingCloser struct{ err error }
+
+func (c failingCloser) Close() error { return c.err }
+
+// The setup handlers used to drop the error of closing their connection pool.
+func TestCloseDatabaseLogsFailures(t *testing.T) {
+	logs := logtest.NewCollector(t)
+
+	closeDatabase(failingCloser{err: errors.New("connection reset")})
+
+	if out := logs.String(); !strings.Contains(out, "close database connection failed") || !strings.Contains(out, "connection reset") {
+		t.Fatalf("log = %s, want the close failure", out)
+	}
+
+	logs.Reset()
+	closeDatabase(failingCloser{})
+	if out := logs.String(); out != "" {
+		t.Fatalf("a clean close logged %s", out)
+	}
+}
 
 func TestNewConfigServer_rendersInitAndRedirectsUnknownRoutes(t *testing.T) {
 	// Given

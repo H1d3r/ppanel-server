@@ -4,11 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/perfect-panel/server/internal/config"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 type LogoutLogic struct {
@@ -30,11 +29,10 @@ func newLogoutLogic(ctx context.Context, deps Deps) *LogoutLogic {
 func (l *LogoutLogic) Logout() error {
 	sessionID, _ := l.ctx.Value(requestctx.CtxKeySessionID).(string)
 	if sessionID == "" {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return fmt.Errorf("no session to end: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
-	if err := l.deps.Redis.Del(l.ctx, fmt.Sprintf("%v:%v", config.SessionIdKey, sessionID)).Err(); err != nil {
-		l.Errorw("[Logout] delete session failed", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "logout error: %v", err.Error())
+	if err := usersession.End(l.ctx, l.deps.Redis, sessionID); err != nil {
+		return xerr.Wrapf(err, xerr.ERROR, "end session")
 	}
 	return nil
 }

@@ -7,19 +7,22 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
+	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
+// Order types and statuses of the billing order entity, under the names the
+// task adapters have always used.
 const (
-	OrderTypeSubscribe    = 1
-	OrderTypeRenewal      = 2
-	OrderTypeResetTraffic = 3
-	OrderTypeRecharge     = 4
-	OrderStatusPending    = 1
-	OrderStatusPaid       = 2
-	OrderStatusClose      = 3
-	OrderStatusFailed     = 4
-	OrderStatusFinished   = 5
+	OrderTypeSubscribe    = orderEntity.TypeSubscribe
+	OrderTypeRenewal      = orderEntity.TypeRenewal
+	OrderTypeResetTraffic = orderEntity.TypeResetTraffic
+	OrderTypeRecharge     = orderEntity.TypeRecharge
+	OrderStatusPending    = orderEntity.StatusPending
+	OrderStatusPaid       = orderEntity.StatusPaid
+	OrderStatusClose      = orderEntity.StatusClosed
+	OrderStatusFailed     = orderEntity.StatusFailed
+	OrderStatusFinished   = orderEntity.StatusFinished
 )
 
 type PaidOrderActivator interface {

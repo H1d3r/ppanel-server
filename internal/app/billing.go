@@ -28,6 +28,7 @@ func newBillingModule(c config.Config, store repository.Store, queue *taskqueue.
 			NotificationsEnabled: func() bool { return srv.Runtime.Config().Telegram.EnableNotify },
 		},
 		Orders:       store.Order(),
+		OrderEvents:  store.OrderEvent(),
 		Payments:     store.Payment(),
 		Coupons:      store.Coupon(),
 		Withdrawals:  store.UserWithdrawal(),
@@ -37,6 +38,7 @@ func newBillingModule(c config.Config, store repository.Store, queue *taskqueue.
 		Inventory:    subscription.NewInventory(store),
 		Tx:           store,
 		Queue:        activationQueue{client: queue},
+		Redis:        rds,
 		SingleModel:  func() bool { return srv.Runtime.Config().Subscribe.SingleModel },
 		CurrencyUnit: func() string { return srv.Runtime.Config().Currency.Unit },
 		Host:         c.Host,
@@ -56,7 +58,6 @@ func newBillingModule(c config.Config, store repository.Store, queue *taskqueue.
 		GuestAccounts:      store.UserAuth(),
 		Sessions:           rds,
 		GuestCheckoutCache: rds,
-		ActivationQueue:    queue,
 		ExchangeRate:       rate,
 		Portal: billing.PortalConfig{
 			Host:              c.Host,

@@ -8,7 +8,7 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/mysql"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -18,12 +18,21 @@ import (
 var sqlFiles embed.FS
 var NoChange = migrate.ErrNoChange
 
+// pgxScheme selects golang-migrate's pgx/v5 database driver. PostgreSQL
+// migrations run on pgx, the driver GORM already uses for the application's
+// own connection, so golang-migrate's lib/pq driver is not linked in.
+const pgxScheme = "pgx5"
+
 // Up applies every pending migration and always releases the source and
 // database drivers opened by golang-migrate. Callers previously invoked
 // Migrate(...).Up() directly and leaked the migration driver's independent
 // database connection after startup or installation.
 func Up(driver, dsn string) error {
-	return upAndClose(Migrate(driver, dsn))
+	client, err := Migrate(driver, dsn)
+	if err != nil {
+		return err
+	}
+	return upAndClose(client)
 }
 
 type migrationRunner interface {
@@ -46,31 +55,33 @@ func upAndClose(client migrationRunner) error {
 	return errors.Join(migrateErr, closeErr)
 }
 
-func Migrate(driver, dsn string) *migrate.Migrate {
+// Migrate opens a migration client for the dialect's embedded migrations. It
+// connects to the database, so an unreachable database is reported here.
+func Migrate(driver, dsn string) (*migrate.Migrate, error) {
 	driver = orm.NormalizeDriver(driver)
 	sourcePath := "database/mysql"
-	databaseURL := dsn
+	var databaseURL string
 	switch driver {
 	case orm.DriverMySQL:
 		databaseURL = ensureScheme(orm.DriverMySQL, dsn)
 	case orm.DriverPostgres:
 		sourcePath = "database/postgres"
-		databaseURL = ensureScheme(orm.DriverPostgres, dsn)
+		databaseURL = postgresMigrationURL(dsn)
 	default:
 		logger.Errorf("[Migrate] unsupported database driver: %s", driver)
-		panic(fmt.Errorf("unsupported database driver: %s", driver))
+		return nil, fmt.Errorf("unsupported database driver: %s", driver)
 	}
 	d, err := iofs.New(sqlFiles, sourcePath)
 	if err != nil {
 		logger.Errorf("[Migrate] iofs.New error: %v", err.Error())
-		panic(err)
+		return nil, fmt.Errorf("open embedded %s migrations: %w", driver, err)
 	}
 	client, err := migrate.NewWithSourceInstance("iofs", d, databaseURL)
 	if err != nil {
 		logger.Errorf("[Migrate] NewWithSourceInstance error: %v", err.Error())
-		panic(err)
+		return nil, errors.Join(fmt.Errorf("open %s migration database: %w", driver, err), d.Close())
 	}
-	return client
+	return client, nil
 }
 
 func ensureScheme(driver, dsn string) string {
@@ -78,4 +89,18 @@ func ensureScheme(driver, dsn string) string {
 		return dsn
 	}
 	return fmt.Sprintf("%s://%s", driver, dsn)
+}
+
+// postgresMigrationURL addresses a PostgreSQL DSN to the pgx/v5 migration
+// driver, which registers the pgx5 scheme and connects with the equivalent
+// postgres:// URL. Everything after the scheme, including the x-migrations-*
+// options, is kept as given, so the migrations table stays schema_migrations
+// unless the DSN says otherwise.
+func postgresMigrationURL(dsn string) string {
+	for _, scheme := range []string{orm.DriverPostgres + "://", orm.DriverPostgres2 + "://", pgxScheme + "://"} {
+		if len(dsn) >= len(scheme) && strings.EqualFold(dsn[:len(scheme)], scheme) {
+			return pgxScheme + "://" + dsn[len(scheme):]
+		}
+	}
+	return ensureScheme(pgxScheme, dsn)
 }

@@ -8,7 +8,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // Refunded and administrator-stopped subscriptions come back only through an
@@ -29,8 +28,7 @@ func TestRenewalAndResetRejectRefundedOrStoppedSubscription(t *testing.T) {
 
 func assertSubscribeNotAvailable(t *testing.T, action string, status uint8, err error) {
 	t.Helper()
-	var codeErr *xerr.CodeError
-	if !errors.As(err, &codeErr) || codeErr.GetErrCode() != xerr.SubscribeNotAvailable {
+	if xerr.CodeOf(err) != xerr.SubscribeNotAvailable {
 		t.Fatalf("%s of a subscription in status %d: error = %v, want SubscribeNotAvailable", action, status, err)
 	}
 }

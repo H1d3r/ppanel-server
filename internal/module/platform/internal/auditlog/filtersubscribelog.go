@@ -7,6 +7,7 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 )
@@ -55,21 +56,12 @@ func (l *FilterSubscribeLogLogic) FilterSubscribeLog(req *dto.FilterSubscribeLog
 			l.Errorf("[FilterSubscribeLog] failed to unmarshal content: %v", err.Error())
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt subscription log %d: %v", datum.Id, err)
 		}
-		list = append(list, dto.SubscribeLog{
-			UserId:           datum.ObjectID,
-			Token:            content.Token,
-			UserAgent:        content.UserAgent,
-			ClientIP:         content.ClientIP,
-			UserSubscribeId:  content.UserSubscribeId,
-			Timestamp:        datum.CreatedAt.UnixMilli(),
-			ActorID:          content.ActorID,
-			IPCountryCode:    content.IPCountryCode,
-			IPCountry:        content.IPCountry,
-			IPRegion:         content.IPRegion,
-			IPCity:           content.IPCity,
-			IPASN:            content.IPASN,
-			IPASOrganization: content.IPASOrganization,
-		})
+		list = append(list, withRequestMetadata(&dto.SubscribeLog{
+			UserId:          datum.ObjectID,
+			Token:           content.Token,
+			UserSubscribeId: content.UserSubscribeId,
+			Timestamp:       datum.CreatedAt.UnixMilli(),
+		}, requestmeta.Metadata{ClientIP: content.ClientIP, UserAgent: content.UserAgent, ActorID: content.ActorID, IPMetadata: content.IPMetadata}))
 	}
 
 	return &dto.FilterSubscribeLogResponse{

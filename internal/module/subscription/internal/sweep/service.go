@@ -6,6 +6,7 @@ package sweep
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -13,6 +14,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // Notifier delivers the lifecycle notices to the subscription owner. The
@@ -65,32 +67,33 @@ func NewService(deps Deps) *Service {
 // CheckSubscriptions runs both lifecycle sweeps. Each sweep commits its
 // status flip in a subscription-domain transaction; notifications and cache
 // invalidation are retryable side effects that run after the commit
-// (ADR-001 step 2).
+// (ADR-001 step 2). The sweeps are independent: one failing does not stop the
+// other, and the returned error joins both failures so the task records it.
 func (s *Service) CheckSubscriptions(ctx context.Context) error {
-	logger.Infof("[CheckSubscription] Start check subscription: %s", timeutil.Now().Format("2006-01-02 15:04:05"))
-	if err := s.markSubscribes(ctx, 2, "[Check Subscription Traffic]", s.sendTrafficNotify,
-		func(store repository.SubscriptionStore) ([]*usersub.Subscribe, error) {
-			return store.UserSubscription().FindTrafficExceededSubscribes(ctx)
-		}); err != nil {
-		logger.Error("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
-	}
-	if err := s.markSubscribes(ctx, 3, "[Check Subscription Expire]", s.sendExpiredNotify,
-		func(store repository.SubscriptionStore) ([]*usersub.Subscribe, error) {
-			return store.UserSubscription().FindExpiredSubscribes(ctx, timeutil.Now())
-		}); err != nil {
-		logger.Info("[CheckSubscription] Transaction failed", logger.Field("error", err.Error()))
-	}
-	return nil
+	logger.WithContext(ctx).Debugf("[CheckSubscription] Start check subscription: %s", timeutil.Now().Format(time.DateTime))
+	return errors.Join(
+		s.markSubscribes(ctx, usersub.SubscribeStatusFinished, "[Check Subscription Traffic]", s.sendTrafficNotify,
+			func(store repository.SubscriptionStore) ([]*usersub.Subscribe, error) {
+				return store.UserSubscription().FindTrafficExceededSubscribes(ctx)
+			}),
+		s.markSubscribes(ctx, usersub.SubscribeStatusExpired, "[Check Subscription Expire]", s.sendExpiredNotify,
+			func(store repository.SubscriptionStore) ([]*usersub.Subscribe, error) {
+				return store.UserSubscription().FindExpiredSubscribes(ctx, timeutil.Now())
+			}),
+	)
 }
 
+// markSubscribes finishes the subscriptions find selects with status and
+// fires the side effects. A failure is returned, named after its sweep, for
+// the task runner's one log line.
 func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []*usersub.Subscribe), find func(repository.SubscriptionStore) ([]*usersub.Subscribe, error)) error {
+	log := logger.WithContext(ctx)
 	var list []*usersub.Subscribe
 	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		var err error
 		list, err = find(store)
 		if err != nil {
-			logger.Errorw(tag+" Query subscribe failed", logger.Field("error", err.Error()))
-			return err
+			return xerr.Wrapf(err, xerr.DatabaseQueryError, "query subscriptions to finish")
 		}
 		if len(list) == 0 {
 			return nil
@@ -99,13 +102,13 @@ func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, 
 		for _, item := range list {
 			ids = append(ids, item.Id)
 		}
-		return store.UserSubscription().MarkSubscribesFinished(ctx, ids, status, timeutil.Now())
+		return xerr.Wrapf(store.UserSubscription().MarkSubscribesFinished(ctx, ids, status, timeutil.Now()), xerr.DatabaseUpdateError, "mark subscriptions finished")
 	})
 	if err != nil {
-		return err
+		return xerr.Wrapf(err, xerr.ERROR, "%s sweep", tag)
 	}
 	if len(list) == 0 {
-		logger.Info(tag + " No subscribe need to update")
+		log.Debug(tag + " No subscribe need to update")
 		return nil
 	}
 	ids := make([]int64, 0, len(list))
@@ -114,10 +117,10 @@ func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, 
 	}
 	notify(ctx, list)
 	if err := s.deps.Cache.ClearSubscribeCache(ctx, list...); err != nil {
-		logger.Errorw(tag+" Clear subscribe cache failed", logger.Field("error", err.Error()))
+		log.Errorw(tag+" Clear subscribe cache failed", logger.Field("error", err.Error()))
 	}
 	s.clearServerCache(ctx, list...)
-	logger.Infow(tag+" Update subscribe status", logger.Field("user_ids", ids), logger.Field("count", int64(len(ids))))
+	log.Infow(tag+" Update subscribe status", logger.Field("user_subscribe_ids", ids), logger.Field("count", int64(len(ids))))
 	return nil
 }
 
@@ -139,7 +142,7 @@ func (s *Service) ownerEmails(ctx context.Context, subs []*usersub.Subscribe) ma
 	}
 	methods, err := s.deps.Emails.FindUserAuthMethodsByUserIds(ctx, "email", userIDs)
 	if err != nil {
-		logger.Errorw("[CheckSubscription] FindUserAuthMethodsByUserIds failed", logger.Field("error", err.Error()), logger.Field("user_count", len(userIDs)))
+		logger.WithContext(ctx).Errorw("[CheckSubscription] FindUserAuthMethodsByUserIds failed", logger.Field("error", err.Error()), logger.Field("user_count", len(userIDs)))
 		return nil
 	}
 	emails := make(map[int64]string, len(methods))
@@ -175,15 +178,15 @@ func (s *Service) sendTrafficNotify(ctx context.Context, subs []*usersub.Subscri
 	}
 }
 
+// clearServerCache drops the node user lists of the finished subscriptions'
+// plans, all plans in one call.
 func (s *Service) clearServerCache(ctx context.Context, userSubs ...*usersub.Subscribe) {
-	subs := make(map[int64]bool)
+	planIDs := make([]int64, 0, len(userSubs))
 	for _, sub := range userSubs {
-		subs[sub.SubscribeId] = true
+		planIDs = append(planIDs, sub.SubscribeId)
 	}
-	for sub := range subs {
-		if err := s.deps.Plans.ClearCache(ctx, sub); err != nil {
-			logger.Errorw("[CheckSubscription] ClearCache failed", logger.Field("error", err.Error()), logger.Field("subscribe_id", sub))
-		}
+	if err := s.deps.Plans.ClearCache(ctx, planIDs...); err != nil {
+		logger.WithContext(ctx).Errorw("[CheckSubscription] ClearCache failed", logger.Field("error", err.Error()), logger.Field("subscribe_ids", planIDs))
 	}
 }
 

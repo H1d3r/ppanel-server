@@ -21,9 +21,8 @@ import (
 )
 
 // SubscriptionReader is the support module's port onto the subscription
-// domain. The composition root satisfies it today by wrapping the legacy
-// repository; the subscription module facade will implement it once that
-// module exists (ADR-001).
+// domain; the composition root adapts the subscription domain's repository
+// to it.
 type SubscriptionReader interface {
 	HasActiveSubscription(ctx context.Context, userID int64) (bool, error)
 }

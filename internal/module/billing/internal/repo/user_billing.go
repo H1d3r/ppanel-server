@@ -100,14 +100,11 @@ func (m *WalletRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) 
 
 // UpdateBalanceFields persists the balance and gift columns of a wallet row
 // previously locked by FindOneForUpdate.
-func (m *WalletRepo) UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
+func (m *WalletRepo) UpdateBalanceFields(ctx context.Context, data *walletEntity.Wallet) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&walletEntity.Wallet{}).
 			Where("user_id = ?", data.UserId).
-			Updates(map[string]interface{}{
+			Updates(map[string]any{
 				"balance":     data.Balance,
 				"gift_amount": data.GiftAmount,
 			}).Error
@@ -116,11 +113,8 @@ func (m *WalletRepo) UpdateBalanceFields(ctx context.Context, data *walletEntity
 
 // UpdateCommission persists only the commission column: balance movements
 // and commission credits may race on different flows.
-func (m *WalletRepo) UpdateCommission(ctx context.Context, data *walletEntity.Wallet, tx ...*gorm.DB) error {
+func (m *WalletRepo) UpdateCommission(ctx context.Context, data *walletEntity.Wallet) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Model(&walletEntity.Wallet{}).
 			Where("user_id = ?", data.UserId).
 			Update("commission", data.Commission).Error
@@ -129,11 +123,8 @@ func (m *WalletRepo) UpdateCommission(ctx context.Context, data *walletEntity.Wa
 
 // --- withdrawal ---
 
-func (m *WalletRepo) InsertWithdrawal(ctx context.Context, data *walletEntity.Withdrawal, tx ...*gorm.DB) error {
+func (m *WalletRepo) InsertWithdrawal(ctx context.Context, data *walletEntity.Withdrawal) error {
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		if len(tx) > 0 {
-			conn = tx[0]
-		}
 		return conn.Create(data).Error
 	})
 }
@@ -173,7 +164,7 @@ func (m *WalletRepo) UpdateWithdrawalStatus(ctx context.Context, id int64, from,
 	err := m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
 		result := conn.Model(&walletEntity.Withdrawal{}).
 			Where("id = ? AND status = ?", id, from).
-			Updates(map[string]interface{}{"status": to, "reason": reason})
+			Updates(map[string]any{"status": to, "reason": reason})
 		if result.Error != nil {
 			return result.Error
 		}

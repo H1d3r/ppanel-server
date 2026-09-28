@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/robfig/cron/v3"
@@ -27,8 +26,9 @@ type periodicTask struct {
 }
 
 var periodicTasks = []periodicTask{
-	// schedule check subscription task: every 60 seconds
-	{spec: "@every 60s", taskType: taskqueue.SchedulerCheckSubscription, name: "check subscription"},
+	// schedule check subscription task: every 60 seconds. A failed sweep is
+	// not retried: the next tick a minute later runs it afresh.
+	{spec: "@every 60s", taskType: taskqueue.SchedulerCheckSubscription, name: "check subscription", opts: []asynq.Option{asynq.MaxRetry(0)}},
 	// schedule aggregated traffic flush task: every 60 seconds
 	{spec: "@every 60s", taskType: taskqueue.SchedulerFlushTraffic, name: "flush traffic", opts: []asynq.Option{asynq.MaxRetry(3)}},
 	// Paid order state doubles as a durable activation outbox. Reconcile it
@@ -44,8 +44,10 @@ var periodicTasks = []periodicTask{
 	// cross-module events ride on it.
 	{spec: "@every 5s", taskType: taskqueue.SchedulerDispatchDomainEvents, name: "domain event dispatcher", opts: []asynq.Option{asynq.MaxRetry(3)}},
 	{spec: "0 3 * * *", taskType: taskqueue.SchedulerCleanupOrderEvents, name: "order event cleanup", opts: []asynq.Option{asynq.MaxRetry(3)}},
-	// schedule reset traffic task: every day at 00:30
-	{spec: "30 0 * * *", taskType: taskqueue.SchedulerResetTraffic, name: "reset traffic"},
+	// schedule reset traffic task: every day at 00:30. asynq retries a failed
+	// run (half an hour apart, see the task server); the run resets each
+	// subscription at most once per day, so a retry finishes what failed.
+	{spec: "30 0 * * *", taskType: taskqueue.SchedulerResetTraffic, name: "reset traffic", opts: []asynq.Option{asynq.MaxRetry(3)}},
 	// schedule pre-expiry reminder task: every day at 10:00. A reminder is
 	// user-facing, so it goes out during the day rather than overnight, and
 	// once daily rather than on the minute-by-minute lifecycle sweep.
@@ -79,13 +81,15 @@ type Service struct {
 	done    chan struct{}
 }
 
-func NewService(redisConfig config.RedisConfig, appLocation string) *Service {
+// NewService builds the scheduler on the queue's Redis connection; the
+// composition root owns that connection's settings.
+func NewService(redisOpt asynq.RedisConnOpt, appLocation string) *Service {
 	location, err := time.LoadLocation(appLocation)
 	if err != nil {
 		logger.Errorf("load timezone location %q failed: %v, falling back to Local", appLocation, err)
 		location = time.Local
 	}
-	return newService(asynq.RedisClientOpt{Addr: redisConfig.Host, Password: redisConfig.Pass, DB: 5}, location)
+	return newService(redisOpt, location)
 }
 
 func newService(redisOpt asynq.RedisConnOpt, location *time.Location) *Service {
@@ -139,8 +143,9 @@ func (m *Service) register(task periodicTask) error {
 	return nil
 }
 
-// enqueue enqueues the tick of task that fires now, once across replicas.
-func (m *Service) enqueue(task periodicTask, schedule cron.Schedule) {
+// enqueue enqueues the tick of task that fires now, once across replicas,
+// and reports whether this replica's enqueue is the one that landed.
+func (m *Service) enqueue(task periodicTask, schedule cron.Schedule) bool {
 	slot, length := tickSlot(schedule, m.now())
 	opts := append(append([]asynq.Option{}, task.opts...),
 		asynq.TaskID(fmt.Sprintf("%s:%d", task.taskType, slot.Unix())),
@@ -151,6 +156,7 @@ func (m *Service) enqueue(task periodicTask, schedule cron.Schedule) {
 	if err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) {
 		logger.Errorf("enqueue %s task failed: %s", task.name, err.Error())
 	}
+	return err == nil
 }
 
 // tickSlot returns the start and length of the slot a tick at now fires for.

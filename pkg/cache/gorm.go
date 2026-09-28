@@ -30,10 +30,6 @@ return 0
 type (
 	// ExecCtxFn defines the sql exec method.
 	ExecCtxFn func(conn *gorm.DB) error
-	// IndexQueryCtxFn defines the query method that based on unique indexes.
-	IndexQueryCtxFn func(conn *gorm.DB, v interface{}) (interface{}, error)
-	// PrimaryQueryCtxFn defines the query method that based on primary keys.
-	PrimaryQueryCtxFn func(conn *gorm.DB, v, primary interface{}) error
 	// QueryCtxFn defines the query method.
 	QueryCtxFn func(conn *gorm.DB, v interface{}) error
 

@@ -5,7 +5,6 @@ import (
 
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/auth/usersession"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -29,7 +28,7 @@ func newUpdateUserPasswordLogic(ctx context.Context, deps Deps) *UpdateUserPassw
 }
 
 func (l *UpdateUserPasswordLogic) UpdateUserPassword(req *dto.UpdateUserPasswordRequest) error {
-	userInfo, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	userInfo, ok := user.FromContext(l.ctx)
 	if !ok {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
@@ -41,11 +40,11 @@ func (l *UpdateUserPasswordLogic) UpdateUserPassword(req *dto.UpdateUserPassword
 	// The new hash always uses the current algorithm; a migrated user would
 	// otherwise keep verifying it with the old legacy algorithm.
 	if err := l.deps.Users.UpdateColumns(l.ctx, userInfo.Id, password.UserColumns(req.Password)); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Update user password error")
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update password of user %d", userInfo.Id)
 	}
 	// Every session from before the change ends, including a stolen one.
 	if err := usersession.Revoke(l.ctx, l.deps.Redis, userInfo.Id); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "revoke sessions error: %v", err)
+		return xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
 	}
 	return nil
 }

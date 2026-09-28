@@ -1,7 +1,9 @@
 // Package callbacks implements the payment gateway callback subdomain of the
-// billing module: it authenticates EPay/Stripe/Alipay/Cryptomus notifications,
-// verifies them against the order's immutable payment expectation, re-confirms
-// with the gateway and settles the payment. Only the module facade may reach it.
+// billing module: it authenticates gateway notifications, verifies them
+// against the order's immutable payment expectation, re-confirms with the
+// gateway and settles the payment. The gateway-specific protocol lives in
+// the gateway package; this is the one flow every gateway goes through. Only
+// the module facade may reach it.
 package callbacks
 
 import (
@@ -10,31 +12,120 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/xerr"
+	pkgerrors "github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 type Service struct {
-	orders repository.OrderRepo
-	queue  settle.Queue
+	orders   settle.Orders
+	queue    settle.Queue
+	gateways *gateway.Registry
 }
 
-func NewService(orders repository.OrderRepo, queue settle.Queue) *Service {
-	return &Service{orders: orders, queue: queue}
+// NewService builds the callback flow; a nil registry selects the production
+// gateways.
+func NewService(orders settle.Orders, queue settle.Queue, gateways *gateway.Registry) *Service {
+	if gateways == nil {
+		gateways = gateway.NewRegistry()
+	}
+	return &Service{orders: orders, queue: queue, gateways: gateways}
 }
 
-func (s *Service) settle(ctx context.Context, orderInfo *order.Order, tradeNo string) error {
-	return settle.VerifiedPayment(ctx, s.orders, s.queue, orderInfo, tradeNo)
+// Notify authenticates and settles a callback delivered to the notify URL of
+// the payment method the notify middleware put in ctx.
+func (s *Service) Notify(ctx context.Context, n gateway.Notification) error {
+	method, ok := ctx.Value(requestctx.CtxKeyPayment).(*payment.Payment)
+	if !ok {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.ERROR), "payment config not found")
+	}
+	if err := s.notify(ctx, method, n); err != nil {
+		logger.WithContext(ctx).Errorw("[PaymentNotify] Callback rejected",
+			logger.Field("platform", method.Platform), logger.Field("payment", method.Id), logger.Field("error", err.Error()))
+		return err
+	}
+	return nil
 }
 
-func validateOrderPayment(orderInfo *order.Order, paymentConfig *payment.Payment) error {
-	if orderInfo.PaymentId != paymentConfig.Id {
+func (s *Service) notify(ctx context.Context, method *payment.Payment, n gateway.Notification) error {
+	gw, err := s.gateways.Open(method)
+	if err != nil {
+		return err
+	}
+	notice, err := gw.ParseCallback(ctx, n)
+	if err != nil {
+		return err
+	}
+	if notice.Ignore {
+		return nil
+	}
+	orderInfo, err := s.orders.FindOneByOrderNo(ctx, notice.OrderNo)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", notice.OrderNo)
+	}
+	if err != nil {
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", notice.OrderNo)
+	}
+	if err := validateOrderPayment(orderInfo, method); err != nil {
+		return err
+	}
+	if err := gw.CheckOrder(orderInfo, notice); err != nil {
+		return err
+	}
+	if !notice.Paid {
+		return acknowledgeLifecycle(ctx, orderInfo, notice)
+	}
+	if finished, err := finishedOrderDuplicate(ctx, orderInfo, notice.TradeNo); err != nil || finished {
+		return err
+	}
+	if err := validateOrderCanSettle(orderInfo); err != nil {
+		return err
+	}
+	if err := validatePaymentExpectation(orderInfo, notice.Amount, notice.Currency); err != nil {
+		return err
+	}
+	if err := gw.ConfirmPayment(ctx, orderInfo, notice); err != nil {
+		return err
+	}
+	if err := settle.VerifiedPayment(ctx, s.orders, s.queue, orderInfo, notice.TradeNo); err != nil {
+		return err
+	}
+	logger.WithContext(ctx).Infow("[PaymentNotify] Notify processed", logger.Field("platform", method.Platform), logger.Field("orderNo", orderInfo.OrderNo))
+	return nil
+}
+
+// acknowledgeLifecycle accepts a valid lifecycle event that does not
+// announce a payment. It is not a failed payment callback: it is
+// acknowledged without settling or downgrading the local order, even when
+// delivery is out of order or a cancelled order is already closed.
+func acknowledgeLifecycle(ctx context.Context, orderInfo *order.Order, notice *gateway.Notice) error {
+	if err := validatePaymentExpectation(orderInfo, notice.Amount, notice.Currency); err != nil {
+		return err
+	}
+	fields := append([]logger.LogField{
+		logger.Field("orderNo", orderInfo.OrderNo),
+		logger.Field("status", notice.Status),
+		logger.Field("order_status", orderInfo.Status),
+	}, notice.Fields...)
+	if notice.ManualReview {
+		logger.WithContext(ctx).Errorw("[PaymentNotify] Payment requires manual review", append(fields, logger.Field("requires_manual_review", true))...)
+		return nil
+	}
+	logger.WithContext(ctx).Infow("[PaymentNotify] Payment status received without settlement", fields...)
+	return nil
+}
+
+func validateOrderPayment(orderInfo *order.Order, method *payment.Payment) error {
+	if orderInfo.PaymentId != method.Id {
 		return errors.New("payment method mismatch")
 	}
-	if orderInfo.Method != paymentConfig.Platform {
+	if orderInfo.Method != method.Platform {
 		return errors.New("payment platform mismatch")
 	}
 	return nil
@@ -62,7 +153,7 @@ func validatePaymentExpectation(orderInfo *order.Order, amount int64, currency s
 // emitted so the gap can be audited, and the callback is treated as a known
 // duplicate so the gateway stops retrying.
 func finishedOrderDuplicate(ctx context.Context, orderInfo *order.Order, tradeNo string) (bool, error) {
-	if orderInfo.Status != settle.StatusFinished {
+	if orderInfo.Status != order.StatusFinished {
 		return false, nil
 	}
 	if err := settle.ValidateTradeNo(tradeNo); err != nil {
@@ -84,7 +175,7 @@ func finishedOrderDuplicate(ctx context.Context, orderInfo *order.Order, tradeNo
 }
 
 func validateOrderCanSettle(orderInfo *order.Order) error {
-	if orderInfo.Status != settle.StatusPending && orderInfo.Status != settle.StatusPaid {
+	if !order.CanSettle(orderInfo.Status) {
 		return fmt.Errorf("invalid order status transition: %d", orderInfo.Status)
 	}
 	return nil

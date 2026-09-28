@@ -65,9 +65,6 @@ const AuthCodeTelephoneCacheKey = "auth:verify:telephone"
 // CommonStatCacheKey CommonStat Cache Key
 const CommonStatCacheKey = "common:stat"
 
-// ServerCountCacheKey Server Count Cache Key
-const ServerCountCacheKey = "server:count"
-
 // SendIntervalKeyPrefix Auth Code Send Interval Key Prefix
 const SendIntervalKeyPrefix = "send:interval:"
 

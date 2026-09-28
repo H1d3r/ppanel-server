@@ -26,15 +26,15 @@ import (
 )
 
 // EmailRecipientReader is the marketing subdomain's port onto the identity
-// domain; the legacy user repository satisfies it structurally.
+// domain; the identity module's user repository satisfies it structurally.
 type EmailRecipientReader interface {
 	QueryEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) ([]string, error)
 	CountEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) (int64, error)
 }
 
 // SubscriptionSelector is the port onto the subscription domain for selecting
-// quota-task targets; the legacy user-subscription repository satisfies it
-// structurally.
+// quota-task targets; the subscription module's user-subscription repository
+// satisfies it structurally.
 type SubscriptionSelector interface {
 	QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error)
 	CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error)

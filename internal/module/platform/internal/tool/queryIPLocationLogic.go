@@ -5,36 +5,27 @@ import (
 	"net"
 
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type QueryIPLocationLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewQueryIPLocationLogic Query IP Location
-func newQueryIPLocationLogic(ctx context.Context, deps Deps) *QueryIPLocationLogic {
-	return &QueryIPLocationLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *QueryIPLocationLogic) QueryIPLocation(req *dto.QueryIPLocationRequest) (resp *dto.QueryIPLocationResponse, err error) {
-	if l.deps.GeoIP == nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), " GeoIP database not configured")
-	}
-
+// QueryIPLocation looks an IP address up in the local GeoIP database.
+func (s *Service) QueryIPLocation(ctx context.Context, req *dto.QueryIPLocationRequest) (*dto.QueryIPLocationResponse, error) {
 	ip := net.ParseIP(req.IP)
-	record, err := l.deps.GeoIP().City(ip)
+	if ip == nil {
+		return nil, xerr.Errorf(xerr.InvalidParams, "not an IP address")
+	}
+	// The database may be missing or still downloading: the accessor then
+	// returns nil, and a nil reader must not be dereferenced.
+	if s.deps.GeoIP == nil {
+		return nil, xerr.Errorf(xerr.ERROR, "GeoIP database not configured")
+	}
+	reader := s.deps.GeoIP()
+	if reader == nil {
+		return nil, xerr.Errorf(xerr.ERROR, "GeoIP database not loaded")
+	}
+	record, err := reader.City(ip)
 	if err != nil {
-		l.Errorf("Failed to query IP location: %v", err)
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Failed to query IP location")
+		return nil, xerr.Wrapf(err, xerr.ERROR, "query IP location: %v", err)
 	}
 
 	var country, region, city string
@@ -47,10 +38,5 @@ func (l *QueryIPLocationLogic) QueryIPLocation(req *dto.QueryIPLocationRequest) 
 	if record.City.Names != nil {
 		city = record.City.Names["en"]
 	}
-
-	return &dto.QueryIPLocationResponse{
-		Country: country,
-		Region:  region,
-		City:    city,
-	}, nil
+	return &dto.QueryIPLocationResponse{Country: country, Region: region, City: city}, nil
 }

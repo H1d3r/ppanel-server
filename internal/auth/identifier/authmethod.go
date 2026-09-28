@@ -1,19 +1,45 @@
 package identifier
 
-import "strings"
+import (
+	"strings"
+)
 
 const (
-	Email  = "email"  //邮箱
-	Mobile = "mobile" //手机
-	Device = "device" //设备
-
+	Email  = "email"
+	Mobile = "mobile"
+	Device = "device"
 )
 
 func CanonicalEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
+// NormalizeIdentifier returns the form an identifier of authType is stored
+// and looked up in: an email address lower-cased and trimmed, a phone number
+// in E.164 (see CanonicalMobile). Other identifiers are opaque and returned
+// as given. It fails for an empty email address or a phone number that does
+// not parse.
+func NormalizeIdentifier(authType, identifier string) (string, error) {
+	switch authType {
+	case Email:
+		canonical := CanonicalEmail(identifier)
+		if canonical == "" {
+			return "", ErrInvalidEmail
+		}
+		return canonical, nil
+	case Mobile:
+		return CanonicalMobile(identifier)
+	default:
+		return identifier, nil
+	}
+}
+
+// CanonicalIdentifier is NormalizeIdentifier for lookups: an identifier that
+// cannot be normalized is returned as given and simply matches nothing.
 func CanonicalIdentifier(authType, identifier string) string {
+	if canonical, err := NormalizeIdentifier(authType, identifier); err == nil {
+		return canonical
+	}
 	if authType == Email {
 		return CanonicalEmail(identifier)
 	}

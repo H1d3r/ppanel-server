@@ -8,7 +8,6 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 type TestSmsSendLogic struct {
@@ -29,13 +28,13 @@ func newTestSmsSendLogic(ctx context.Context, deps Deps) *TestSmsSendLogic {
 func (l *TestSmsSendLogic) TestSmsSend(req *dto.TestSmsSendRequest) error {
 	client, err := sms.NewSender(l.deps.Config().MobilePlatform, l.deps.Config().MobilePlatformConfig)
 	if err != nil {
-		l.Errorw("new sms sender err", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "new sms sender err: %v", err.Error())
+		return xerr.Wrapf(err, xerr.ERROR, "new sms sender")
 	}
 	err = client.SendCode(req.AreaCode, req.Telephone, "123456")
 	if err != nil {
-		l.Errorw("send sms err", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCodeMsg(500, fmt.Sprintf("send sms err: %v", err.Error())), "send sms err: %v", err.Error())
+		// The administrator is testing the sender, so the failure itself is
+		// the answer.
+		return fmt.Errorf("send test sms: %w", xerr.NewErrCodeMsg(xerr.SenderTestFailed, fmt.Sprintf("send sms err: %v", err.Error())))
 	}
 	return nil
 }

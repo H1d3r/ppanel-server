@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 type ownershipUserSubs struct {
@@ -22,34 +22,28 @@ func (r ownershipUserSubs) FindOneUserSubscribe(_ context.Context, _ int64) (*us
 }
 
 func ownerContext(id int64) context.Context {
-	return context.WithValue(context.Background(), requestctx.CtxKeyUser, &userEntity.User{Id: id})
+	return userEntity.NewContext(context.Background(), &userEntity.User{Id: id})
 }
 
 func TestRenewalRejectsSubscriptionOwnedByAnotherUser(t *testing.T) {
 	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 33}}})
 
 	_, err := svc.Renewal(ownerContext(11), &dto.RenewalOrderRequest{UserSubscribeID: 22})
-	if err == nil {
-		t.Fatal("renewal accepted a subscription owned by another user")
-	}
+	assertCode(t, err, xerr.InvalidAccess)
 }
 
 func TestRenewalRejectsDeductedSubscription(t *testing.T) {
 	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 11, Status: usersub.SubscribeStatusDeducted}}})
 
 	_, err := svc.Renewal(ownerContext(11), &dto.RenewalOrderRequest{UserSubscribeID: 22})
-	if err == nil {
-		t.Fatal("renewal accepted a deducted subscription")
-	}
+	assertCode(t, err, xerr.SubscribeNotAvailable)
 }
 
 func TestResetTrafficRejectsSubscriptionOwnedByAnotherUser(t *testing.T) {
 	svc := NewService(Deps{UserSubs: ownershipUserSubs{subscribe: &usersub.SubscribeDetails{Id: 22, UserId: 33}}})
 
 	_, err := svc.ResetTraffic(ownerContext(11), &dto.ResetTrafficOrderRequest{UserSubscribeID: 22})
-	if err == nil {
-		t.Fatal("reset traffic accepted a subscription owned by another user")
-	}
+	assertCode(t, err, xerr.InvalidAccess)
 }
 
 func TestResetTrafficRejectsExpiredSubscription(t *testing.T) {
@@ -58,9 +52,7 @@ func TestResetTrafficRejectsExpiredSubscription(t *testing.T) {
 	}}})
 
 	_, err := svc.ResetTraffic(ownerContext(11), &dto.ResetTrafficOrderRequest{UserSubscribeID: 22})
-	if err == nil {
-		t.Fatal("reset traffic accepted an expired subscription")
-	}
+	assertCode(t, err, xerr.SubscribeNotAvailable)
 }
 
 func TestLocalCheckoutRejectsProviderManagedSubscription(t *testing.T) {

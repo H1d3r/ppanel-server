@@ -21,11 +21,10 @@ var (
 	// maxContentLength is used to truncate the log content, 0 for not truncating.
 	maxContentLength uint32
 	// use uint32 for atomic operations
-	disableStat uint32
-	logLevel    uint32
-	options     logOptions
-	writer      = new(atomicWriter)
-	setupOnce   sync.Once
+	logLevel  uint32
+	options   logOptions
+	writer    = new(atomicWriter)
+	setupOnce sync.Once
 )
 
 type (
@@ -36,8 +35,8 @@ type (
 		allowRiskMetadata bool
 	}
 
-	// LogOption defines the method to customize the logging.
-	LogOption func(options *logOptions)
+	// logOption customizes the file output.
+	logOption func(options *logOptions)
 
 	logEntry map[string]any
 
@@ -51,32 +50,8 @@ type (
 	}
 )
 
-// AddWriter adds a new writer.
-// If there is already a writer, the new writer will be added to the writer chain.
-// For example, to write logs to both file and console, if there is already a file writer,
-// ```go
-// logx.AddWriter(logx.NewWriter(os.Stdout))
-// ```
-func AddWriter(w Writer) {
-	ow := Reset()
-	if ow == nil {
-		SetWriter(w)
-	} else {
-		// no need to check if the existing writer is a comboWriter,
-		// because it is not common to add more than one writer.
-		// even more than one writer, the behavior is the same.
-		SetWriter(comboWriter{
-			writers: []Writer{ow, w},
-		})
-	}
-}
-
-// Alert alerts v in alert level, and the message is written to error log.
-func Alert(v string) {
-	getWriter().Alert(redactText(v))
-}
-
-// Close closes the logging.
+// Close flushes and closes the logging output; entries logged afterwards go
+// to the console.
 func Close() error {
 	if w := writer.Swap(nil); w != nil {
 		return w.(io.Closer).Close()
@@ -100,29 +75,10 @@ func Debugf(format string, v ...any) {
 	}
 }
 
-// Debugv writes v into access log with json content.
-func Debugv(v any) {
-	if shallLog(DebugLevel) {
-		writeDebug(v)
-	}
-}
-
-// Debugw writes msg along with fields into the access log.
-func Debugw(msg string, fields ...LogField) {
-	if shallLog(DebugLevel) {
-		writeDebug(msg, fields...)
-	}
-}
-
 // Disable disables the logging.
 func Disable() {
 	atomic.StoreUint32(&logLevel, disableLevel)
 	writer.Store(nopWriter{})
-}
-
-// DisableStat disables the stat logs.
-func DisableStat() {
-	atomic.StoreUint32(&disableStat, 1)
 }
 
 // Error writes v into error log.
@@ -140,27 +96,11 @@ func Errorf(format string, v ...any) {
 	}
 }
 
-// ErrorStack writes v along with call stack into error log.
-func ErrorStack(v ...any) {
+// errorStack writes v along with call stack into error log.
+func errorStack(v ...any) {
 	if shallLog(ErrorLevel) {
 		// there is newline in stack string
 		writeStack(redactText(fmt.Sprint(v...)))
-	}
-}
-
-// ErrorStackf writes v along with call stack in format into error log.
-func ErrorStackf(format string, v ...any) {
-	if shallLog(ErrorLevel) {
-		// there is newline in stack string
-		writeStack(fmt.Sprintf(format, v...))
-	}
-}
-
-// Errorv writes v into error log with json content.
-// No call stack attached, because not elegant to pack the messages.
-func Errorv(v any) {
-	if shallLog(ErrorLevel) {
-		writeError(v)
 	}
 }
 
@@ -226,13 +166,6 @@ func Infof(format string, v ...any) {
 	}
 }
 
-// Infov writes v into access log with json content.
-func Infov(v any) {
-	if shallLog(InfoLevel) {
-		writeInfo(v)
-	}
-}
-
 // Infow writes msg along with fields into the access log.
 func Infow(msg string, fields ...LogField) {
 	if shallLog(InfoLevel) {
@@ -257,18 +190,13 @@ func Must(err error) {
 	}
 }
 
-// MustSetup sets up logging with given config c. It exits on error.
-func MustSetup(c LogConf) {
-	Must(SetUp(c))
-}
-
 // Reset clears the writer and resets the log level.
 func Reset() Writer {
 	return writer.Swap(nil)
 }
 
-// SetLevel sets the logging level. It can be used to suppress some logs.
-func SetLevel(level uint32) {
+// setLevel sets the logging level. It can be used to suppress some logs.
+func setLevel(level uint32) {
 	atomic.StoreUint32(&logLevel, level)
 }
 
@@ -289,10 +217,6 @@ func SetUp(c LogConf) (err error) {
 	// Need to wait for the first caller to complete the execution.
 	setupOnce.Do(func() {
 		setupLogLevel(c)
-
-		if !c.Stat {
-			DisableStat()
-		}
 
 		if len(c.TimeFormat) > 0 {
 			timeFormat = c.TimeFormat
@@ -323,101 +247,43 @@ func SetUp(c LogConf) (err error) {
 	return
 }
 
-// Severe writes v into severe log.
-func Severe(v ...any) {
-	if shallLog(SevereLevel) {
-		writeSevere(redactText(fmt.Sprint(v...)))
-	}
-}
-
-// Severef writes v with format into severe log.
-func Severef(format string, v ...any) {
-	if shallLog(SevereLevel) {
-		writeSevere(fmt.Sprintf(format, v...))
-	}
-}
-
-// Slow writes v into slow log.
-func Slow(v ...any) {
-	if shallLog(ErrorLevel) {
-		msg, fields := splitLogArgs(v)
-		writeSlow(msg, fields...)
-	}
-}
-
-// Slowf writes v with format into slow log.
-func Slowf(format string, v ...any) {
-	if shallLog(ErrorLevel) {
-		writeSlow(fmt.Sprintf(format, v...))
-	}
-}
-
-// Slowv writes v into slow log with json content.
-func Slowv(v any) {
-	if shallLog(ErrorLevel) {
-		writeSlow(v)
-	}
-}
-
-// Sloww writes msg along with fields into slow log.
-func Sloww(msg string, fields ...LogField) {
-	if shallLog(ErrorLevel) {
-		writeSlow(msg, fields...)
-	}
-}
-
-// Stat writes v into stat log.
-func Stat(v ...any) {
-	if shallLogStat() && shallLog(InfoLevel) {
-		msg, fields := splitLogArgs(v)
-		writeStat(msg, fields...)
-	}
-}
-
-// Statf writes v with format into stat log.
-func Statf(format string, v ...any) {
-	if shallLogStat() && shallLog(InfoLevel) {
-		writeStat(fmt.Sprintf(format, v...))
-	}
-}
-
-// WithCooldownMillis customizes logging on writing call stack interval.
-func WithCooldownMillis(millis int) LogOption {
+// withCooldownMillis customizes logging on writing call stack interval.
+func withCooldownMillis(millis int) logOption {
 	return func(opts *logOptions) {
 		opts.logStackCooldownMills = millis
 	}
 }
 
-// WithKeepDays customizes logging to keep logs with days.
-func WithKeepDays(days int) LogOption {
+// withKeepDays customizes logging to keep logs with days.
+func withKeepDays(days int) logOption {
 	return func(opts *logOptions) {
 		opts.keepDays = days
 	}
 }
 
-// WithGzip customizes logging to automatically gzip the log files.
-func WithGzip() LogOption {
+// withGzip customizes logging to automatically gzip the log files.
+func withGzip() logOption {
 	return func(opts *logOptions) {
 		opts.gzipEnabled = true
 	}
 }
 
-// WithMaxBackups customizes how many log files backups will be kept.
-func WithMaxBackups(count int) LogOption {
+// withMaxBackups customizes how many log files backups will be kept.
+func withMaxBackups(count int) logOption {
 	return func(opts *logOptions) {
 		opts.maxBackups = count
 	}
 }
 
-// WithMaxSize customizes how much space the writing log file can take up.
-func WithMaxSize(size int) LogOption {
+// withMaxSize customizes how much space the writing log file can take up.
+func withMaxSize(size int) logOption {
 	return func(opts *logOptions) {
 		opts.maxSize = size
 	}
 }
 
-// WithRotation customizes which log rotation rule to use.
-func WithRotation(r string) LogOption {
+// withRotation customizes which log rotation rule to use.
+func withRotation(r string) logOption {
 	return func(opts *logOptions) {
 		opts.rotationRule = r
 	}
@@ -435,13 +301,13 @@ func createOutput(path string) (io.WriteCloser, error) {
 	var rule RotateRule
 	switch options.rotationRule {
 	case sizeRotationRule:
-		rule = NewSizeLimitRotateRule(path, backupFileDelimiter, options.keepDays, options.maxSize,
+		rule = newSizeLimitRotateRule(path, backupFileDelimiter, options.keepDays, options.maxSize,
 			options.maxBackups, options.gzipEnabled)
 	default:
-		rule = DefaultRotateRule(path, backupFileDelimiter, options.keepDays, options.gzipEnabled)
+		rule = defaultRotateRule(path, backupFileDelimiter, options.keepDays, options.gzipEnabled)
 	}
 
-	return NewLogger(path, rule, options.gzipEnabled)
+	return newRotateLogger(path, rule, options.gzipEnabled)
 }
 
 func encodeError(err error) (ret string) {
@@ -479,7 +345,7 @@ func getWriter() Writer {
 	return w
 }
 
-func handleOptions(opts []LogOption) {
+func handleOptions(opts []logOption) {
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -488,13 +354,13 @@ func handleOptions(opts []LogOption) {
 func setupLogLevel(c LogConf) {
 	switch c.Level {
 	case levelDebug:
-		SetLevel(DebugLevel)
+		setLevel(DebugLevel)
 	case levelInfo:
-		SetLevel(InfoLevel)
+		setLevel(InfoLevel)
 	case levelError:
-		SetLevel(ErrorLevel)
+		setLevel(ErrorLevel)
 	case levelSevere:
-		SetLevel(SevereLevel)
+		setLevel(SevereLevel)
 	}
 }
 
@@ -525,10 +391,6 @@ func shallLog(level uint32) bool {
 	return atomic.LoadUint32(&logLevel) <= level
 }
 
-func shallLogStat() bool {
-	return atomic.LoadUint32(&disableStat) == 0
-}
-
 // writeDebug writes v into debug log.
 // Not checking shallLog here is for performance consideration.
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
@@ -553,34 +415,10 @@ func writeInfo(val any, fields ...LogField) {
 	getWriter().Info(redactValue(val), redactFields(addCaller(fields...))...)
 }
 
-// writeSevere writes v into severe log.
-// Not checking shallLog here is for performance consideration.
-// If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
-// The caller should check shallLog before calling this function.
-func writeSevere(msg string) {
-	getWriter().Severe(fmt.Sprintf("%s\n%s", redactText(msg), string(debug.Stack())))
-}
-
-// writeSlow writes v into slow log.
-// Not checking shallLog here is for performance consideration.
-// If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
-// The caller should check shallLog before calling this function.
-func writeSlow(val any, fields ...LogField) {
-	getWriter().Slow(redactValue(val), redactFields(addCaller(fields...))...)
-}
-
 // writeStack writes v into stack log.
 // Not checking shallLog here is for performance consideration.
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
 // The caller should check shallLog before calling this function.
 func writeStack(msg string) {
 	getWriter().Stack(fmt.Sprintf("%s\n%s", redactText(msg), string(debug.Stack())))
-}
-
-// writeStat writes v into the stat log.
-// Not checking shallLog here is for performance consideration.
-// If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
-// The caller should check shallLog before calling this function.
-func writeStat(msg string, fields ...LogField) {
-	getWriter().Stat(redactText(msg), redactFields(addCaller(fields...))...)
 }

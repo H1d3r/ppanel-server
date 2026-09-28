@@ -3,39 +3,44 @@ package random
 import (
 	cryptorand "crypto/rand"
 	"math/big"
+	"slices"
 	"strings"
 )
 
 const (
+	// chars62 is the digit alphabet of EncodeBase62, shuffled so that
+	// consecutive ids do not read as consecutive codes.
 	chars62 = "E7gLp4jWS6kPv5DzxaY1o9sNcFmBAlUut0ZOhKVM38bqHRJfCwdrTni2QIeXGy"
 	base62  = int64(len(chars62))
+	// codeLength is the length shorter codes are padded to.
+	codeLength = 6
+	// padStride separates the padding characters, taken from the end of
+	// the alphabet backwards.
+	padStride = 3
 )
 
+// EncodeBase62 is the invite-code encoding: id in base 62 over the shuffled
+// chars62 alphabet, most significant digit first, left-padded to six
+// characters. The padding is chars62's last character next to the digits,
+// then every third character before it. The padding makes the encoding
+// irreversible and not injective (916132831 and 56800235583 both give
+// "yyyyyy"); zero encodes as the single character "E" and a negative id as
+// the padding alone. Invite codes are stored and shared, so the output must
+// never change; TestEncodeBase62Golden pins it.
 func EncodeBase62(id int64) string {
 	if id == 0 {
 		return string(chars62[0])
 	}
-
-	encoded := ""
-	for id > 0 {
-		remainder := id % base62
-		encoded = string(chars62[remainder]) + encoded
-		id /= base62
+	// Built least significant digit first, then reversed.
+	code := make([]byte, 0, 11)
+	for ; id > 0; id /= base62 {
+		code = append(code, chars62[id%base62])
 	}
-
-	index := len(chars62) - 1
-	for len(encoded) < 6 {
-		encoded = string(chars62[index]) + encoded
-		index -= 3
-		if index < 0 {
-			index = len(chars62) - 1
-		}
+	for pad := 0; len(code) < codeLength; pad++ {
+		code = append(code, chars62[len(chars62)-1-padStride*pad])
 	}
-	// if len(encoded) > 7 {
-	// 	encoded = encoded[:7]
-	// }
-
-	return encoded
+	slices.Reverse(code)
+	return string(code)
 }
 
 func Key(length int, keyType int) string {

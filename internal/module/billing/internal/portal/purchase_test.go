@@ -2,184 +2,84 @@ package portal
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
-	order2 "github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
-	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
-	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
+	"github.com/perfect-panel/server/internal/module/billing/internal/pricing"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
-	"gorm.io/gorm"
 )
 
-type guestAuthLookup struct {
-	lookups []string
+// guestShop is a plan on sale and an EPay method guests pay with.
+type guestShop struct {
+	*portalFixture
+	plan   *subscribe.Subscribe
+	method *payment.Payment
 }
 
-func (r *guestAuthLookup) FindUserAuthMethodByOpenID(_ context.Context, method, openID string) (*userEntity.AuthMethods, error) {
-	r.lookups = append(r.lookups, method+"|"+openID)
-	return &userEntity.AuthMethods{}, gorm.ErrRecordNotFound
+func newGuestShop(t *testing.T, adjust ...func(*Deps)) *guestShop {
+	t.Helper()
+	f := newPortalFixture(t, adjust...)
+	return &guestShop{portalFixture: f, plan: f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 5 }), method: f.epay()}
 }
 
-type guestPurchaseOrders struct {
-	repository.OrderRepo
-	pending        int64
-	pendingQueries []string
-	inserted       []*order2.Order
-}
-
-func (r *guestPurchaseOrders) CountPendingGuestOrders(_ context.Context, authType, identifier string) (int64, error) {
-	r.pendingQueries = append(r.pendingQueries, authType+"|"+identifier)
-	return r.pending, nil
-}
-
-func (r *guestPurchaseOrders) Insert(_ context.Context, data *order2.Order, _ ...*gorm.DB) error {
-	copy := *data
-	r.inserted = append(r.inserted, &copy)
-	return nil
-}
-
-type guestPurchaseLogs struct {
-	repository.LogRepo
-}
-
-func (guestPurchaseLogs) Insert(context.Context, *logEntity.SystemLog) error { return nil }
-
-type guestPurchaseStore struct {
-	Store
-	orders *guestPurchaseOrders
-}
-
-func (s *guestPurchaseStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
-	return fn(guestPurchaseTx{orders: s.orders})
-}
-
-type guestPurchaseTx struct {
-	repository.BillingStore
-	orders *guestPurchaseOrders
-}
-
-func (tx guestPurchaseTx) Order() repository.OrderRepo { return tx.orders }
-func (tx guestPurchaseTx) Log() repository.LogRepo     { return guestPurchaseLogs{} }
-
-type guestPlans struct {
-	PlanReader
-}
-
-func (guestPlans) FindOne(_ context.Context, id int64) (*subscribe.Subscribe, error) {
-	sell := true
-	return &subscribe.Subscribe{Id: id, Sell: &sell, Inventory: -1, UnitPrice: 1000}, nil
-}
-
-type guestPayments struct {
-	repository.PaymentRepo
-}
-
-func (guestPayments) FindOne(_ context.Context, id int64) (*payment.Payment, error) {
-	enabled := true
-	return &payment.Payment{Id: id, Platform: "EPay", Enable: &enabled}, nil
-}
-
-type guestInventory struct{}
-
-func (guestInventory) Reserve(context.Context, string, int64) error { return nil }
-
-type guestQueue struct{}
-
-func (guestQueue) EnqueueDeferredClose(context.Context, string) error { return nil }
-
-type guestPurchaseFixture struct {
-	svc    *Service
-	auths  *guestAuthLookup
-	orders *guestPurchaseOrders
-}
-
-func newGuestPurchaseFixture(verification *GuestVerification, verify TurnstileVerifier) *guestPurchaseFixture {
-	f := &guestPurchaseFixture{auths: &guestAuthLookup{}, orders: &guestPurchaseOrders{}}
-	config := Config{}
-	if verification != nil {
-		policy := *verification
-		config.GuestVerification = func() GuestVerification { return policy }
-	}
-	f.svc = NewService(Deps{
-		Orders:          f.orders,
-		Payments:        guestPayments{},
-		UserAuths:       f.auths,
-		Plans:           guestPlans{},
-		Store:           &guestPurchaseStore{orders: f.orders},
-		Inventory:       guestInventory{},
-		Queue:           guestQueue{},
-		Config:          config,
-		VerifyTurnstile: verify,
-	})
-	return f
-}
-
-func guestPurchaseRequest(authType, identifier string) *dto.PortalPurchaseRequest {
+func (s *guestShop) request(authType, identifier string) *dto.PortalPurchaseRequest {
 	return &dto.PortalPurchaseRequest{
 		AuthType: authType, Identifier: identifier, Password: "guest-password",
-		Payment: 3, SubscribeId: 9, Quantity: 1,
+		Payment: s.method.Id, SubscribeId: s.plan.Id, Quantity: 1,
 	}
 }
 
-func errCode(err error) uint32 {
-	var codeErr *xerr.CodeError
-	if errors.As(errors.Cause(err), &codeErr) {
-		return codeErr.GetErrCode()
-	}
-	return 0
-}
+// guestOrders lists the guest orders, which belong to no user yet.
+func (s *guestShop) guestOrders() []*order.Order { return s.h.Orders(0) }
 
-// The paid order inserts the guest auth method as given and issues a session,
-// so an OAuth or device identifier would pre-bind someone else's identity.
+// The paid order inserts the guest auth method as given and issues a
+// session, so an OAuth or device identifier would pre-bind someone else's
+// identity.
 func TestPortalPurchaseRejectsNonPasswordGuestAuthTypes(t *testing.T) {
 	for _, authType := range []string{"github", "telegram", "google", "apple", "facebook", "device", ""} {
 		t.Run(authType, func(t *testing.T) {
-			f := newGuestPurchaseFixture(nil, nil)
-			_, err := f.svc.Purchase(context.Background(), guestPurchaseRequest(authType, "123456789"))
-			if errCode(err) != xerr.InvalidParams {
-				t.Fatalf("Purchase error = %v, want InvalidParams", err)
-			}
-			if len(f.auths.lookups) != 0 || len(f.orders.inserted) != 0 {
-				t.Fatalf("rejected identity reached lookups %v or created %d orders", f.auths.lookups, len(f.orders.inserted))
+			s := newGuestShop(t)
+			_, err := s.svc.Purchase(context.Background(), s.request(authType, "123456789"))
+			assertCode(t, err, xerr.InvalidParams)
+			if len(s.guestOrders()) != 0 {
+				t.Fatal("a rejected identity created an order")
 			}
 		})
 	}
 }
 
 func TestPortalPurchaseRejectsMalformedGuestIdentifiers(t *testing.T) {
-	tests := []struct{ authType, identifier string }{
+	for _, tt := range []struct{ authType, identifier string }{
 		{"email", "not-an-email"},
 		{"email", "Alice <alice@example.com>"},
 		{"email", ""},
 		{"mobile", "12345"},
 		{"mobile", "not-a-number"},
 		{"mobile", ""},
-	}
-	for _, tt := range tests {
+	} {
 		t.Run(tt.authType+"/"+tt.identifier, func(t *testing.T) {
-			f := newGuestPurchaseFixture(nil, nil)
-			_, err := f.svc.Purchase(context.Background(), guestPurchaseRequest(tt.authType, tt.identifier))
-			if errCode(err) != xerr.InvalidParams {
-				t.Fatalf("Purchase error = %v, want InvalidParams", err)
-			}
-			if len(f.auths.lookups) != 0 || len(f.orders.inserted) != 0 {
-				t.Fatalf("malformed identity reached lookups %v or created %d orders", f.auths.lookups, len(f.orders.inserted))
+			s := newGuestShop(t)
+			_, err := s.svc.Purchase(context.Background(), s.request(tt.authType, tt.identifier))
+			assertCode(t, err, xerr.InvalidParams)
+			if len(s.guestOrders()) != 0 {
+				t.Fatal("a malformed identity created an order")
 			}
 		})
 	}
 }
 
-// The existence check and the persisted guest identity use the same
-// canonical form the account flows store, so variants cannot bypass the
-// check or create a second account for one address.
+// The order stores the canonical identity the account flows store, so
+// variants of one address cannot create a second account.
 func TestPortalPurchaseCanonicalizesGuestIdentity(t *testing.T) {
-	tests := []struct {
+	for _, tt := range []struct {
 		name, authType, identifier string
 		wantType, wantIdentifier   string
 	}{
@@ -187,33 +87,37 @@ func TestPortalPurchaseCanonicalizesGuestIdentity(t *testing.T) {
 		{"auth type case", " Email ", "alice@example.com", "email", "alice@example.com"},
 		{"mobile with spacing", "mobile", "+86 155 0250 5555", "mobile", "+8615502505555"},
 		{"mobile without plus", "mobile", "8615502505555", "mobile", "+8615502505555"},
-	}
-	for _, tt := range tests {
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newGuestPurchaseFixture(nil, nil)
-			if _, err := f.svc.Purchase(context.Background(), guestPurchaseRequest(tt.authType, tt.identifier)); err != nil {
+			s := newGuestShop(t)
+			if _, err := s.svc.Purchase(context.Background(), s.request(tt.authType, tt.identifier)); err != nil {
 				t.Fatalf("Purchase: %v", err)
 			}
-			want := tt.wantType + "|" + tt.wantIdentifier
-			if len(f.auths.lookups) != 1 || f.auths.lookups[0] != want {
-				t.Fatalf("existence lookups = %v, want [%s]", f.auths.lookups, want)
-			}
-			if len(f.orders.pendingQueries) != 1 || f.orders.pendingQueries[0] != want {
-				t.Fatalf("pending order queries = %v, want [%s]", f.orders.pendingQueries, want)
-			}
-			if len(f.orders.inserted) != 1 {
-				t.Fatalf("inserted orders = %d, want 1", len(f.orders.inserted))
-			}
-			if got := f.orders.inserted[0]; got.GuestAuthType != tt.wantType || got.GuestIdentifier != tt.wantIdentifier {
-				t.Fatalf("persisted guest identity = (%q, %q), want (%q, %q)", got.GuestAuthType, got.GuestIdentifier, tt.wantType, tt.wantIdentifier)
+			orders := s.guestOrders()
+			if len(orders) != 1 || orders[0].GuestAuthType != tt.wantType || orders[0].GuestIdentifier != tt.wantIdentifier {
+				t.Fatalf("orders = %+v, want one for (%s, %s)", orders, tt.wantType, tt.wantIdentifier)
 			}
 		})
 	}
 }
 
+// An address that already has an account is refused in any spelling.
+func TestPortalPurchaseRefusesAnExistingAccount(t *testing.T) {
+	s := newGuestShop(t)
+	owner := s.h.User()
+	if err := s.h.DB.Create(&user.AuthMethods{UserId: owner.Id, AuthType: "email", AuthIdentifier: "alice@example.com"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.svc.Purchase(context.Background(), s.request("email", "  Alice@Example.COM "))
+	assertCode(t, err, xerr.UserExist)
+	if len(s.guestOrders()) != 0 {
+		t.Fatal("an order was created for an existing account")
+	}
+}
+
 func TestPortalPurchaseVerifiesTurnstileWhenEnabled(t *testing.T) {
 	type call struct{ secret, token, ip string }
-	tests := []struct {
+	for _, tt := range []struct {
 		name      string
 		policy    GuestVerification
 		token     string
@@ -226,25 +130,26 @@ func TestPortalPurchaseVerifiesTurnstileWhenEnabled(t *testing.T) {
 		{name: "missing secret fails closed", policy: GuestVerification{Enabled: true}, token: "token", wantErr: true},
 		{name: "rejected token", policy: GuestVerification{Enabled: true, Secret: "secret"}, token: "token", wantErr: true, wantCalls: 1},
 		{name: "verified token", policy: GuestVerification{Enabled: true, Secret: "secret"}, token: "token", verified: true, wantCalls: 1},
-	}
-	for _, tt := range tests {
+	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []call
-			f := newGuestPurchaseFixture(&tt.policy, func(_ context.Context, secret, token, ip string) (bool, error) {
-				calls = append(calls, call{secret, token, ip})
-				return tt.verified, nil
+			s := newGuestShop(t, func(d *Deps) {
+				policy := tt.policy
+				d.Config.GuestVerification = func() GuestVerification { return policy }
+				d.VerifyTurnstile = func(_ context.Context, secret, token, ip string) (bool, error) {
+					calls = append(calls, call{secret, token, ip})
+					return tt.verified, nil
+				}
 			})
 			ctx := requestmeta.With(context.Background(), requestmeta.New("203.0.113.7", "test-agent"))
-			req := guestPurchaseRequest("email", "guest@example.com")
+			req := s.request("email", "guest@example.com")
 			req.TurnstileToken = tt.token
 
-			_, err := f.svc.Purchase(ctx, req)
+			_, err := s.svc.Purchase(ctx, req)
 			if tt.wantErr {
-				if errCode(err) != xerr.TooManyRequests {
-					t.Fatalf("Purchase error = %v, want TooManyRequests", err)
-				}
-				if len(f.auths.lookups) != 0 || len(f.orders.inserted) != 0 {
-					t.Fatal("an unverified guest purchase must not look up accounts or create orders")
+				assertCode(t, err, xerr.TooManyRequests)
+				if len(s.guestOrders()) != 0 {
+					t.Fatal("an unverified guest purchase created an order")
 				}
 			} else if err != nil {
 				t.Fatalf("Purchase: %v", err)
@@ -260,21 +165,122 @@ func TestPortalPurchaseVerifiesTurnstileWhenEnabled(t *testing.T) {
 }
 
 func TestPortalPurchaseCapsPendingGuestOrders(t *testing.T) {
-	f := newGuestPurchaseFixture(nil, nil)
-	f.orders.pending = maxPendingGuestOrders
-	_, err := f.svc.Purchase(context.Background(), guestPurchaseRequest("email", "guest@example.com"))
-	if errCode(err) != xerr.TooManyRequests {
-		t.Fatalf("Purchase error = %v, want TooManyRequests", err)
+	s := newGuestShop(t)
+	for i := range maxPendingGuestOrders - 1 {
+		s.h.Order(&order.Order{OrderNo: fmt.Sprintf("pending-%d", i), Status: order.StatusPending, GuestAuthType: "email", GuestIdentifier: "guest@example.com"})
 	}
-	if len(f.orders.inserted) != 0 {
-		t.Fatal("capped guest identity created another pending order")
-	}
-
-	f.orders.pending = maxPendingGuestOrders - 1
-	if _, err := f.svc.Purchase(context.Background(), guestPurchaseRequest("email", "guest@example.com")); err != nil {
+	if _, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com")); err != nil {
 		t.Fatalf("Purchase below the cap: %v", err)
 	}
-	if len(f.orders.inserted) != 1 {
-		t.Fatalf("inserted orders = %d, want 1", len(f.orders.inserted))
+	_, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com"))
+	assertCode(t, err, xerr.TooManyRequests)
+	if got := len(s.guestOrders()); got != maxPendingGuestOrders {
+		t.Fatalf("guest orders = %d, want %d", got, maxPendingGuestOrders)
+	}
+}
+
+// A guest order holds a plan unit and returns a capability the buyer pays
+// with; its expiry close is scheduled.
+func TestPortalPurchaseReservesTheOrder(t *testing.T) {
+	s := newGuestShop(t)
+	resp, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com"))
+	if err != nil {
+		t.Fatalf("Purchase: %v", err)
+	}
+	created := s.h.ReloadOrder(resp.OrderNo)
+	if created.GuestCheckoutTokenHash != order.CheckoutTokenHash(resp.CheckoutToken) || created.GuestPasswordHash == "" || created.GuestPasswordHash == "guest-password" {
+		t.Fatalf("order = %+v, want the capability hash and a hashed password", created)
+	}
+	if s.h.ReloadPlan(s.plan.Id).Inventory != 4 || len(s.queue.DeferredCloses) != 1 || s.queue.DeferredCloses[0] != resp.OrderNo {
+		t.Fatal("the guest order did not reserve stock or schedule its close")
+	}
+	if _, err := s.checkout(context.Background(), resp.OrderNo, resp.CheckoutToken); err != nil {
+		t.Fatalf("checkout with the returned capability: %v", err)
+	}
+}
+
+// Guests have no wallet.
+func TestPortalPurchaseRejectsBalancePayment(t *testing.T) {
+	s := newGuestShop(t)
+	req := s.request("email", "guest@example.com")
+	req.Payment = s.balance().Id
+	_, err := s.svc.Purchase(context.Background(), req)
+	assertCode(t, err, xerr.PaymentMethodNotFound)
+}
+
+// soldOut is the inventory of a plan another buyer just emptied.
+type soldOut struct{}
+
+func (soldOut) Reserve(context.Context, string, int64) error { return subscription.ErrOutOfStock }
+
+// A guest order whose plan sold out meanwhile is closed again and returns
+// its coupon use.
+func TestPortalPurchaseOfASoldOutPlanReleasesTheOrder(t *testing.T) {
+	s := newGuestShop(t, func(d *Deps) { d.Inventory = soldOut{} })
+	s.h.Coupon("SAVE", func(c *coupon.Coupon) { c.Count = 5 })
+	req := s.request("email", "guest@example.com")
+	req.Coupon = "SAVE"
+
+	_, err := s.svc.Purchase(context.Background(), req)
+	assertCode(t, err, xerr.SubscribeOutOfStock)
+	orders := s.guestOrders()
+	if len(orders) != 1 || orders[0].Status != order.StatusClosed || s.h.ReloadCoupon("SAVE").UsedCount != 0 {
+		t.Fatalf("orders = %+v, want the order closed and its coupon use returned", orders)
+	}
+}
+
+// A guest pays exactly what the preview showed.
+func TestPortalPreviewEqualsTheCreatedOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		quantity int64
+		tiers    string
+		coupon   *coupon.Coupon
+		fee      func(*payment.Payment)
+		want     pricing.Quote
+	}{
+		{name: "list price", quantity: 1, want: pricing.Quote{Price: 1000, Amount: 1000}},
+		{name: "tier and percent coupon", quantity: 3, tiers: `[{"quantity":3,"discount":90}]`,
+			coupon: &coupon.Coupon{Type: coupon.TypePercentage, Discount: 10},
+			want:   pricing.Quote{Price: 3000, Discount: 300, CouponDiscount: 270, Amount: 2430}},
+		{name: "fixed coupon and fee", quantity: 1, coupon: &coupon.Coupon{Type: coupon.TypeFixed, Discount: 150},
+			fee:  func(p *payment.Payment) { p.FeeMode, p.FeePercent, p.FeeAmount = 3, 5, 20 },
+			want: pricing.Quote{Price: 1000, CouponDiscount: 150, FeeAmount: 62, Amount: 912}}, // 5% of 850 is 42.5, floored
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newPortalFixture(t)
+			plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Discount = tt.tiers })
+			var adjust []func(*payment.Payment)
+			if tt.fee != nil {
+				adjust = append(adjust, tt.fee)
+			}
+			method := f.h.Payment("EPay", `{"pid":"1001","url":"https://pay.example","key":"secret","type":"alipay"}`, adjust...)
+			code := ""
+			if tt.coupon != nil {
+				code = "GUEST"
+				f.h.Coupon(code, func(c *coupon.Coupon) { c.Type, c.Discount = tt.coupon.Type, tt.coupon.Discount })
+			}
+
+			preview, err := f.svc.PrePurchase(context.Background(), &dto.PrePurchaseOrderRequest{SubscribeId: plan.Id, Quantity: tt.quantity, Payment: method.Id, Coupon: code})
+			if err != nil {
+				t.Fatalf("PrePurchase: %v", err)
+			}
+			got := pricing.Quote{Price: preview.Price, Discount: preview.Discount, CouponDiscount: preview.CouponDiscount, FeeAmount: preview.FeeAmount, Amount: preview.Amount}
+			if got != tt.want || preview.Coupon != code {
+				t.Fatalf("preview = %+v, want %+v with coupon %q", preview, tt.want, code)
+			}
+			resp, err := f.svc.Purchase(context.Background(), &dto.PortalPurchaseRequest{
+				AuthType: "email", Identifier: "guest@example.com", Password: "guest-password",
+				SubscribeId: plan.Id, Quantity: tt.quantity, Payment: method.Id, Coupon: code,
+			})
+			if err != nil {
+				t.Fatalf("Purchase: %v", err)
+			}
+			o := f.h.ReloadOrder(resp.OrderNo)
+			created := pricing.Quote{Price: o.Price, Discount: o.Discount, CouponDiscount: o.CouponDiscount, GiftAmount: o.GiftAmount, FeeAmount: o.FeeAmount, Amount: o.Amount}
+			if created != tt.want || o.Coupon != code {
+				t.Fatalf("order = %+v, want %+v with coupon %q", created, tt.want, code)
+			}
+		})
 	}
 }

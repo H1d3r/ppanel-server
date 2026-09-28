@@ -17,12 +17,12 @@ import (
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param request body dto.UpdateUserBasiceInfoRequest true "Request parameters"
+// @Param request body dto.UpdateUserBasicInfoRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/admin/user/basic [put]
 func UpdateUserBasicInfoHandler(service identity.Service) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		var req dto.UpdateUserBasiceInfoRequest
+		var req dto.UpdateUserBasicInfoRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {
 			httpx.ParamErrorResult(c, err)
 			return

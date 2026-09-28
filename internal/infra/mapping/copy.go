@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jinzhu/copier"
+	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/pkg/errors"
 )
 
@@ -46,7 +47,12 @@ func DeepCopy[T, K any](destStruct T, srcStruct K, opts ...CopyOption) T {
 		opt(&option)
 	}
 
-	_ = copier.CopyWithOption(dst, src, option)
+	if err := copier.CopyWithOption(dst, src, option); err != nil {
+		// A failed copy leaves dst partly filled; it is a programming error
+		// (mismatched types), so it must at least be visible.
+		logger.Errorw("[mapping] DeepCopy failed", logger.Field("error", err.Error()),
+			logger.Field("dst_type", fmt.Sprintf("%T", destStruct)), logger.Field("src_type", fmt.Sprintf("%T", srcStruct)))
+	}
 	return dst
 }
 

@@ -20,7 +20,7 @@ func deviceReplayClient(t *testing.T) *redis.Client {
 	t.Helper()
 	rdb := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: rdb.Addr(), MaxRetries: -1})
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
 
@@ -73,7 +73,7 @@ func TestDeviceSecurityUsesAuthenticatedSessionWithoutHeader(t *testing.T) {
 	router := server.New()
 	called := false
 	router.POST("/protected", func(ctx context.Context, c *app.RequestContext) {
-		ctx = context.WithValue(ctx, requestctx.CtxKeyUser, &user.User{Id: 1})
+		ctx = user.NewContext(ctx, &user.User{Id: 1})
 		ctx = context.WithValue(ctx, requestctx.LoginType, "device")
 		c.Next(ctx)
 	}, DeviceMiddleware(func() appconfig.DeviceConfig {

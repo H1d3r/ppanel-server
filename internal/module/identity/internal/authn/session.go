@@ -1,87 +1,62 @@
-package auth
+package authn
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strconv"
-	"time"
-	"uuid"
 
-	"github.com/perfect-panel/server/internal/auth/devicesession"
-	token2 "github.com/perfect-panel/server/internal/auth/token"
-	"github.com/perfect-panel/server/internal/auth/usersession"
-	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
-	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
-func bindLoginDevice(binder DeviceBinder, identifier, ip, ua string, userID int64) (*user.Device, error) {
+// signIn ends a successful sign-in: it binds the requested device, if any,
+// and issues the session.
+func (s *Service) signIn(ctx context.Context, userID int64, deviceIdentifier, loginType string) (*dto.LoginResponse, error) {
+	device, err := s.bindLoginDevice(ctx, deviceIdentifier, userID)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.InvalidAccess, "bind device")
+	}
+	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().sessions(), userID, loginType, device)
+	if err != nil {
+		return nil, err
+	}
+	return &dto.LoginResponse{Token: token}, nil
+}
+
+// bindLoginDevice binds the device a sign-in names to the account; a sign-in
+// naming none binds nothing.
+func (s *Service) bindLoginDevice(ctx context.Context, identifier string, userID int64) (*user.Device, error) {
 	if identifier == "" {
 		return nil, nil
 	}
-	if binder == nil {
-		return nil, errors.New("device binder is unavailable")
-	}
-	device, err := binder.BindDeviceToUser(identifier, ip, ua, userID)
+	device, err := s.BindDeviceToUser(ctx, identifier, userID)
 	if err != nil {
 		return nil, err
 	}
 	if device == nil || device.Id <= 0 || device.UserId != userID || !device.Enabled {
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "invalid device binding")
+		return nil, fmt.Errorf("invalid device binding: %w", xerr.NewErrCode(xerr.InvalidAccess))
 	}
 	return device, nil
 }
 
-// ensureAccountActive rejects an account that can no longer sign in, so a
-// code sent to an identifier it still holds cannot bring it back.
-func ensureAccountActive(userInfo *user.User) error {
-	if userInfo.DeletedAt.Valid {
-		return errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user deleted")
-	}
-	if userInfo.Enable == nil || !*userInfo.Enable {
-		return errors.Wrapf(xerr.NewErrCode(xerr.UserDisabled), "user account is disabled")
-	}
-	return nil
-}
-
-func issueLoginSession(ctx context.Context, client *redis.Client, secret string, lifetime, userID int64, loginType string, device *user.Device) (*dto.LoginResponse, error) {
-	if value, ok := ctx.Value(requestctx.LoginType).(string); ok {
-		loginType = value
-	}
-	if loginType == "device" && device == nil {
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "device session requires a binding")
-	}
-	if client == nil || lifetime <= 0 {
-		return nil, errors.New("session store unavailable")
-	}
-	sessionID := uuid.NewV7().String()
-	epoch, err := usersession.AcquireEpoch(ctx, client, userID)
+// findAccount returns the account an identity of authType signs in to.
+func (s *Service) findAccount(ctx context.Context, authType, identifier string) (*user.User, error) {
+	method, err := s.deps.Store.UserAuth().FindUserAuthMethodByOpenID(ctx, authType, identifier)
 	if err != nil {
-		return nil, err
-	}
-	options := []token2.Option{token2.WithOption("UserId", userID), token2.WithOption("SessionId", sessionID), token2.WithOption("LoginType", loginType), token2.WithOption(usersession.EpochClaim, epoch)}
-	if device != nil {
-		if device.Id <= 0 || device.UserId != userID || !device.Enabled {
-			return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "device session binding invalid")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("no account has this %s identity: %w", authType, xerr.NewErrCode(xerr.UserNotExist))
 		}
-		epoch, err := devicesession.AcquireEpoch(ctx, client, device.Id)
-		if err != nil {
-			return nil, err
-		}
-		options = append(options, token2.WithOption(devicesession.IDClaim, strconv.FormatInt(device.Id, 10)), token2.WithOption(devicesession.EpochClaim, epoch))
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find %s identity", authType)
 	}
-	token, err := token2.NewJwtToken(secret, timeutil.Now().Unix(), lifetime, options...)
+	userInfo, err := s.deps.Store.User().FindOne(ctx, method.UserId)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("user %d of the %s identity does not exist: %w", method.UserId, authType, xerr.NewErrCode(xerr.UserNotExist))
+		}
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user %d", method.UserId)
 	}
-	key := fmt.Sprintf("%v:%v", config.SessionIdKey, sessionID)
-	if err := client.Set(ctx, key, userID, time.Duration(lifetime)*time.Second).Err(); err != nil {
-		return nil, err
-	}
-	return &dto.LoginResponse{Token: token}, nil
+	return userInfo, nil
 }

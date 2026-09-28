@@ -93,11 +93,8 @@ func (m *nodeRepo) NodeUserListCacheKeys(ctx context.Context, nodeIDs []int64, t
 	return keys, nil
 }
 
-func (m *nodeRepo) InsertServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error {
+func (m *nodeRepo) InsertServer(ctx context.Context, data *node.Server) error {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Create(data).Error
 }
 
@@ -107,16 +104,13 @@ func (m *nodeRepo) FindOneServer(ctx context.Context, id int64) (*node.Server, e
 	return &server, err
 }
 
-func (m *nodeRepo) UpdateServer(ctx context.Context, data *node.Server, tx ...*gorm.DB) error {
+func (m *nodeRepo) UpdateServer(ctx context.Context, data *node.Server) error {
 	_, err := m.FindOneServer(ctx, data.Id)
 	if err != nil {
 		return err
 	}
 
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
 }
 
@@ -124,21 +118,18 @@ func (m *nodeRepo) UpdateServer(ctx context.Context, data *node.Server, tx ...*g
 // without running the full-row server update hooks. The compare-and-swap guard
 // prevents a heartbeat based on stale data from overwriting a concurrent admin
 // configuration change.
-func (m *nodeRepo) UpdateServerProtocolsIfCurrent(ctx context.Context, id int64, current, updated string, tx ...*gorm.DB) (bool, error) {
+func (m *nodeRepo) UpdateServerProtocolsIfCurrent(ctx context.Context, id int64, current, updated string) (bool, error) {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	result := db.WithContext(ctx).Model(&node.Server{}).
 		Where("id = ? AND protocols = ?", id, current).
-		UpdateColumns(map[string]interface{}{
+		UpdateColumns(map[string]any{
 			"protocols":  updated,
 			"updated_at": time.Now(),
 		})
 	return result.RowsAffected == 1, result.Error
 }
 
-func (m *nodeRepo) BatchUpdateServerLastReportedAt(ctx context.Context, reports map[int64]time.Time, tx ...*gorm.DB) error {
+func (m *nodeRepo) BatchUpdateServerLastReportedAt(ctx context.Context, reports map[int64]time.Time) error {
 	if len(reports) == 0 {
 		return nil
 	}
@@ -156,19 +147,16 @@ func (m *nodeRepo) BatchUpdateServerLastReportedAt(ctx context.Context, reports 
 	})
 
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	expr, args := serverLastReportedAtExpr(db, ids, reports)
 	return db.WithContext(ctx).Model(&node.Server{}).Where("id IN ?", ids).
 		Update("last_reported_at", gorm.Expr(expr, args...)).Error
 }
 
-func serverLastReportedAtExpr(db *gorm.DB, ids []int64, reports map[int64]time.Time) (string, []interface{}) {
+func serverLastReportedAtExpr(db *gorm.DB, ids []int64, reports map[int64]time.Time) (string, []any) {
 	idColumn := serverColumn(db, "id")
 	targetColumn := serverColumn(db, "last_reported_at")
 	parts := make([]string, 0, len(ids))
-	args := make([]interface{}, 0, len(ids)*2)
+	args := make([]any, 0, len(ids)*2)
 	for _, id := range ids {
 		parts = append(parts, "WHEN ? THEN ?")
 		args = append(args, id, reports[id])
@@ -183,11 +171,8 @@ func serverColumn(db *gorm.DB, column string) string {
 	return (&node.Server{}).TableName() + "." + column
 }
 
-func (m *nodeRepo) DeleteServer(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *nodeRepo) DeleteServer(ctx context.Context, id int64) error {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Where("id = ?", id).Delete(&node.Server{}).Error
 }
 
@@ -206,11 +191,8 @@ func (m *nodeRepo) FindServerConfigOverride(ctx context.Context, serverId int64)
 	return &data[0], nil
 }
 
-func (m *nodeRepo) SaveServerConfigOverride(ctx context.Context, data *node.ServerConfigOverride, tx ...*gorm.DB) error {
+func (m *nodeRepo) SaveServerConfigOverride(ctx context.Context, data *node.ServerConfigOverride) error {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 
 	var old node.ServerConfigOverride
 	err := db.WithContext(ctx).Model(&node.ServerConfigOverride{}).Where("server_id = ?", data.ServerId).First(&old).Error
@@ -225,19 +207,13 @@ func (m *nodeRepo) SaveServerConfigOverride(ctx context.Context, data *node.Serv
 	return db.WithContext(ctx).Save(data).Error
 }
 
-func (m *nodeRepo) DeleteServerConfigOverride(ctx context.Context, serverId int64, tx ...*gorm.DB) error {
+func (m *nodeRepo) DeleteServerConfigOverride(ctx context.Context, serverId int64) error {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Where("server_id = ?", serverId).Delete(&node.ServerConfigOverride{}).Error
 }
 
-func (m *nodeRepo) InsertNode(ctx context.Context, data *node.Node, tx ...*gorm.DB) error {
+func (m *nodeRepo) InsertNode(ctx context.Context, data *node.Node) error {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Create(data).Error
 }
 
@@ -247,24 +223,18 @@ func (m *nodeRepo) FindOneNode(ctx context.Context, id int64) (*node.Node, error
 	return &n, err
 }
 
-func (m *nodeRepo) UpdateNode(ctx context.Context, data *node.Node, tx ...*gorm.DB) error {
+func (m *nodeRepo) UpdateNode(ctx context.Context, data *node.Node) error {
 	_, err := m.FindOneNode(ctx, data.Id)
 	if err != nil {
 		return err
 	}
 
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
 }
 
-func (m *nodeRepo) DeleteNode(ctx context.Context, id int64, tx ...*gorm.DB) error {
+func (m *nodeRepo) DeleteNode(ctx context.Context, id int64) error {
 	db := m.DB
-	if len(tx) > 0 {
-		db = tx[0]
-	}
 	return db.WithContext(ctx).Where("id = ?", id).Delete(&node.Node{}).Error
 }
 
@@ -272,12 +242,6 @@ func (m *nodeRepo) DeleteNode(ctx context.Context, id int64, tx ...*gorm.DB) err
 func (m *nodeRepo) UpdateStatusCache(ctx context.Context, serverId int64, status *node.Status) error {
 	key := fmt.Sprintf(node.StatusCacheKey, serverId)
 	return m.Cache.Set(ctx, key, status.Marshal(), node.Expiry).Err()
-}
-
-// DeleteStatusCache Delete server status from cache
-func (m *nodeRepo) DeleteStatusCache(ctx context.Context, serverId int64) error {
-	key := fmt.Sprintf(node.StatusCacheKey, serverId)
-	return m.Cache.Del(ctx, key).Err()
 }
 
 // StatusCache Get server status from cache
@@ -327,12 +291,6 @@ func (m *nodeRepo) UpdateOnlineUserSubscribe(ctx context.Context, serverId int64
 	return m.Cache.Set(ctx, key, data, node.Expiry).Err()
 }
 
-// DeleteOnlineUserSubscribe Delete online user subscribe
-func (m *nodeRepo) DeleteOnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) error {
-	key := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
-	return m.Cache.Del(ctx, key).Err()
-}
-
 // OnlineUserSubscribeGlobal Get global online user subscribe count
 func (m *nodeRepo) OnlineUserSubscribeGlobal(ctx context.Context) (int64, error) {
 	now := time.Now().Unix()
@@ -363,11 +321,6 @@ func (m *nodeRepo) UpdateOnlineUserSubscribeGlobal(ctx context.Context, subscrib
 
 	_, err := pipe.Exec(ctx)
 	return err
-}
-
-// DeleteOnlineUserSubscribeGlobal Delete global online user subscribe count
-func (m *nodeRepo) DeleteOnlineUserSubscribeGlobal(ctx context.Context) error {
-	return m.Cache.Del(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal).Err()
 }
 
 // FilterServerList Filter Server List
@@ -421,7 +374,7 @@ func (m *nodeRepo) nodeListQuery(ctx context.Context, params *node.FilterNodePar
 	if params.Search != "" {
 		pattern := orm.LikePrefixPattern(params.Search)
 		condition := "(name LIKE ?" + orm.LikeEscapeClause() + " OR address LIKE ?" + orm.LikeEscapeClause() + " OR tags LIKE ?" + orm.LikeEscapeClause()
-		args := []interface{}{pattern, pattern, pattern}
+		args := []any{pattern, pattern, pattern}
 		if port, err := strconv.ParseUint(params.Search, 10, 16); err == nil {
 			condition += " OR port = ?"
 			args = append(args, uint16(port))
@@ -480,7 +433,7 @@ func (m *nodeRepo) ListNodes(ctx context.Context, params *node.FilterNodeParams)
 func (m *nodeRepo) ListNodesByScope(ctx context.Context, nodeIDs []int64, tags []string, enabled *bool, preload bool) ([]*node.Node, error) {
 	query := m.nodeListQuery(ctx, &node.FilterNodeParams{Enabled: enabled, Preload: preload})
 	conditions := make([]string, 0, 2)
-	args := make([]interface{}, 0, len(tags)+1)
+	args := make([]any, 0, len(tags)+1)
 	if len(nodeIDs) > 0 {
 		conditions = append(conditions, "id IN ?")
 		args = append(args, nodeIDs)
@@ -564,7 +517,7 @@ func (m *nodeRepo) ServerCacheGeneration(ctx context.Context, serverId int64) (i
 // SetServerCache stores a response only when the generation captured before
 // the database read still matches. This prevents pre-update readers from
 // repopulating stale data after ClearServerCache runs.
-func (m *nodeRepo) SetServerCache(ctx context.Context, serverId int64, key string, value interface{}, generation int64) error {
+func (m *nodeRepo) SetServerCache(ctx context.Context, serverId int64, key string, value any, generation int64) error {
 	if serverId <= 0 || key == "" {
 		return nil
 	}
@@ -573,24 +526,6 @@ func (m *nodeRepo) SetServerCache(ctx context.Context, serverId int64, key strin
 		[]string{fmt.Sprintf(node.ServerCacheGenerationKey, serverId), key, indexKey},
 		strconv.FormatInt(generation, 10), value, node.ServerCacheTTL.Milliseconds()).Result()
 	return err
-}
-
-// ClearNodeCache Clear Node Cache
-func (m *nodeRepo) ClearNodeCache(ctx context.Context, params *node.FilterNodeParams) error {
-	nodes, err := m.ListNodes(ctx, params)
-	if err != nil {
-		return err
-	}
-	serverIDs := make(map[int64]struct{}, len(nodes))
-	for _, n := range nodes {
-		serverIDs[n.ServerId] = struct{}{}
-	}
-	for serverID := range serverIDs {
-		if err := m.ClearServerCache(ctx, serverID); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // ClearServerCache Clear Server Cache
@@ -638,7 +573,7 @@ func clearServerCache(ctx context.Context, client *redis.Client, serverId int64)
 		}
 	}
 	cacheKeys = append(cacheKeys, fmt.Sprintf("%s%d", node.ServerUserListCacheKey, serverId))
-	args := make([]interface{}, len(cacheKeys))
+	args := make([]any, len(cacheKeys))
 	for i, key := range cacheKeys {
 		args[i] = key
 	}

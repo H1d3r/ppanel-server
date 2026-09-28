@@ -1,25 +1,74 @@
 // Package dashboard implements the admin console subdomain of the platform
 // module: cross-domain reporting aggregates. Every foreign-domain access is a
-// read through a port satisfied structurally by the legacy repositories.
+// read through a port; the owning modules' repositories satisfy them
+// structurally.
 package dashboard
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/network/entity/node"
+	"github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/redis/go-redis/v9"
 )
 
-// Read ports onto the billing, identity, support and network domains.
-type (
-	OrderStatsReader   = repository.OrderRepo
-	UserStatsReader    = repository.UserRepo
-	TicketStatsReader  = repository.TicketRepo
-	NodeStatsReader    = repository.NodeRepo
-	TrafficStatsReader = repository.TrafficRepo
-)
+// Read ports onto the billing, identity, support and network domains. Each
+// lists only what the dashboard reads, so a fake has to implement exactly
+// that and a new dependency fails to compile instead of panicking.
+
+// OrderStatsReader reads the order and revenue totals.
+type OrderStatsReader interface {
+	QueryDateOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error)
+	QueryMonthlyOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error)
+	QueryTotalOrders(ctx context.Context) (order.OrdersTotal, error)
+	QueryDailyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
+	QueryMonthlyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
+	QueryDateUserCounts(ctx context.Context, date time.Time) (int64, int64, error)
+	QueryMonthlyUserCounts(ctx context.Context, date time.Time) (int64, int64, error)
+	QueryTotalUserCounts(ctx context.Context) (int64, int64, error)
+}
+
+// UserStatsReader reads the registration counts.
+type UserStatsReader interface {
+	QueryRegisterUserTotal(ctx context.Context) (int64, error)
+	QueryRegisterUserTotalByDate(ctx context.Context, date time.Time) (int64, error)
+	QueryRegisterUserTotalByMonthly(ctx context.Context, date time.Time) (int64, error)
+	QueryDailyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error)
+	QueryMonthlyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error)
+}
+
+// TicketStatsReader reads the number of tickets waiting for a reply.
+type TicketStatsReader interface {
+	QueryWaitReplyTotal(ctx context.Context) (int64, error)
+}
+
+// NodeStatsReader reads the node inventory and online counts.
+type NodeStatsReader interface {
+	CountServersByReportStatus(ctx context.Context, cutoff time.Time) (int64, int64, error)
+	OnlineUserSubscribeGlobal(ctx context.Context) (int64, error)
+	QueryServerList(ctx context.Context, ids []int64) ([]*node.Server, error)
+}
+
+// TrafficStatsReader reads the traffic totals and rankings.
+type TrafficStatsReader interface {
+	QueryTrafficSummary(ctx context.Context, start, end time.Time) (*traffic.TotalTraffic, error)
+	TopServersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]traffic.ServerTrafficRanking, error)
+	TopUsersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]traffic.UserTrafficRanking, error)
+}
+
+// LogReader reads the archived daily statistics.
+type LogReader interface {
+	FindByDatesType(ctx context.Context, dates []string, typ uint8) ([]*log.SystemLog, error)
+	FindFirstByDateType(ctx context.Context, date string, typ uint8) (*log.SystemLog, error)
+}
 
 // Cache is the dashboard's snapshot cache; the redis client satisfies it
 // structurally.
@@ -34,7 +83,7 @@ type Deps struct {
 	Tickets TicketStatsReader
 	Nodes   NodeStatsReader
 	Traffic TrafficStatsReader
-	Logs    repository.LogRepo
+	Logs    LogReader
 	Cache   Cache
 }
 
@@ -46,18 +95,36 @@ func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
 }
 
-func (s *Service) QueryRevenueStatistics(ctx context.Context) (*dto.RevenueStatisticsResponse, error) {
-	return newQueryRevenueStatisticsLogic(ctx, s.deps).QueryRevenueStatistics()
-}
-
-func (s *Service) QueryServerTotalData(ctx context.Context) (*dto.ServerTotalDataResponse, error) {
-	return newQueryServerTotalDataLogic(ctx, s.deps).QueryServerTotalData()
-}
-
 func (s *Service) QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelpyResponse, error) {
 	return newQueryTicketWaitReplyLogic(ctx, s.deps).QueryTicketWaitReply()
 }
 
-func (s *Service) QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsResponse, error) {
-	return newQueryUserStatisticsLogic(ctx, s.deps).QueryUserStatistics()
+// demoMode reports whether this is the demo deployment, which shows canned
+// figures instead of real ones.
+func demoMode() bool {
+	return strings.ToLower(os.Getenv("PPANEL_MODE")) == "demo"
+}
+
+// readSnapshot returns the summary cached under key, if a readable one is
+// there.
+func readSnapshot[T any](ctx context.Context, cache Cache, key string) (*T, bool) {
+	cached, err := cache.Get(ctx, key).Result()
+	if err != nil || cached == "" {
+		return nil, false
+	}
+	var snapshot T
+	if json.Unmarshal([]byte(cached), &snapshot) != nil {
+		return nil, false
+	}
+	return &snapshot, true
+}
+
+// storeSnapshot caches summary under key for ttl. Caching is best effort: a
+// summary that is not cached is computed again on the next read.
+func storeSnapshot(ctx context.Context, cache Cache, key string, summary any, ttl time.Duration) {
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return
+	}
+	cache.Set(ctx, key, data, ttl)
 }

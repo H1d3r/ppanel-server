@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
@@ -32,7 +33,7 @@ func (l *BatchDeleteSubscribeLogic) BatchDeleteSubscribe(req *dto.BatchDeleteSub
 	err := l.deps.Store.InSubscriptionTx(l.ctx, func(store repository.SubscriptionStore) error {
 		for _, id := range req.Ids {
 			// Validate whether the subscription ID belongs to an active user subscription.
-			count, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(l.ctx, id, 1)
+			count, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(l.ctx, id, int64(usersub.SubscribeStatusActive))
 			if err != nil {
 				l.Logger.Error("[BatchDeleteSubscribe] Query Subscribe Error: ", logger.Field("error", err.Error()))
 				return err

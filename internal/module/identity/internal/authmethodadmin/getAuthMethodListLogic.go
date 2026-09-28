@@ -8,7 +8,6 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 type GetAuthMethodListLogic struct {
@@ -29,8 +28,7 @@ func newGetAuthMethodListLogic(ctx context.Context, deps Deps) *GetAuthMethodLis
 func (l *GetAuthMethodListLogic) GetAuthMethodList() (resp *dto.GetAuthMethodListResponse, err error) {
 	methods, err := l.deps.Auths.FindAll(l.ctx)
 	if err != nil {
-		l.Errorw("find all failed", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find all failed: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list auth methods")
 	}
 	var list []dto.AuthMethodConfig
 	for _, method := range methods {
@@ -38,8 +36,7 @@ func (l *GetAuthMethodListLogic) GetAuthMethodList() (resp *dto.GetAuthMethodLis
 		mapping.DeepCopy(&item, method)
 		if method.Config != "" {
 			if err := json.Unmarshal([]byte(method.Config), &item.Config); err != nil {
-				l.Errorw("unmarshal config failed", logger.Field("config", method.Config), logger.Field("error", err.Error()))
-				return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "unmarshal config failed: %v", err.Error())
+				return nil, xerr.Wrapf(err, xerr.ERROR, "decode stored %s config", method.Method)
 			}
 		}
 		list = append(list, item)

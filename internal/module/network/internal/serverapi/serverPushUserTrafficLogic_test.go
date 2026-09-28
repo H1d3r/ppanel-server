@@ -74,9 +74,6 @@ type scopeSubs struct {
 	s *scopeStore
 }
 
-func (r scopeSubs) ActivatePendingSubscribesBySubscribeIds(context.Context, []int64) error {
-	return nil
-}
 func (r scopeSubs) FindUsersSubscribeBySubscribeIds(context.Context, []int64) ([]*usersub.Subscribe, error) {
 	return []*usersub.Subscribe{
 		{Id: 21, UserId: 100, SubscribeId: 7, UUID: "uuid-21"},

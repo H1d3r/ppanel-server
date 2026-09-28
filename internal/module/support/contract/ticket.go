@@ -81,3 +81,28 @@ type UpdateUserTicketStatusRequest struct {
 	Id     int64  `json:"id" validate:"required"`
 	Status *uint8 `json:"status" validate:"required"`
 }
+
+// StaffTicketUpdateCommand is an internal, trusted contract for a ticket
+// change staff make outside the admin panel: today the Telegram bot's /rp,
+// /close and /reopen commands and its ticket topics. It must NOT be bound to
+// an HTTP request; the caller has already authenticated the administrator.
+type StaffTicketUpdateCommand struct {
+	TicketId int64
+	// Reply, when not empty, is appended as a staff text follow and moves the
+	// ticket to Waiting, exactly like a reply from the admin panel.
+	Reply string
+	// From is the reply's author as stored on the follow.
+	From string
+	// Status is the status to move the ticket to when there is no reply.
+	Status uint8
+	// FromMirror reports that the change was made inside the channel the
+	// ticket notifier mirrors to (the ticket's Telegram topic). That channel
+	// already shows it, so the notifier is skipped instead of echoing the
+	// change back.
+	FromMirror bool
+}
+
+// StaffTicketUpdateResult describes the ticket before the update applied.
+type StaffTicketUpdateResult struct {
+	PreviousStatus uint8
+}

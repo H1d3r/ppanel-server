@@ -3,6 +3,8 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/requestmeta"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 func TestLoggerMiddlewareOmitsRequestAndResponseData(t *testing.T) {
@@ -73,4 +76,48 @@ type sensitiveValidationError struct {
 
 func (e *sensitiveValidationError) Error() string {
 	return e.value
+}
+
+// Handlers answer HTTP 200 and carry the failure in the body code, so the
+// access log must judge failures by that code: a server failure is logged at
+// error level with its error chain, a client mistake is an ordinary request.
+func TestLoggerMiddlewareReportsHandlerErrorsByCode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantLevel string
+		wantChain bool
+	}{
+		{"server failure", xerr.Wrapf(errors.New("connection refused"), xerr.DatabaseQueryError, "find order"), `"level":"error"`, true},
+		{"client mistake", xerr.NewErrCode(xerr.CouponInsufficientUsage), `"level":"info"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			oldWriter := logger.Reset()
+			logger.SetWriter(logger.NewWriter(&output))
+			t.Cleanup(func() {
+				logger.Reset()
+				if oldWriter != nil {
+					logger.SetWriter(oldWriter)
+				}
+			})
+
+			ctx := app.NewContext(0)
+			ctx.Request.Header.SetMethod(consts.MethodGet)
+			ctx.Request.SetRequestURI("/v1/public/order")
+			httpx.HttpResult(ctx, nil, tc.err)
+			LoggerMiddleware()(context.Background(), ctx)
+
+			got := output.String()
+			if !strings.Contains(got, tc.wantLevel) {
+				t.Fatalf("access log level: want %s in %s", tc.wantLevel, got)
+			}
+			if code := xerr.CodeOf(tc.err); !strings.Contains(got, fmt.Sprintf(`"error_code":%d`, code)) {
+				t.Fatalf("access log is missing error_code %d: %s", code, got)
+			}
+			if gotChain := strings.Contains(got, "connection refused"); gotChain != tc.wantChain {
+				t.Fatalf("error chain logged = %v, want %v: %s", gotChain, tc.wantChain, got)
+			}
+		})
+	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -28,7 +27,7 @@ func newUnbindTelegramLogic(ctx context.Context, deps Deps) *UnbindTelegramLogic
 
 func (l *UnbindTelegramLogic) UnbindTelegram() error {
 	// Get User Info
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 
 	if !ok {
 		logger.Error("current user is not found in context")
@@ -42,8 +41,7 @@ func (l *UnbindTelegramLogic) UnbindTelegram() error {
 
 	userTelegramChatId, err := strconv.ParseInt(method.AuthIdentifier, 10, 64)
 	if err != nil {
-		l.Errorw("UnbindTelegramLogic ParseInt Error", logger.Field("id", u.Id), logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "ParseInt Error")
+		return xerr.Wrapf(err, xerr.ERROR, "parse the telegram id of user %d", u.Id)
 	}
 
 	if userTelegramChatId == 0 {
@@ -58,7 +56,7 @@ func (l *UnbindTelegramLogic) UnbindTelegram() error {
 	}
 	// The unbind notice is best-effort: the composition root renders and
 	// sends it through the runtime-configured bot.
-	if err := l.deps.NotifyUnbind(u.Id, userTelegramChatId); err != nil {
+	if err := l.deps.NotifyUnbind(l.ctx, u.Id, userTelegramChatId); err != nil {
 		l.Errorw("UnbindTelegramLogic Send Error", logger.Field("id", u.Id), logger.Field("error", err.Error()))
 	}
 	return nil

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -33,7 +32,7 @@ func newCommissionWithdrawLogic(ctx context.Context, deps Deps) *CommissionWithd
 }
 
 func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdrawRequest) (resp *dto.WithdrawalLog, err error) {
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
 		logger.Error("current user is not found in context")
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
@@ -61,8 +60,7 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 		}
 		lockedUser.Commission -= req.Amount
 		if err = store.Wallet().UpdateCommission(l.ctx, lockedUser); err != nil {
-			l.Errorf("Failed to update user %d commission balance: %v", u.Id, err)
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "Failed to update user %d commission balance: %v", u.Id, err)
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update commission balance of user %d", u.Id)
 		}
 		// Use negative amount to reflect the balance decrease, so that
 		// SumAmountByTypeAndObjectID produces the correct net total.
@@ -83,8 +81,7 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 			Content:   string(b),
 			CreatedAt: timeutil.Now(),
 		}); err != nil {
-			l.Errorf("Failed to create commission log for user %d: %v", u.Id, err)
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "Failed to create commission log for user %d: %v", u.Id, err)
+			return xerr.Wrapf(err, xerr.DatabaseInsertError, "create commission log of user %d", u.Id)
 		}
 
 		withdrawal = walletEntity.Withdrawal{
@@ -95,8 +92,7 @@ func (l *CommissionWithdrawLogic) CommissionWithdraw(req *dto.CommissionWithdraw
 			Reason:  "",
 		}
 		if err = store.UserWithdrawal().InsertWithdrawal(l.ctx, &withdrawal); err != nil {
-			l.Errorf("Failed to create withdrawal log for user %d: %v", u.Id, err)
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "Failed to create withdrawal log for user %d: %v", u.Id, err)
+			return xerr.Wrapf(err, xerr.DatabaseInsertError, "create withdrawal of user %d", u.Id)
 		}
 		return nil
 	})

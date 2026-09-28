@@ -3,7 +3,6 @@ package wallet
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -27,15 +26,14 @@ func newQueryUserAffiliateListLogic(ctx context.Context, deps Deps) *QueryUserAf
 }
 
 func (l *QueryUserAffiliateListLogic) QueryUserAffiliateList(req *dto.QueryUserAffiliateListRequest) (resp *dto.QueryUserAffiliateListResponse, err error) {
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
 		logger.Error("current user is not found in context")
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
 	}
 	data, total, err := l.deps.Affiliates.QueryAffiliateList(l.ctx, u.Id, req.Page, req.Size)
 	if err != nil {
-		l.Errorw("Query User Affiliate List failed: %v", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Query User Affiliate List failed: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "Query User Affiliate List failed")
 	}
 
 	list := make([]dto.UserAffiliate, 0)

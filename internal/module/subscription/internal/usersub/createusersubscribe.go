@@ -72,10 +72,10 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "InsertSubscribe error: %v", err.Error())
 	}
 
-	err = l.deps.Cache.UpdateUserCache(l.ctx, userInfo)
+	err = l.deps.Cache.ClearUserCache(l.ctx, userInfo)
 	if err != nil {
-		l.Errorw("UpdateUserCache error", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "UpdateUserCache error: %v", err.Error())
+		l.Errorw("ClearUserCache error", logger.Field("error", err.Error()))
+		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "ClearUserCache error: %v", err.Error())
 	}
 
 	err = l.deps.Plans.ClearCache(l.ctx, userSub.SubscribeId)

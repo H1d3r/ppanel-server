@@ -3,7 +3,6 @@ package wallet
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
@@ -28,7 +27,7 @@ func newQueryUserBalanceLogLogic(ctx context.Context, deps Deps) *QueryUserBalan
 }
 
 func (l *QueryUserBalanceLogLogic) QueryUserBalanceLog() (resp *dto.QueryUserBalanceLogListResponse, err error) {
-	u, ok := l.ctx.Value(requestctx.CtxKeyUser).(*user.User)
+	u, ok := user.FromContext(l.ctx)
 	if !ok {
 		logger.Error("current user is not found in context")
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
@@ -41,8 +40,7 @@ func (l *QueryUserBalanceLogLogic) QueryUserBalanceLog() (resp *dto.QueryUserBal
 		ObjectID: u.Id,
 	})
 	if err != nil {
-		l.Errorw("[QueryUserBalanceLog] Query User Balance Log Error:", logger.Field("err", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Query User Balance Log Error")
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "Query User Balance Log Error")
 	}
 
 	list := make([]dto.BillingBalanceLogSnapshot, 0)

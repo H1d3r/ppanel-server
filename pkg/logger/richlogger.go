@@ -8,28 +8,10 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// WithCallerSkip returns a Logger with given caller skip.
-func WithCallerSkip(skip int) Logger {
-	if skip <= 0 {
-		return new(richLogger)
-	}
-
-	return &richLogger{
-		callerSkip: skip,
-	}
-}
-
 // WithContext sets ctx to log, for keeping tracing information.
 func WithContext(ctx context.Context) Logger {
 	return &richLogger{
 		ctx: ctx,
-	}
-}
-
-// WithDuration returns a Logger with given duration.
-func WithDuration(d time.Duration) Logger {
-	return &richLogger{
-		fields: []LogField{Field(durationKey, reprLogDuration(d))},
 	}
 }
 

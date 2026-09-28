@@ -64,10 +64,16 @@ func (m *Service) Start() {
 
 	runtimeConfig := m.deps.Config()
 	serverAddr := fmt.Sprintf("%v:%d", runtimeConfig.Host, runtimeConfig.Port)
-	bootstrap.Start(m.deps.Bootstrap)
+	if err := bootstrap.Start(m.deps.Bootstrap); err != nil {
+		// Fail fast: serving with a partially loaded configuration would
+		// silently run with defaults such as open registration.
+		logger.Errorf("bootstrap error: %s", err.Error())
+		panic(err)
+	}
 	if err := m.deps.Store.UserAuth().ValidateEmailIdentityUniqueness(context.Background()); err != nil {
 		panic(err.Error())
 	}
+	normalizeIdentityData(context.Background(), m.deps.Store)
 	m.server = newTransportServer(m.deps.HTTP(), m.deps.Config(), serverAddr)
 	traceConfig := runtimeConfig.Trace
 	if traceConfig.Name == "" {
@@ -81,7 +87,9 @@ func (m *Service) Start() {
 		m.deps.SetRestart(m.Restart)
 	}
 	reinitialize := func(subsystem string) {
-		bootstrap.Reload(m.deps.Bootstrap, subsystem)
+		// Reload logs a failure and keeps the previous configuration; the
+		// admin handlers calling this have no way to report it yet.
+		_ = bootstrap.Reload(m.deps.Bootstrap, bootstrap.Subsystem(subsystem))
 	}
 	if m.deps.SetReinitializeHandler != nil {
 		m.deps.SetReinitializeHandler(reinitialize)

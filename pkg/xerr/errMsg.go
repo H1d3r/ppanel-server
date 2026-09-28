@@ -61,6 +61,18 @@ func init() {
 		// auth error
 		VerifyCodeError: "Verify code error",
 
+		// Identity band
+		OAuthStateInvalid:          "OAuth state is invalid or expired",
+		OAuthProviderError:         "OAuth provider request failed",
+		OAuthCallbackInvalid:       "OAuth callback is invalid",
+		OAuthCallbackExpired:       "OAuth callback has expired",
+		OAuthCallbackReplayed:      "OAuth callback has already been used",
+		OAuthProviderMisconfigured: "OAuth provider is not configured correctly",
+		TelegramBotUnavailable:     "Telegram bot is not configured",
+		DemoModeRestricted:         "This operation is not allowed in demo mode",
+		SenderTestFailed:           "Test message could not be sent",
+		EmailIdentityAmbiguous:     "Email address matches more than one account",
+
 		// EnqueueError
 		QueueEnqueueError: " Queue enqueue error",
 
@@ -88,6 +100,29 @@ func init() {
 		PaymentMethodNotFound: "Payment method not found",
 		OrderStatusError:      "Order status error",
 		InsufficientOfPeriod:  "Insufficient number of period",
+
+		// Billing band
+		PaymentNotifyURLNotConfigured: "PAYMENT_NOTIFY_URL_NOT_CONFIGURED",
+		UnsupportedPaymentPlatform:    "UNSUPPORTED_PAYMENT_PLATFORM",
+		InvalidPaymentConfig:          "INVALID_PAYMENT_CONFIG",
+		PaymentPlatformImmutable:      "PAYMENT_PLATFORM_IMMUTABLE",
+		PaymentMethodHasPendingOrders: "PAYMENT_METHOD_HAS_PENDING_ORDERS",
+		PaymentMethodInternal:         "PAYMENT_METHOD_INTERNAL",
+		InvalidPaymentFee:             "INVALID_PAYMENT_FEE",
+		PaymentStatusUnconfirmed:      "PAYMENT_STATUS_UNCONFIRMED",
+		InvalidInitialOrderStatus:     "INVALID_INITIAL_ORDER_STATUS",
+		InvalidOrderTransition:        "INVALID_ORDER_TRANSITION",
+		TradeNoRequired:               "TRADE_NO_REQUIRED",
+		InvalidOrderCloseRequest:      "INVALID_ORDER_CLOSE_REQUEST",
+		CouponUsedCountImmutable:      "COUPON_USED_COUNT_IMMUTABLE",
+		InvalidCoupon:                 "INVALID_COUPON",
+		InvalidCouponDiscount:         "INVALID_COUPON_DISCOUNT",
+		InvalidCouponType:             "INVALID_COUPON_TYPE",
+		WithdrawalAlreadyReviewed:     "WITHDRAWAL_ALREADY_REVIEWED",
+
+		// Subscription band
+		SubscriptionStatusChanged:       "SUBSCRIPTION_STATUS_CHANGED",
+		SubscriptionStatusNotToggleable: "SUBSCRIPTION_STATUS_NOT_TOGGLEABLE",
 	}
 
 }

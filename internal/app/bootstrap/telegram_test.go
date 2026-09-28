@@ -75,7 +75,7 @@ func TestTelegramEmptyTokenClearsPublishedRuntimeState(t *testing.T) {
 		GroupChatID:   -100123,
 	}}
 	botSetterCalled := false
-	var publishedBot *tgbot.Bot = new(tgbot.Bot)
+	publishedBot := new(tgbot.Bot)
 	deps := &Dependencies{
 		Config: func() config.Config { return runtimeConfig },
 		UpdateConfig: func(update func(*config.Config)) {
@@ -88,7 +88,9 @@ func TestTelegramEmptyTokenClearsPublishedRuntimeState(t *testing.T) {
 		},
 	}
 
-	Telegram(deps)
+	if err := Telegram(deps); err != nil {
+		t.Fatalf("Telegram() = %v", err)
+	}
 
 	if !botSetterCalled {
 		t.Fatal("Telegram() did not revoke the published bot client")

@@ -3,154 +3,118 @@ package authmethodadmin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
-	"github.com/perfect-panel/server/internal/infra/mail"
 	"github.com/perfect-panel/server/internal/infra/mapping"
-	"github.com/perfect-panel/server/internal/infra/sms"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type UpdateAuthMethodConfigLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// Update auth method config
-func newUpdateAuthMethodConfigLogic(ctx context.Context, deps Deps) *UpdateAuthMethodConfigLogic {
-	return &UpdateAuthMethodConfigLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *UpdateAuthMethodConfigLogic) UpdateAuthMethodConfig(req *dto.UpdateAuthMethodConfigRequest) (resp *dto.AuthMethodConfig, err error) {
-	method, err := l.deps.Auths.FindOneByMethod(l.ctx, req.Method)
+// UpdateAuthMethodConfig stores an administrator's configuration of an
+// authentication method. A configuration that is not an object or does not
+// decode is refused, not replaced by the defaults; a missing one resets the
+// method to them.
+func (s *Service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAuthMethodConfigRequest) (*dto.AuthMethodConfig, error) {
+	method, err := s.deps.Auths.FindOneByMethod(ctx, req.Method)
 	if err != nil {
-		l.Errorw("find one by method failed", logger.Field("method", req.Method), logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find one by method failed: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find auth method %q", req.Method)
 	}
 
 	mapping.DeepCopy(method, req)
 	if req.Config != nil {
-		_, exist := req.Config.(map[string]interface{})
-		if !exist {
-			req.Config = initializePlatformConfig(req.Method).(string)
+		if _, ok := req.Config.(map[string]any); !ok {
+			return nil, fmt.Errorf("the %s config must be an object: %w", req.Method, xerr.NewErrCode(xerr.InvalidParams))
 		}
-		if req.Method == "email" {
-			configs, _ := json.Marshal(req.Config)
-			emailConfig := new(auth.EmailAuthConfig)
-			emailConfig.Unmarshal(string(configs))
-			req.Config = emailConfig
-		}
-
-		if req.Method == "mobile" {
-			configs, _ := json.Marshal(req.Config)
-			mobileConfig := new(auth.MobileAuthConfig)
-			mobileConfig.Unmarshal(string(configs))
-			req.Config = mobileConfig
-		}
-		if req.Method == "device" {
-			configs, _ := json.Marshal(req.Config)
-			deviceConfig := new(auth.DeviceConfig)
-			if err := deviceConfig.Unmarshal(string(configs)); err != nil {
-				return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid device config: %v", err)
-			}
-			if deviceConfig.OnlyRealDevice && !deviceConfig.EnableSecurity {
-				return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "only_real_device requires enable_security")
-			}
-			if deviceConfig.EnableSecurity && deviceConfig.SecuritySecret == "" {
-				return nil, errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "device security secret is required")
-			}
-			req.Config = deviceConfig
-		}
-
-		bytes, err := json.Marshal(req.Config)
+		config, err := decodeMethodConfig(req.Method, req.Config)
 		if err != nil {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "marshal config failed: %v", err.Error())
+			return nil, err
+		}
+		bytes, err := json.Marshal(config)
+		if err != nil {
+			return nil, xerr.Wrapf(err, xerr.ERROR, "marshal %s config", req.Method)
 		}
 		method.Config = string(bytes)
 	} else {
-		// initialize platform config
-		method.Config = initializePlatformConfig(req.Method).(string)
+		method.Config = initializePlatformConfig(req.Method)
 	}
-	err = l.deps.Auths.Update(l.ctx, method)
-	if err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "update auth method failed: %v", err.Error())
+	if err := s.deps.Auths.Update(ctx, method); err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update auth method %q", req.Method)
 	}
 
-	resp = new(dto.AuthMethodConfig)
+	resp := new(dto.AuthMethodConfig)
 	mapping.DeepCopy(resp, method)
 	if method.Config != "" {
 		if err := json.Unmarshal([]byte(method.Config), &resp.Config); err != nil {
-			l.Errorw("unmarshal apple config failed", logger.Field("config", method.Config), logger.Field("error", err.Error()))
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "unmarshal apple config failed: %v", err.Error())
+			return nil, xerr.Wrapf(err, xerr.ERROR, "decode stored %s config", req.Method)
 		}
 	}
-	// update global config
-	defer l.UpdateGlobal(method.Method)
-	return
-}
-
-func (l *UpdateAuthMethodConfigLogic) UpdateGlobal(method string) {
-	if method == "email" || method == "mobile" || method == "device" {
-		l.deps.Reinitialize(method)
+	// The email, mobile and device settings are also held by the runtime
+	// configuration, which reloads them.
+	switch method.Method {
+	case "email", "mobile", "device":
+		s.deps.Reinitialize(method.Method)
 	}
+	return resp, nil
 }
 
-func validatePlatformConfig(platform string, cfg map[string]interface{}) (interface{}, error) {
-	var bytes []byte
-	var err error
-	var config interface{}
-	bytes, err = json.Marshal(cfg)
+// decodeMethodConfig checks the configuration of the methods whose settings
+// the runtime reads; the provider methods keep what the administrator sent.
+func decodeMethodConfig(method string, config any) (any, error) {
+	raw, err := json.Marshal(config)
 	if err != nil {
-		return nil, err
+		return nil, xerr.Wrapf(err, xerr.InvalidParams, "encode %s config", method)
 	}
-	switch platform {
-	case mail.SMTP.String():
-		config = new(auth.SMTPConfig)
-	case sms.Abosend.String():
-		config = new(auth.AbosendConfig)
-	case sms.AlibabaCloud.String():
-		config = new(auth.AlibabaCloudConfig)
-	case sms.Smsbao.String():
-		config = new(auth.SmsbaoConfig)
-	case sms.Twilio.String():
-		config = new(auth.TwilioConfig)
+	switch method {
+	case "email":
+		emailConfig := new(auth.EmailAuthConfig)
+		if err := emailConfig.Unmarshal(string(raw)); err != nil {
+			return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid email config")
+		}
+		return emailConfig, nil
+	case "mobile":
+		mobileConfig := new(auth.MobileAuthConfig)
+		if err := mobileConfig.Unmarshal(string(raw)); err != nil {
+			return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid mobile config")
+		}
+		return mobileConfig, nil
+	case "device":
+		deviceConfig := new(auth.DeviceConfig)
+		if err := deviceConfig.Unmarshal(string(raw)); err != nil {
+			return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid device config")
+		}
+		if deviceConfig.OnlyRealDevice && !deviceConfig.EnableSecurity {
+			return nil, fmt.Errorf("only_real_device requires enable_security: %w", xerr.NewErrCode(xerr.InvalidParams))
+		}
+		if deviceConfig.EnableSecurity && deviceConfig.SecuritySecret == "" {
+			return nil, fmt.Errorf("device security secret is required: %w", xerr.NewErrCode(xerr.InvalidParams))
+		}
+		return deviceConfig, nil
 	default:
-		return nil, errors.New("invalid platform")
+		return config, nil
 	}
-	err = json.Unmarshal(bytes, config)
-	if err != nil {
-		return nil, err
-	}
-	return config, nil
 }
 
-func initializePlatformConfig(platform string) interface{} {
-	var result interface{}
+// initializePlatformConfig is the default configuration of a method, as
+// stored JSON; unknown methods have none.
+func initializePlatformConfig(platform string) string {
 	switch platform {
 	case "email":
-		result = new(auth.EmailAuthConfig).Marshal()
+		return new(auth.EmailAuthConfig).Marshal()
 	case "mobile":
-		result = new(auth.MobileAuthConfig).Marshal()
+		return new(auth.MobileAuthConfig).Marshal()
 	case "apple":
-		result = new(auth.AppleAuthConfig).Marshal()
+		return new(auth.AppleAuthConfig).Marshal()
 	case "google":
-		result = new(auth.GoogleAuthConfig).Marshal()
+		return new(auth.GoogleAuthConfig).Marshal()
 	case "github":
-		result = new(auth.GithubAuthConfig).Marshal()
+		return new(auth.GithubAuthConfig).Marshal()
 	case "facebook":
-		result = new(auth.FacebookAuthConfig).Marshal()
+		return new(auth.FacebookAuthConfig).Marshal()
 	case "telegram":
-		result = new(auth.TelegramAuthConfig).Marshal()
+		return new(auth.TelegramAuthConfig).Marshal()
 	case "device":
-		result = new(auth.DeviceConfig).Marshal()
+		return new(auth.DeviceConfig).Marshal()
 	}
-	return result
+	return ""
 }

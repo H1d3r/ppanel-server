@@ -5,17 +5,14 @@ import (
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // GetAvailablePaymentMethods lists the payment methods enabled for checkout.
 func (s *Service) GetAvailablePaymentMethods(ctx context.Context) (*dto.GetAvailablePaymentMethodsResponse, error) {
 	data, err := s.deps.Payments.FindAvailableMethods(ctx)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[GetAvailablePaymentMethods] database error", logger.Field("error", err.Error()))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "GetAvailablePaymentMethods: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list available payment methods")
 	}
 	resp := &dto.GetAvailablePaymentMethodsResponse{
 		List: make([]dto.PaymentMethod, 0),

@@ -2,11 +2,12 @@ package alipay
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
-	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/pkg/errors"
 	"github.com/smartwalle/alipay/v3"
 )
 
@@ -21,6 +22,8 @@ type Config struct {
 	// hosts before, and tests point it at a local fake gateway. Ignored in
 	// production, where only the official gateway may receive credentials.
 	Gateway string
+	// HTTPClient sends the gateway requests; nil selects the SDK default.
+	HTTPClient *http.Client
 }
 
 type Notification struct {
@@ -67,46 +70,38 @@ type Client struct {
 	Config
 	client *alipay.Client
 }
+
+// Order is a face-to-face trade to create. Amount is in CNY minor units and
+// is sent to the gateway exactly, as FormatAmount renders it. NotifyURL
+// overrides the client's configured callback.
 type Order struct {
-	OrderNo string
-	Amount  int64
+	OrderNo   string
+	Amount    int64
+	NotifyURL string
 }
 
-func NewClient(c Config) *Client {
-	var opts []alipay.OptionFunc
+// NewClient loads the merchant key and the Alipay public key; a key that
+// does not parse makes the method unusable.
+func NewClient(c Config) (*Client, error) {
+	opts := []alipay.OptionFunc{alipay.WithHTTPClient(c.HTTPClient)}
 	if c.Gateway != "" {
 		opts = append(opts, alipay.WithSandboxGateway(c.Gateway))
 	}
 	client, err := alipay.New(c.AppId, c.PrivateKey, !c.Sandbox, opts...)
 	if err != nil {
-		logger.Error("[Alipay] NewClient failed: ", logger.Field("errors", err), logger.Field("appId", c.AppId), logger.Field("sandbox", c.Sandbox))
-		return nil
+		return nil, fmt.Errorf("load Alipay merchant private key: %w", err)
 	}
-	err = client.LoadAliPayPublicKey(c.PublicKey)
-	if err != nil {
-		logger.Error("[Alipay] Load public key failed: ", logger.Field("errors", err), logger.Field("appId", c.AppId), logger.Field("sandbox", c.Sandbox))
-		return nil
+	if err := client.LoadAliPayPublicKey(c.PublicKey); err != nil {
+		return nil, fmt.Errorf("load Alipay public key: %w", err)
 	}
 	return &Client{
 		Config: c,
 		client: client,
-	}
+	}, nil
 }
 
 func (c *Client) PreCreateTrade(ctx context.Context, order Order) (string, error) {
-	amountString := payment.FormatFloat(float64(order.Amount)/float64(100), 2)
-	trade, err := c.client.TradePreCreate(ctx, alipay.TradePreCreate{
-		Trade: alipay.Trade{
-			OutTradeNo:  order.OrderNo,
-			TotalAmount: amountString,
-			Subject:     c.InvoiceName,
-			NotifyURL:   c.NotifyURL,
-			// Keep Alipay's payment window aligned with the local deferred
-			// close task.  Otherwise a QR code could still be paid after the
-			// order was closed and any reserved balance/inventory was restored.
-			TimeoutExpress: "15m",
-		},
-	})
+	trade, err := c.client.TradePreCreate(ctx, c.preCreateRequest(order))
 	if err != nil {
 		return "", err
 	}
@@ -114,6 +109,26 @@ func (c *Client) PreCreateTrade(ctx context.Context, order Order) (string, error
 		return "", errors.New("PreCreateTrade failed: " + trade.Msg)
 	}
 	return trade.QRCode, nil
+}
+
+// preCreateRequest is the alipay.trade.precreate request for order.
+func (c *Client) preCreateRequest(order Order) alipay.TradePreCreate {
+	notifyURL := order.NotifyURL
+	if notifyURL == "" {
+		notifyURL = c.NotifyURL
+	}
+	return alipay.TradePreCreate{
+		Trade: alipay.Trade{
+			OutTradeNo:  order.OrderNo,
+			TotalAmount: payment.FormatAmount(order.Amount),
+			Subject:     c.InvoiceName,
+			NotifyURL:   notifyURL,
+			// Keep Alipay's payment window aligned with the local deferred
+			// close task.  Otherwise a QR code could still be paid after the
+			// order was closed and any reserved balance/inventory was restored.
+			TimeoutExpress: "15m",
+		},
+	}
 }
 
 func (c *Client) QueryTrade(ctx context.Context, orderNo string) (*Trade, error) {
@@ -148,7 +163,7 @@ func (c *Client) QueryTrade(ctx context.Context, orderNo string) (*Trade, error)
 	if trade.Status.Paid() {
 		amount, err := payment.ParseAmount(rsp.TotalAmount)
 		if err != nil {
-			return nil, errors.Wrap(err, "invalid trade amount")
+			return nil, fmt.Errorf("invalid trade amount: %w", err)
 		}
 		trade.Amount = amount
 	}
@@ -193,7 +208,7 @@ func (c *Client) DecodeNotification(form url.Values) (*Notification, error) {
 	}
 	amount, err := payment.ParseAmount(notify.TotalAmount)
 	if err != nil {
-		return nil, errors.Wrap(err, "invalid notification amount")
+		return nil, fmt.Errorf("invalid notification amount: %w", err)
 	}
 
 	return &Notification{

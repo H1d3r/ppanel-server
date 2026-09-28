@@ -51,22 +51,13 @@ func (l *FilterResetSubscribeLogLogic) FilterResetSubscribeLog(req *dto.FilterRe
 			l.Errorf("[FilterResetSubscribeLog] failed to unmarshal content: %v", err.Error())
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt reset subscription log %d: %v", item.Id, err)
 		}
-		list = append(list, dto.ResetSubscribeLog{
-			Type:             content.Type,
-			UserId:           content.UserId,
-			UserSubscribeId:  item.ObjectID,
-			OrderNo:          content.OrderNo,
-			Timestamp:        content.Timestamp,
-			ClientIP:         content.ClientIP,
-			UserAgent:        content.UserAgent,
-			ActorID:          content.ActorID,
-			IPCountryCode:    content.IPCountryCode,
-			IPCountry:        content.IPCountry,
-			IPRegion:         content.IPRegion,
-			IPCity:           content.IPCity,
-			IPASN:            content.IPASN,
-			IPASOrganization: content.IPASOrganization,
-		})
+		list = append(list, withRequestMetadata(&dto.ResetSubscribeLog{
+			Type:            content.Type,
+			UserId:          content.UserId,
+			UserSubscribeId: item.ObjectID,
+			OrderNo:         content.OrderNo,
+			Timestamp:       content.Timestamp,
+		}, content.Metadata))
 	}
 
 	return &dto.FilterResetSubscribeLogResponse{

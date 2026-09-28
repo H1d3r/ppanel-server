@@ -32,9 +32,9 @@ type DeleteUserAuthMethodRequest struct {
 	AuthType string `json:"auth_type"`
 }
 
-type DeleteUserDeivceRequest struct {
+type DeleteUserDeviceRequest struct {
 	Id int64 `json:"id"`
-}
+} // @name dto.DeleteUserDeivceRequest
 
 type GetUserAuthMethodRequest struct {
 	UserId int64 `json:"user_id"`
@@ -86,7 +86,7 @@ type UpdateUserAuthMethodRequest struct {
 	AuthIdentifier string `json:"auth_identifier"`
 }
 
-type UpdateUserBasiceInfoRequest struct {
+type UpdateUserBasicInfoRequest struct {
 	UserId             int64  `json:"user_id" validate:"required"`
 	Password           string `json:"password"`
 	Avatar             string `json:"avatar"`
@@ -100,7 +100,7 @@ type UpdateUserBasiceInfoRequest struct {
 	RefererId          int64  `json:"referer_id"`
 	Enable             bool   `json:"enable"`
 	IsAdmin            bool   `json:"is_admin"`
-}
+} // @name dto.UpdateUserBasiceInfoRequest
 
 type UpdateUserNotifyRequest struct {
 	EnableBalanceNotify   *bool `json:"enable_balance_notify"`

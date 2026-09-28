@@ -1,11 +1,62 @@
 package trace
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel"
 )
+
+// The jaeger batcher exports OTLP over HTTP: Jaeger receives it natively.
+func TestJaegerBatcherExportsOTLPOverHTTP(t *testing.T) {
+	var mu sync.Mutex
+	var paths, contentTypes []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		contentTypes = append(contentTypes, r.Header.Get("Content-Type"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	StartAgent(Config{Name: "jaeger-otlp", Endpoint: server.URL, Batcher: kindJaeger, Sampler: 1})
+	_, span := otel.Tracer(TraceName).Start(context.Background(), "exported")
+	span.End()
+	StopAgent()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) == 0 || paths[0] != "/v1/traces" || contentTypes[0] != "application/x-protobuf" {
+		t.Fatalf("requests = %v (%v), want an OTLP/HTTP export to /v1/traces", paths, contentTypes)
+	}
+}
+
+func TestJaegerEndpointMapsOntoOTLP(t *testing.T) {
+	for _, tt := range []struct {
+		endpoint, target string
+		isURL, legacy    bool
+	}{
+		{"jaeger:4318", "", false, false},
+		{"http://jaeger:4318", "http://jaeger:4318/v1/traces", true, false},
+		{"https://traces.example.com/", "https://traces.example.com/v1/traces", true, false},
+		{"http://jaeger:4318/custom/path", "http://jaeger:4318/custom/path", true, false},
+		{"udp://agent:6831", "http://agent:4318/v1/traces", true, true},
+		{"http://collector:14268/api/traces", "http://collector:4318/v1/traces", true, true},
+		{"http://collector/api/traces", "http://collector:4318/v1/traces", true, true},
+		{"http://collector:9999/api/traces", "http://collector:9999/v1/traces", true, true},
+	} {
+		target, isURL, legacy := jaegerEndpoint(tt.endpoint)
+		if target != tt.target || isURL != tt.isURL || legacy != tt.legacy {
+			t.Fatalf("jaegerEndpoint(%q) = (%q, %v, %v), want (%q, %v, %v)", tt.endpoint, target, isURL, legacy, tt.target, tt.isURL, tt.legacy)
+		}
+	}
+}
 
 func TestStartAgent(t *testing.T) {
 	logger.Disable()

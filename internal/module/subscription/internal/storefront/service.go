@@ -5,16 +5,21 @@ package storefront
 import (
 	"context"
 
+	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
+// NodeLister is the network read port listing the nodes a plan selects; the
+// legacy node repository satisfies it structurally.
+type NodeLister interface {
+	ListNodesByScope(ctx context.Context, nodeIDs []int64, tags []string, enabled *bool, preload bool) ([]*node.Node, error)
+}
+
 type Deps struct {
 	Plans    repository.SubscribeRepo
 	UserSubs repository.UserSubscriptionRepo
-	Nodes    repository.NodeRepo
-	// Host is the site host list (first line is used for node fallbacks).
-	Host string
+	Nodes    NodeLister
 	// IsTrialPlan reports whether the plan is the currently configured trial
 	// plan; the registration config is runtime-mutable.
 	IsTrialPlan func(planID int64) bool
@@ -38,8 +43,4 @@ func (s *Service) QuerySubscribeList(ctx context.Context, req *dto.QuerySubscrib
 
 func (s *Service) QuerySubscribeGroupList(ctx context.Context) (*dto.QuerySubscribeGroupListResponse, error) {
 	return newQuerySubscribeGroupListLogic(ctx, s.deps).QuerySubscribeGroupList()
-}
-
-func (s *Service) QueryUserSubscribeNodeList(ctx context.Context) (*dto.QueryUserSubscribeNodeListResponse, error) {
-	return newQueryUserSubscribeNodeListLogic(ctx, s.deps).QueryUserSubscribeNodeList()
 }

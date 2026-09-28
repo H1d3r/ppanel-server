@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/perfect-panel/server/pkg/random"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // Dependencies is the startup/reconfiguration boundary. It owns only mutable
@@ -45,55 +47,109 @@ func (d *Dependencies) updateConfig(update func(*config.Config)) {
 	}
 }
 
+// Subsystem names a runtime configuration subsystem an administrator can
+// reload. The values are the names the admin settings handlers pass through
+// their reinitialize callback.
+type Subsystem string
+
+const (
+	SubsystemSite      Subsystem = "site"
+	SubsystemNode      Subsystem = "node"
+	SubsystemEmail     Subsystem = "email"
+	SubsystemDevice    Subsystem = "device"
+	SubsystemInvite    Subsystem = "invite"
+	SubsystemVerify    Subsystem = "verify"
+	SubsystemSubscribe Subsystem = "subscribe"
+	SubsystemRegister  Subsystem = "register"
+	SubsystemMobile    Subsystem = "mobile"
+	SubsystemCurrency  Subsystem = "currency"
+	SubsystemTelegram  Subsystem = "telegram"
+)
+
+// ErrUnknownSubsystem is returned by Reload for a name no subsystem answers
+// to, so a misspelt reload request fails loudly instead of doing nothing.
+var ErrUnknownSubsystem = errors.New("unknown runtime subsystem")
+
+// loaders maps every reloadable subsystem to its loader. Each loader publishes
+// its configuration only after everything it needs was read, so a failed load
+// leaves the previous configuration in place.
+var loaders = map[Subsystem]func(*Dependencies) error{
+	SubsystemSite:      Site,
+	SubsystemNode:      Node,
+	SubsystemEmail:     Email,
+	SubsystemDevice:    Device,
+	SubsystemInvite:    Invite,
+	SubsystemVerify:    Verify,
+	SubsystemSubscribe: Subscribe,
+	SubsystemRegister:  Register,
+	SubsystemMobile:    Mobile,
+	SubsystemCurrency:  Currency,
+	SubsystemTelegram:  Telegram,
+}
+
+// startupOrder is the order Start loads the subsystems in. Node reads the
+// secret NodeSecret provisions, so NodeSecret runs right before it.
+var startupOrder = []Subsystem{
+	SubsystemSite, SubsystemNode, SubsystemEmail, SubsystemDevice, SubsystemInvite, SubsystemVerify,
+	SubsystemSubscribe, SubsystemRegister, SubsystemMobile, SubsystemCurrency, SubsystemTelegram,
+}
+
 // Start loads startup state in dependency order. Migration and node-secret
-// provisioning must precede every node configuration read.
-func Start(deps *Dependencies) {
-	Migrate(deps)
+// provisioning must precede every node configuration read. The first failure
+// stops startup and is returned, so the caller fails fast instead of serving
+// with a partially loaded configuration.
+func Start(deps *Dependencies) error {
+	if err := Migrate(deps); err != nil {
+		return err
+	}
 	WarnDefaultAdminPassword(deps)
-	Site(deps)
-	NodeSecret(deps)
-	Node(deps)
-	Email(deps)
-	Device(deps)
-	Invite(deps)
-	Verify(deps)
-	Subscribe(deps)
-	Register(deps)
-	Mobile(deps)
-	Currency(deps)
-	Telegram(deps)
+	return loadSubsystems(deps, startupOrder)
+}
+
+func loadSubsystems(deps *Dependencies, order []Subsystem) error {
+	for _, subsystem := range order {
+		if subsystem == SubsystemNode {
+			if err := NodeSecret(deps); err != nil {
+				return wrapf(err, xerr.ERROR, "provision the node secret")
+			}
+		}
+		if err := loaders[subsystem](deps); err != nil {
+			return wrapf(err, xerr.ERROR, "load the %s configuration", subsystem)
+		}
+	}
+	return nil
 }
 
 // Reload refreshes the subsystem changed by an administrator. Startup-only
-// migration and node-secret provisioning are deliberately excluded.
-func Reload(deps *Dependencies, subsystem string) {
-	switch subsystem {
-	case "verify":
-		Verify(deps)
-	case "node":
-		Node(deps)
-	case "telegram":
-		Telegram(deps)
-	case "currency":
-		Currency(deps)
-	case "register":
-		Register(deps)
-	case "site":
-		Site(deps)
-	case "invite":
-		Invite(deps)
-	case "subscribe":
-		Subscribe(deps)
-	case "email":
-		Email(deps)
-	case "mobile":
-		Mobile(deps)
-	case "device":
-		Device(deps)
+// migration and node-secret provisioning are deliberately excluded. A failure
+// is logged and returned, and the subsystem keeps its previous configuration.
+func Reload(deps *Dependencies, subsystem Subsystem) error {
+	load, ok := loaders[subsystem]
+	if !ok {
+		logger.Errorw("[Reload] unknown subsystem, nothing reloaded", logger.Field("subsystem", string(subsystem)))
+		return fmt.Errorf("reload %q: %w", string(subsystem), ErrUnknownSubsystem)
 	}
+	if err := load(deps); err != nil {
+		logger.Errorw("[Reload] reload failed, keeping the previous configuration",
+			logger.Field("subsystem", string(subsystem)), logger.Field("error", err.Error()))
+		return wrapf(err, xerr.ERROR, "reload the %s configuration", subsystem)
+	}
+	return nil
 }
 
-func Migrate(ctx *Dependencies) {
+// wrapf adds context to err with xerr.Wrapf and keeps the cause's text in the
+// message: Wrapf prints the cause only of an error that already carries a
+// code.
+func wrapf(err error, code uint32, format string, args ...any) error {
+	var coded *xerr.CodeError
+	if err != nil && !errors.As(err, &coded) {
+		format += ": %v"
+		args = append(args, err)
+	}
+	return xerr.Wrapf(err, code, format, args...)
+}
+
+func Migrate(ctx *Dependencies) error {
 	current := ctx.currentConfig()
 	mc := orm.Mysql{
 		Config: current.DatabaseConfig(),
@@ -102,16 +158,15 @@ func Migrate(ctx *Dependencies) {
 	if err := schema.Up(mc.Driver(), mc.MigrationDsn()); err != nil {
 		if errors.Is(err, schema.NoChange) {
 			logger.Info("[Migrate] database not change")
-			return
+			return nil
 		}
 		logger.Errorf("[Migrate] Up error: %v", err.Error())
-		panic(err)
-	} else {
-		logger.Info("[Migrate] Database change, took " + time.Since(now).String())
+		return wrapf(err, xerr.ERROR, "migrate the database")
 	}
+	logger.Info("[Migrate] Database change, took " + time.Since(now).String())
 	// if not found admin user
 	err := ctx.Store.InTx(context.Background(), func(store repository.Store) error {
-		count, err := store.User().QueryResisterUserTotal(context.Background())
+		count, err := store.User().QueryRegisterUserTotal(context.Background())
 		if err != nil {
 			return err
 		}
@@ -141,9 +196,7 @@ func Migrate(ctx *Dependencies) {
 		}
 		return nil
 	})
-	if err != nil {
-		panic(err)
-	}
+	return wrapf(err, xerr.DatabaseInsertError, "seed the first administrator")
 }
 
 // defaultAdminPassword is the value older releases seeded the first

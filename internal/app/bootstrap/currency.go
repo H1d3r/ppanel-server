@@ -1,27 +1,25 @@
 package bootstrap
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-func Currency(ctx *Dependencies) {
+// currencySettings mirrors the stored currency keys. The seeded Currency key
+// has no reader: the unit is what the runtime uses.
+type currencySettings struct {
+	CurrencyUnit   string
+	CurrencySymbol string
+	AccessKey      string
+}
+
+func Currency(ctx *Dependencies) error {
 	// Retrieve system currency configuration
-	currency, err := ctx.Store.System().GetCurrencyConfig(context.Background())
-	if err != nil {
+	var configs currencySettings
+	if err := readSettings(categoryCurrency, ctx.Store.System().GetCurrencyConfig, &configs); err != nil {
 		logger.Errorf("[INIT] Failed to get currency configuration: %v", err.Error())
-		panic(fmt.Sprintf("[INIT] Failed to get currency configuration: %v", err.Error()))
+		return err
 	}
-	// Parse currency configuration
-	configs := struct {
-		CurrencyUnit   string
-		CurrencySymbol string
-		AccessKey      string
-	}{}
-	config.SystemConfigSliceReflectToStruct(currency, &configs)
 	ctx.ExchangeRate.Set(0) // Default exchange rate to 0
 	currencyConfig := config.Currency{
 		Unit:      configs.CurrencyUnit,
@@ -34,4 +32,5 @@ func Currency(ctx *Dependencies) {
 		logger.Field("symbol", currencyConfig.Symbol),
 		logger.Field("provider_configured", currencyConfig.AccessKey != ""),
 	)
+	return nil
 }

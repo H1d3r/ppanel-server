@@ -67,6 +67,15 @@ func (l *GetServerUserListLogic) queryMatchedSubscribes(nodeIds []int64, nodeTag
 func (l *GetServerUserListLogic) GetServerUserList(req *dto.GetServerUserListRequest) (resp *dto.GetServerUserListResponse, err error) {
 	cacheKey := serverUserListCacheKey(req.ServerId, req.Protocol)
 	cache, err := l.deps.Redis.Get(l.ctx, cacheKey).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		// An unreadable cache must not cost the node its user list: fall
+		// through to the database like a miss.
+		l.Errorw("[GetServerUserList] read cached user list failed",
+			logger.Field("server_id", req.ServerId),
+			logger.Field("protocol", req.Protocol),
+			logger.Field("error", err.Error()))
+		cache = ""
+	}
 	if cache != "" {
 		etag := httpx.GenerateETag([]byte(cache))
 		resp = &dto.GetServerUserListResponse{}
@@ -170,9 +179,8 @@ func (l *GetServerUserListLogic) servedUsers(server *node.Server, protocol strin
 		planIDs = append(planIDs, sub.Id)
 		plansByID[sub.Id] = sub
 	}
-	if err := l.deps.Store.UserSubscription().ActivatePendingSubscribesBySubscribeIds(l.ctx, planIDs); err != nil {
-		return nil, err
-	}
+	// A read endpoint: it selects the servable subscriptions and writes
+	// nothing (legacy Pending rows are servable as they are).
 	data, err := l.deps.Store.UserSubscription().FindUsersSubscribeBySubscribeIds(l.ctx, planIDs)
 	if err != nil {
 		return nil, err

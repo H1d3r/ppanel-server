@@ -13,6 +13,7 @@ import (
 
 	"uuid"
 
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
@@ -47,7 +48,7 @@ func (s *Service) ReconcileEntitlement(ctx context.Context, cmd dto.ReconcileEnt
 	if err != nil {
 		return nil, err
 	}
-	if orderInfo.UserId != cmd.UserID || orderInfo.SubscribeId != cmd.PlanID || orderInfo.TradeNo != cmd.TransactionKey || orderInfo.Method != "AppleIAP" || (orderInfo.Status != 2 && orderInfo.Status != 5) {
+	if orderInfo.UserId != cmd.UserID || orderInfo.SubscribeId != cmd.PlanID || orderInfo.TradeNo != cmd.TransactionKey || orderInfo.Method != appleIAPMethod || (orderInfo.Status != order.StatusPaid && orderInfo.Status != order.StatusFinished) {
 		return nil, ErrEntitlementConflict
 	}
 	return s.reconcileEntitlement(ctx, cmd)
@@ -223,13 +224,13 @@ func projectEntitlement(sub *usersub.Subscribe, cmd dto.ReconcileEntitlementComm
 		sub.Upload, sub.Download = 0, 0
 	}
 	// Administrative holds and local cancellation are independent of payment.
-	if sub.Status == usersub.SubscribeStatusStopped || sub.Status == usersub.SubscribeStatusDeducted {
+	if usersub.OnHold(sub.Status) {
 		return
 	}
 	if cmd.Status == "revoked" || cmd.Status == "expired" || cmd.Status == "billing_retry" || !until.After(now) || cmd.PeriodStart.After(now) {
 		sub.Status = usersub.SubscribeStatusExpired
 		sub.FinishedAt = &now
-	} else if sub.Traffic > 0 && (sub.Upload >= sub.Traffic || sub.Download >= sub.Traffic-sub.Upload) {
+	} else if sub.TrafficExhausted() {
 		sub.Status = usersub.SubscribeStatusFinished
 		sub.FinishedAt = &now
 	} else {

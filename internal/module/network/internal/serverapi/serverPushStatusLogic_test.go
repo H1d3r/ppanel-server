@@ -9,7 +9,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
-	"gorm.io/gorm"
 )
 
 type statusNodeRepo struct {
@@ -32,7 +31,7 @@ func (r *statusNodeRepo) UpdateStatusCache(context.Context, int64, *node.Status)
 	return nil
 }
 
-func (r *statusNodeRepo) UpdateServerProtocolsIfCurrent(_ context.Context, _ int64, current, updated string, _ ...*gorm.DB) (bool, error) {
+func (r *statusNodeRepo) UpdateServerProtocolsIfCurrent(_ context.Context, _ int64, current, updated string) (bool, error) {
 	r.protocolUpdates++
 	if r.server.Protocols != current {
 		return false, nil

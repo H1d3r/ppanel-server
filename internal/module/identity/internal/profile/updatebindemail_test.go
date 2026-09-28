@@ -2,16 +2,14 @@ package profile
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -33,7 +31,7 @@ func (r *bindEmailAuthRepo) FindUserAuthMethodByOpenID(context.Context, string, 
 	return &usermodel.AuthMethods{}, gorm.ErrRecordNotFound
 }
 
-func (r *bindEmailAuthRepo) InsertUserAuthMethods(_ context.Context, data *usermodel.AuthMethods, _ ...*gorm.DB) error {
+func (r *bindEmailAuthRepo) InsertUserAuthMethods(_ context.Context, data *usermodel.AuthMethods) error {
 	r.inserted = append(r.inserted, data)
 	return nil
 }
@@ -43,11 +41,11 @@ func newBindEmailLogic(t *testing.T) (*UpdateBindEmailLogic, *bindEmailAuthRepo,
 	rds := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
 	t.Cleanup(func() { _ = rds.Close() })
 	repo := &bindEmailAuthRepo{}
-	ctx := context.WithValue(context.Background(), requestctx.CtxKeyUser, &usermodel.User{Id: 7})
+	ctx := usermodel.NewContext(context.Background(), &usermodel.User{Id: 7})
 	return newUpdateBindEmailLogic(ctx, Deps{
 		UserAuth:     repo,
 		Redis:        rds,
-		Policy:       &fakeBindOAuthMethodPolicy{},
+		Policy:       registerpolicy.New(registerpolicy.Deps{Config: func() registerpolicy.Snapshot { return registerpolicy.Snapshot{EmailEnabled: true} }}),
 		EmailDomains: func() (string, bool) { return "", false },
 	}), repo, rds
 }
@@ -56,7 +54,7 @@ func newBindEmailLogic(t *testing.T) (*UpdateBindEmailLogic, *bindEmailAuthRepo,
 // caller must prove control of the address; a session alone is not enough.
 func TestUpdateBindEmailRequiresCodeSentToNewAddress(t *testing.T) {
 	logic, repo, rds := newBindEmailLogic(t)
-	key := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Register, "new@example.com")
+	key := verification.EmailCodeKey(auth.Register, "new@example.com")
 	if err := verification.SaveVerificationCode(context.Background(), rds, key, "123456", time.Minute); err != nil {
 		t.Fatal(err)
 	}

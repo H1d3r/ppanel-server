@@ -1,128 +1,81 @@
-package auth
+package authn
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/auth/usersession"
-	"github.com/perfect-panel/server/internal/config"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
-	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
+	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
-	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
-	"gorm.io/gorm"
 )
 
-type ResetPasswordLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps ResetPasswordDependencies
-}
-
-// NewResetPasswordLogic Reset password
-func NewResetPasswordLogic(ctx context.Context, deps ResetPasswordDependencies) *ResetPasswordLogic {
-	return &ResetPasswordLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *ResetPasswordLogic) ResetPassword(req *dto.ResetPasswordRequest) (resp *dto.LoginResponse, err error) {
-	if err := l.deps.Policy.EnsureMethodEnabled(l.ctx, identifier.Email); err != nil {
+// ResetPassword sets a new password for the account of an email address,
+// proven by a security code sent to it, and signs the account in.
+func (s *Service) ResetPassword(ctx context.Context, req *dto.ResetPasswordRequest) (*dto.LoginResponse, error) {
+	if err := s.policy.VerifyHuman(ctx, registerpolicy.Reset, req.CfToken); err != nil {
 		return nil, err
 	}
-	var userInfo *user.User
-	loginStatus := false
+	if err := s.policy.EnsureMethodEnabled(ctx, identifier.Email); err != nil {
+		return nil, err
+	}
 	email := identifier.CanonicalEmail(req.Email)
+	return s.resetPassword(ctx, passwordReset{
+		method:     identifier.Email,
+		identifier: email,
+		codeKey:    verification.EmailCodeKey(auth.Security, email),
+		code:       req.Code,
+		password:   req.Password,
+		device:     req.Identifier,
+		loginType:  req.LoginType,
+	})
+}
 
+// passwordReset is a password reset through one identity.
+type passwordReset struct {
+	method, identifier string
+	codeKey, code      string
+	password           string
+	device, loginType  string
+}
+
+func (s *Service) resetPassword(ctx context.Context, reset passwordReset) (resp *dto.LoginResponse, err error) {
+	// The code is checked before the account is looked up, so the reset
+	// does not reveal which identifiers have accounts.
+	if err := verification.ValidateVerificationCode(ctx, s.deps.Redis, reset.codeKey, reset.code, false); err != nil {
+		return nil, xerr.Wrapf(err, xerr.VerifyCodeError, "check reset code")
+	}
+	userInfo, err := s.findAccount(ctx, reset.method, reset.identifier)
+	if err != nil {
+		return nil, err
+	}
+	attempt := account.NewAttempt(s.deps.Store.Log(), reset.method)
+	attempt.Identify(userInfo.Id)
 	defer func() {
-		if userInfo != nil && userInfo.Id != 0 && loginStatus {
-			loginLog := log.Login{
-				Method:    "email",
-				LoginIP:   req.IP,
-				UserAgent: req.UserAgent,
-				Success:   loginStatus,
-				Timestamp: timeutil.Now().UnixMilli(),
-			}
-			content, _ := loginLog.Marshal()
-			if auditErr := l.deps.Store.Log().Insert(l.ctx, &log.SystemLog{
-				Id:       0,
-				Type:     log.TypeLogin.Uint8(),
-				Date:     timeutil.Now().Format("2006-01-02"),
-				ObjectID: userInfo.Id,
-				Content:  string(content),
-			}); auditErr != nil {
-				l.Errorw("failed to insert login log",
-					logger.Field("user_id", userInfo.Id),
-					logger.Field("ip", req.IP),
-					logger.Field("error", auditErr.Error()),
-				)
-				if err == nil {
-					resp = nil
-					err = errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "record login audit: %v", auditErr)
-				}
-			}
+		if err = attempt.Finish(ctx, err); err != nil {
+			resp = nil
 		}
 	}()
-
-	cacheKey := fmt.Sprintf("%s:%s:%s", config.AuthCodeCacheKey, auth.Security, email)
-	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, false); err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "Verification code error")
-	}
-
-	// Check user
-	authMethod, err := l.deps.Store.UserAuth().FindUserAuthMethodByOpenID(l.ctx, identifier.Email, email)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user email not exist: %v", req.Email)
-		}
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user by email error: %v", err.Error())
-	}
-
-	userInfo, err = l.deps.Store.User().FindOne(l.ctx, authMethod.UserId)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user email not exist: %v", req.Email)
-		}
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "query user info failed: %v", err.Error())
-	}
-	if err := ensureAccountActive(userInfo); err != nil {
+	// A code sent to an identifier a deleted or disabled account still holds
+	// must not bring the account back.
+	if err := account.EnsureActive(userInfo); err != nil {
 		return nil, err
 	}
-	if err := verification.ValidateVerificationCode(l.ctx, l.deps.Redis, cacheKey, req.Code, true); err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.VerifyCodeError), "Verification code error")
+	if err := verification.ValidateVerificationCode(ctx, s.deps.Redis, reset.codeKey, reset.code, true); err != nil {
+		return nil, xerr.Wrapf(err, xerr.VerifyCodeError, "check reset code")
 	}
-
-	// Update password
-	if err = l.deps.Store.User().UpdateColumns(l.ctx, userInfo.Id, password.UserColumns(req.Password)); err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update user info failed: %v", err.Error())
+	if err := s.deps.Store.User().UpdateColumns(ctx, userInfo.Id, password.UserColumns(reset.password)); err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update password of user %d", userInfo.Id)
 	}
 	// A reset usually follows a compromise: end every earlier session before
 	// issuing the new one.
-	if err = usersession.Revoke(l.ctx, l.deps.Redis, userInfo.Id); err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "revoke sessions error: %v", err.Error())
+	if err := usersession.Revoke(ctx, s.deps.Redis, userInfo.Id); err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
 	}
-	clearLoginFailures(l.ctx, l.deps.Redis, userInfo.Id)
-
-	device, err := bindLoginDevice(l.deps.DeviceBinder, req.Identifier, req.IP, req.UserAgent, userInfo.Id)
-	if err != nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "bind device: %v", err)
-	}
-	session, err := issueLoginSession(l.ctx, l.deps.Redis, l.deps.Config.JWTAccessSecret, l.deps.Config.JWTAccessExpire, userInfo.Id, req.LoginType, device)
-	if err != nil {
-		return nil, err
-	}
-	token := session.Token
-	loginStatus = true
-	return &dto.LoginResponse{
-		Token: token,
-	}, nil
+	clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
+	return s.signIn(ctx, userInfo.Id, reset.device, reset.loginType)
 }

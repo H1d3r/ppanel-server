@@ -65,10 +65,6 @@ func (s *Service) SubscribeSort(ctx context.Context, req *dto.SubscribeSortReque
 	return newSubscribeSortLogic(ctx, s.deps).SubscribeSort(req)
 }
 
-func (s *Service) ResetAllSubscribeToken(ctx context.Context) (*dto.ResetAllSubscribeTokenResponse, error) {
-	return newResetAllSubscribeTokenLogic(ctx, s.deps).ResetAllSubscribeToken()
-}
-
 func (s *Service) CreateSubscribeGroup(ctx context.Context, req *dto.CreateSubscribeGroupRequest) error {
 	return newCreateSubscribeGroupLogic(ctx, s.deps).CreateSubscribeGroup(req)
 }

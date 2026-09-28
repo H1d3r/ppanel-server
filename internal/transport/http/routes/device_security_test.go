@@ -26,6 +26,7 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/transport/http/middleware"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -52,7 +53,7 @@ func newDeviceFixture(t *testing.T) *deviceFixture {
 	}
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
-	t.Cleanup(func() { sqlDB.Close() })
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&user.User{}, &user.AuthMethods{}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func newDeviceFixture(t *testing.T) *deviceFixture {
 	}
 	rdb := miniredis.RunT(t)
 	rds := redis.NewClient(&redis.Options{Addr: rdb.Addr(), MaxRetries: -1})
-	t.Cleanup(func() { rds.Close() })
+	t.Cleanup(func() { _ = rds.Close() })
 	store := repository.NewGormStoreWithBuilders(db, rds, repository.Builders{
 		Identity: identity.NewRepoBuilder(), Platform: platform.NewRepoBuilder(),
 		Billing: func(repository.ModuleConn) repository.BillingRepos { return repository.BillingRepos{} },
@@ -112,7 +113,8 @@ func (f *deviceFixture) service(kick func(int64, string), onlyReal bool) identit
 }
 
 func (f *deviceFixture) login(identifier string) (*dto.LoginResponse, error) {
-	return f.service(nil, false).DeviceLogin(context.Background(), &dto.DeviceLoginRequest{Identifier: identifier, IP: "192.0.2.99", UserAgent: "original-test-UA"})
+	ctx := requestmeta.With(context.Background(), requestmeta.New("192.0.2.99", "original-test-UA"))
+	return f.service(nil, false).DeviceLogin(ctx, &dto.DeviceLoginRequest{Identifier: identifier})
 }
 
 func (f *deviceFixture) token(t *testing.T, index int) string {
@@ -125,7 +127,7 @@ func (f *deviceFixture) token(t *testing.T, index int) string {
 }
 
 func (f *deviceFixture) authorize(token string) (context.Context, error) {
-	return middleware.AuthenticateRequest(context.Background(), middleware.AuthDeps{JWT: config.JwtAuth{AccessSecret: deviceTestJWTKey}, Redis: f.redis, Store: f.store}, token, "/v1/public/user/info")
+	return middleware.AuthenticateRequest(context.Background(), middleware.AuthDeps{JWT: config.JwtAuth{AccessSecret: deviceTestJWTKey}, Redis: f.redis, Accounts: middleware.AccountsFromStore(f.store)}, token)
 }
 
 func (f *deviceFixture) admin(kick func(int64, string)) identity.Service {
@@ -287,7 +289,7 @@ func TestUnbindRevokesTargetNotCallingDeviceAndCleansBothRows(t *testing.T) {
 	}
 	// Removing via admin must use the same atomic cleanup, not leave a stale
 	// unique auth identifier that prevents the next registration.
-	if err := f.admin(nil).DeleteUserDevice(context.Background(), &dto.DeleteUserDeivceRequest{Id: f.devices[1].Id}); err != nil {
+	if err := f.admin(nil).DeleteUserDevice(context.Background(), &dto.DeleteUserDeviceRequest{Id: f.devices[1].Id}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.authorize(caller); err == nil {
@@ -306,7 +308,7 @@ func TestDeviceRemovalRollsBackRowsAndFailsClosedOnRedisError(t *testing.T) {
 		t.Fatal("cross-user removal accepted")
 	}
 	f.rdb.SetError("unavailable")
-	if err := f.admin(nil).DeleteUserDevice(ctx, &dto.DeleteUserDeivceRequest{Id: f.devices[0].Id}); err == nil {
+	if err := f.admin(nil).DeleteUserDevice(ctx, &dto.DeleteUserDeviceRequest{Id: f.devices[0].Id}); err == nil {
 		t.Fatal("Redis failure was ignored")
 	}
 	f.rdb.SetError("")
@@ -316,7 +318,7 @@ func TestDeviceRemovalRollsBackRowsAndFailsClosedOnRedisError(t *testing.T) {
 	if err := f.db.Exec(`CREATE TRIGGER reject_device_auth_delete BEFORE DELETE ON user_auth_methods BEGIN SELECT RAISE(FAIL, 'test failure'); END`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := f.admin(nil).DeleteUserDevice(ctx, &dto.DeleteUserDeivceRequest{Id: f.devices[0].Id}); err == nil {
+	if err := f.admin(nil).DeleteUserDevice(ctx, &dto.DeleteUserDeviceRequest{Id: f.devices[0].Id}); err == nil {
 		t.Fatal("database failure ignored")
 	}
 	var count int64
@@ -337,7 +339,9 @@ func TestLegacyUnboundDeviceJWTRequiresNewLogin(t *testing.T) {
 	f := newDeviceFixture(t)
 	for _, loginType := range []string{"device", ""} {
 		session := "legacy-" + loginType
-		f.rdb.Set(config.SessionIdKey+":"+session, fmt.Sprint(f.owner.Id))
+		if err := f.rdb.Set(config.SessionIdKey+":"+session, fmt.Sprint(f.owner.Id)); err != nil {
+			t.Fatal(err)
+		}
 		token, err := token2.NewJwtToken(deviceTestJWTKey, time.Now().Unix(), 3600, token2.WithOption("UserId", f.owner.Id), token2.WithOption("SessionId", session), token2.WithOption("LoginType", loginType))
 		if err != nil {
 			t.Fatal(err)
@@ -351,17 +355,20 @@ func TestLegacyUnboundDeviceJWTRequiresNewLogin(t *testing.T) {
 
 type capturedDeviceService struct {
 	identity.Service
-	request dto.DeviceLoginRequest
+	request  dto.DeviceLoginRequest
+	metadata requestmeta.Metadata
 }
 
-func (s *capturedDeviceService) DeviceLogin(_ context.Context, req *dto.DeviceLoginRequest) (*dto.LoginResponse, error) {
+func (s *capturedDeviceService) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) (*dto.LoginResponse, error) {
 	s.request = *req
+	s.metadata, _ = requestmeta.From(ctx)
 	return &dto.LoginResponse{}, nil
 }
 
 func TestDeviceLoginHandlerUsesRawHTTPUserAgent(t *testing.T) {
 	svc := &capturedDeviceService{}
 	router := server.New()
+	router.Use(middleware.LoggerMiddleware())
 	router.POST("/v1/auth/login/device", authhttp.DeviceLoginHandler(svc))
 	c := router.NewContext()
 	c.Request.Header.SetMethod("POST")
@@ -370,8 +377,8 @@ func TestDeviceLoginHandlerUsesRawHTTPUserAgent(t *testing.T) {
 	c.Request.SetRequestURI("/v1/auth/login/device")
 	c.Request.SetBodyString(`{"identifier":"device","user_agent":"spoofed","IP":"forged"}`)
 	router.ServeHTTP(context.Background(), c)
-	if svc.request.UserAgent != "Original-UA/1.0" || svc.request.IP != c.ClientIP() {
-		t.Fatalf("wrong metadata: %+v", svc.request)
+	if svc.metadata.UserAgent != "Original-UA/1.0" || svc.metadata.ClientIP != c.ClientIP() {
+		t.Fatalf("wrong metadata: %+v", svc.metadata)
 	}
 	var envelope map[string]interface{}
 	if err := json.Unmarshal(c.Response.Body(), &envelope); err != nil {
@@ -387,6 +394,7 @@ func TestSignedDeviceLoginEndToEndRejectsReplay(t *testing.T) {
 	const path = "/v1/auth/login/device"
 	const secret = "test-device-transport"
 	router := server.New()
+	router.Use(middleware.LoggerMiddleware())
 	router.POST(path, middleware.DeviceMiddleware(func() config.DeviceConfig {
 		return config.DeviceConfig{Enable: true, OnlyRealDevice: true, EnableSecurity: true, SecuritySecret: secret}
 	}, f.redis), authhttp.DeviceLoginHandler(f.service(nil, true)))

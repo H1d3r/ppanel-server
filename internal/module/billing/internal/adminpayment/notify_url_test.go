@@ -6,39 +6,36 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 )
 
-type listPaymentRepo struct {
-	repository.PaymentRepo
-	rows []*payment.Payment
-}
-
-func (r listPaymentRepo) FindListByPage(context.Context, int, int, *payment.Filter) (int64, []*payment.Payment, error) {
-	return int64(len(r.rows)), r.rows, nil
-}
-
+// The admin list shows the callback URL checkout actually gives the
+// gateway: the payment domain, else a reachable configured host, else the
+// site host. The 0.0.0.0 listen address used to be shown as https://0.0.0.0.
 func TestListPaymentNotifyURLs(t *testing.T) {
 	tests := []struct {
 		name     string
 		platform string
 		domain   string
-		host     string
+		hosts    gateway.NotifyHosts
 		want     string
 	}{
-		{"stripe domain", "Stripe", "https://pay.example.test/", "panel.example.test", "https://pay.example.test/v1/notify/Stripe/test-token"},
-		{"cryptomus domain", "Cryptomus", "https://pay.example.test", "panel.example.test", "https://pay.example.test/v1/notify/Cryptomus/test-token"},
-		{"configured base path", "EPay", "https://pay.example.test/custom/", "panel.example.test", "https://pay.example.test/custom/v1/notify/EPay/test-token"},
-		{"host fallback", "EPay", "", "panel.example.test/", "https://panel.example.test/v1/notify/EPay/test-token"},
-		{"balance has no callback", "balance", "https://pay.example.test", "panel.example.test", ""},
+		{"stripe domain", "Stripe", "https://pay.example.test/", gateway.NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/v1/notify/Stripe/test-token"},
+		{"cryptomus domain", "Cryptomus", "https://pay.example.test", gateway.NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/v1/notify/Cryptomus/test-token"},
+		{"configured base path", "EPay", "https://pay.example.test/custom/", gateway.NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/custom/v1/notify/EPay/test-token"},
+		{"host fallback", "EPay", "", gateway.NotifyHosts{Host: "panel.example.test/"}, "https://panel.example.test/v1/notify/EPay/test-token"},
+		{"listen address falls back to site host", "AlipayF2F", "", gateway.NotifyHosts{Host: "0.0.0.0", SiteHost: "www.example.test"}, "https://www.example.test/v1/notify/AlipayF2F/test-token"},
+		{"not configured", "EPay", "", gateway.NotifyHosts{Host: "0.0.0.0"}, ""},
+		{"balance has no callback", "balance", "https://pay.example.test", gateway.NotifyHosts{Host: "panel.example.test"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			enabled := true
-			repo := listPaymentRepo{rows: []*payment.Payment{{
-				Platform: tt.platform, Domain: tt.domain, Token: "test-token", Enable: &enabled,
-			}}}
-			svc := NewService(repo, nil, nil, tt.host)
+			repo := newMemoryPayments(&payment.Payment{
+				Id: 1, Platform: tt.platform, Domain: tt.domain, Token: "test-token", Enable: &enabled,
+			})
+			hosts := tt.hosts
+			svc := NewService(Deps{Payments: repo, NotifyHosts: func() gateway.NotifyHosts { return hosts }})
 			resp, err := svc.List(context.Background(), &dto.GetPaymentMethodListRequest{Page: 1, Size: 10})
 			if err != nil {
 				t.Fatal(err)

@@ -8,23 +8,9 @@ import (
 	"math"
 	"time"
 
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/period"
 	"github.com/perfect-panel/server/pkg/timeutil"
-)
-
-const (
-	// Time unit constants for subscription billing
-	UnitTimeNoLimit = "NoLimit" // Unlimited time subscription
-	UnitTimeYear    = "Year"    // Annual subscription
-	UnitTimeMonth   = "Month"   // Monthly subscription
-	UnitTimeDay     = "Day"     // Daily subscription
-	UnitTimeHour    = "Hour"    // Hourly subscription
-	UnitTimeMinute  = "Minute"  // Per-minute subscription
-
-	// Reset cycle constants for traffic resets
-	ResetCycleNone    = 0 // No reset cycle
-	ResetCycle1st     = 1 // Reset on 1st of each month
-	ResetCycleMonthly = 2 // Reset monthly based on start date
-	ResetCycleYear    = 3 // Reset yearly based on start date
 )
 
 // Error definitions for validation and calculation failures
@@ -38,14 +24,14 @@ var (
 
 // Subscribe represents a subscription with time and traffic limits
 type Subscribe struct {
-	StartTime      time.Time // Subscription start time
-	ExpireTime     time.Time // Subscription expiration time
-	Traffic        int64     // Traffic allowance per reset cycle in bytes (0 = unlimited)
-	Download       int64     // Downloaded traffic in the current cycle in bytes
-	Upload         int64     // Uploaded traffic in the current cycle in bytes
-	UnitTime       string    // Time unit for billing (Year, Month, Day, etc.)
-	ResetCycle     int64     // Traffic reset cycle
-	DeductionRatio int64     // Deduction ratio for weighted calculations (0-100)
+	StartTime      time.Time    // Subscription start time
+	ExpireTime     time.Time    // Subscription expiration time
+	Traffic        int64        // Traffic allowance per reset cycle in bytes (0 = unlimited)
+	Download       int64        // Downloaded traffic in the current cycle in bytes
+	Upload         int64        // Uploaded traffic in the current cycle in bytes
+	UnitTime       period.Unit  // Time unit the term was bought in
+	ResetCycle     period.Cycle // Traffic reset cycle
+	DeductionRatio int64        // Deduction ratio for weighted calculations (0-100)
 }
 
 // Order represents what was paid for the subscription term
@@ -59,11 +45,12 @@ func (s *Subscribe) Validate() error {
 		return ErrInvalidTraffic
 	}
 
-	if s.Download+s.Upload > s.Traffic {
-		return fmt.Errorf("download + upload (%d) cannot exceed total traffic (%d)", s.Download+s.Upload, s.Traffic)
-	}
+	// Usage above the quota is not an error: traffic reports can land after
+	// the quota ran out, and an unlimited quota (0) has no bound at all. Both
+	// simply leave no unused traffic to refund.
 
-	if !s.ExpireTime.After(s.StartTime) {
+	// A subscription without a time limit has no term to measure.
+	if !s.noTimeLimit() && !s.ExpireTime.After(s.StartTime) {
 		return ErrInvalidTimeRange
 	}
 
@@ -71,15 +58,7 @@ func (s *Subscribe) Validate() error {
 		return ErrInvalidDeductionRatio
 	}
 
-	validUnitTimes := []string{UnitTimeNoLimit, UnitTimeYear, UnitTimeMonth, UnitTimeDay, UnitTimeHour, UnitTimeMinute}
-	valid := false
-	for _, ut := range validUnitTimes {
-		if s.UnitTime == ut {
-			valid = true
-			break
-		}
-	}
-	if !valid {
+	if _, err := period.ParseUnit(string(s.UnitTime)); err != nil {
 		return ErrInvalidUnitTime
 	}
 
@@ -99,10 +78,10 @@ func (o *Order) Validate() error {
 // rata; the current cycle refunds by its unused time and traffic. The result
 // is always between zero and the amount paid.
 func CalculateRemainingAmount(sub Subscribe, order Order) (int64, error) {
-	return calculateRemainingAmount(sub, order, timeutil.Now())
+	return calculateRemainingAmount(period.App(), sub, order, timeutil.Now())
 }
 
-func calculateRemainingAmount(sub Subscribe, order Order, now time.Time) (int64, error) {
+func calculateRemainingAmount(cal period.Calendar, sub Subscribe, order Order, now time.Time) (int64, error) {
 	if err := sub.Validate(); err != nil {
 		return 0, fmt.Errorf("invalid subscription: %w", err)
 	}
@@ -111,8 +90,8 @@ func calculateRemainingAmount(sub Subscribe, order Order, now time.Time) (int64,
 		return 0, fmt.Errorf("invalid order: %w", err)
 	}
 
-	if sub.UnitTime == UnitTimeNoLimit {
-		if sub.ResetCycle != ResetCycleNone {
+	if sub.noTimeLimit() {
+		if sub.ResetCycle != period.CycleNone {
 			return 0, nil
 		}
 		return calculateNoLimitAmount(sub, order), nil
@@ -125,12 +104,18 @@ func calculateRemainingAmount(sub Subscribe, order Order, now time.Time) (int64,
 		now = sub.StartTime
 	}
 
-	cycleStart, cycleEnd := currentResetCycle(sub, now)
+	cycleStart, cycleEnd := currentResetCycle(cal, sub, now)
 	remaining := float64(sub.ExpireTime.Sub(cycleEnd))
 	if cycle := cycleEnd.Sub(cycleStart); cycle > 0 {
 		remaining += float64(cycle) * remainingShare(sub, float64(cycleEnd.Sub(now))/float64(cycle))
 	}
 	return proportion(order.Amount, remaining/float64(sub.ExpireTime.Sub(sub.StartTime))), nil
+}
+
+// noTimeLimit reports whether the subscription has no term: bought without a
+// time limit, or set to never expire.
+func (s *Subscribe) noTimeLimit() bool {
+	return s.UnitTime == period.UnitNoLimit || usersub.NoExpiry(s.ExpireTime)
 }
 
 // calculateNoLimitAmount refunds a time-unlimited subscription by its unused
@@ -139,40 +124,24 @@ func calculateNoLimitAmount(sub Subscribe, order Order) int64 {
 	if sub.Traffic == 0 {
 		return 0
 	}
-	return proportion(order.Amount, float64(sub.Traffic-sub.Download-sub.Upload)/float64(sub.Traffic))
+	return proportion(order.Amount, unusedTrafficShare(sub))
+}
+
+// unusedTrafficShare is the unused part of the quota in [0, 1]: usage that
+// went past the quota leaves none.
+func unusedTrafficShare(sub Subscribe) float64 {
+	return math.Max(0, math.Min(1, float64(sub.Traffic-sub.Download-sub.Upload)/float64(sub.Traffic)))
 }
 
 // currentResetCycle returns the traffic-reset cycle containing now, clamped
-// to the subscription term. It follows the reset job's calendar: the 1st of
-// each month, the start day of each month (the last day in shorter months),
-// or the start date each year (Feb 28 for a Feb 29 start in common years).
-// Without a reset cycle the whole term is one cycle.
-func currentResetCycle(sub Subscribe, now time.Time) (time.Time, time.Time) {
-	loc := sub.StartTime.Location()
-	now = now.In(loc)
-	start := sub.StartTime
-
-	var cycleStart, cycleEnd time.Time
-	switch sub.ResetCycle {
-	case ResetCycle1st:
-		cycleStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
-		cycleEnd = cycleStart.AddDate(0, 1, 0)
-	case ResetCycleMonthly:
-		cycleStart = resetDate(now.Year(), now.Month(), start.Day(), loc)
-		if cycleStart.After(now) {
-			cycleStart = resetDate(now.Year(), now.Month()-1, start.Day(), loc)
-		}
-		cycleEnd = resetDate(cycleStart.Year(), cycleStart.Month()+1, start.Day(), loc)
-	case ResetCycleYear:
-		cycleStart = resetDate(now.Year(), start.Month(), start.Day(), loc)
-		if cycleStart.After(now) {
-			cycleStart = resetDate(now.Year()-1, start.Month(), start.Day(), loc)
-		}
-		cycleEnd = resetDate(cycleStart.Year()+1, start.Month(), start.Day(), loc)
-	default:
+// to the subscription term: the calendar reset's own cycle (period), so a
+// refund counts the traffic period the owner is in. Without a reset cycle the
+// whole term is one cycle.
+func currentResetCycle(cal period.Calendar, sub Subscribe, now time.Time) (time.Time, time.Time) {
+	cycleStart, cycleEnd, ok := cal.CycleAt(sub.ResetCycle, sub.StartTime, now)
+	if !ok {
 		return sub.StartTime, sub.ExpireTime
 	}
-
 	if cycleStart.Before(sub.StartTime) {
 		cycleStart = sub.StartTime
 	}
@@ -182,17 +151,6 @@ func currentResetCycle(sub Subscribe, now time.Time) (time.Time, time.Time) {
 	return cycleStart, cycleEnd
 }
 
-// resetDate returns local midnight of the given day, moved to the month's
-// last day when the month is shorter. Months outside 1-12 roll over into the
-// neighboring year.
-func resetDate(year int, month time.Month, day int, loc *time.Location) time.Time {
-	first := time.Date(year, month, 1, 0, 0, 0, 0, loc)
-	if last := first.AddDate(0, 1, -1).Day(); day > last {
-		day = last
-	}
-	return time.Date(first.Year(), first.Month(), day, 0, 0, 0, 0, loc)
-}
-
 // remainingShare combines the unused time and traffic of the current cycle
 // the way the plan asks: the smaller of the two by default, or a weighted mix
 // when the plan sets a deduction ratio.
@@ -200,7 +158,7 @@ func remainingShare(sub Subscribe, timeRatio float64) float64 {
 	if sub.Traffic == 0 {
 		return timeRatio
 	}
-	trafficRatio := float64(sub.Traffic-sub.Download-sub.Upload) / float64(sub.Traffic)
+	trafficRatio := unusedTrafficShare(sub)
 	if sub.DeductionRatio == 0 {
 		return math.Min(timeRatio, trafficRatio)
 	}

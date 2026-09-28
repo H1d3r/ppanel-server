@@ -77,5 +77,5 @@ func formatReportLines(lines []billing.DailyOrderReportLine) string {
 
 // formatReportAmount converts minor units to the display amount.
 func formatReportAmount(amount int64) string {
-	return fmt.Sprintf("%.2f", float64(amount)/100)
+	return billing.FormatAmount(amount)
 }
