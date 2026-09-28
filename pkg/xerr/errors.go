@@ -1,5 +1,5 @@
 // Package xerr is the error model of the API. A CodeError carries one of
-// the numeric codes of errCode.go and a message, which is all a client
+// the numeric codes of err_code.go and a message, which is all a client
 // learns of a failure: a response carries the code and message of the first
 // CodeError in the error chain, never the rest of the error text. Wrapf and
 // Errorf attach a code while keeping the underlying error reachable for

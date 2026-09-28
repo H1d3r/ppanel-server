@@ -395,3 +395,15 @@ func TestLegacyHandlerTreeRemoved(t *testing.T) {
 		}
 	}
 }
+
+// TestGoFileNamesAreLowercase keeps the one naming style the tree was
+// normalized to: Go files and their directories are lowercase snake_case, as
+// the Go toolchain's own names are. The camelCase names the code generator
+// used to write mixed with them.
+func TestGoFileNamesAreLowercase(t *testing.T) {
+	for _, f := range collectGoFiles(t) {
+		if strings.ToLower(f.path) != f.path {
+			t.Errorf("%s: name Go files and directories in lowercase snake_case", f.path)
+		}
+	}
+}

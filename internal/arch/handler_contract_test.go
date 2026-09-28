@@ -7,7 +7,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/internal/module/billing/transport/http/admin/coupon"
 	"github.com/perfect-panel/server/internal/module/identity"
-	authMethod "github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod"
+	"github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod"
 	"github.com/perfect-panel/server/internal/module/platform/transport/http/admin/console"
 	adminlog "github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log"
 	"github.com/perfect-panel/server/internal/module/subscription"
@@ -43,13 +43,13 @@ func TestHandlerFactories_returnNativeHertzHandlers(t *testing.T) {
 	handlerFactory[subscription.Service](application.GetSubscribeApplicationListHandler)
 	handlerFactory[subscription.Service](application.PreviewSubscribeTemplateHandler)
 	handlerFactory[subscription.Service](application.UpdateSubscribeApplicationHandler)
-	handlerFactory[identity.Service](authMethod.GetAuthMethodConfigHandler)
-	handlerFactory[identity.Service](authMethod.GetAuthMethodListHandler)
-	handlerFactory[identity.Service](authMethod.GetEmailPlatformHandler)
-	handlerFactory[identity.Service](authMethod.GetSmsPlatformHandler)
-	handlerFactory[identity.Service](authMethod.TestEmailSendHandler)
-	handlerFactory[identity.Service](authMethod.TestSmsSendHandler)
-	handlerFactory[identity.Service](authMethod.UpdateAuthMethodConfigHandler)
+	handlerFactory[identity.Service](authmethod.GetAuthMethodConfigHandler)
+	handlerFactory[identity.Service](authmethod.GetAuthMethodListHandler)
+	handlerFactory[identity.Service](authmethod.GetEmailPlatformHandler)
+	handlerFactory[identity.Service](authmethod.GetSmsPlatformHandler)
+	handlerFactory[identity.Service](authmethod.TestEmailSendHandler)
+	handlerFactory[identity.Service](authmethod.TestSmsSendHandler)
+	handlerFactory[identity.Service](authmethod.UpdateAuthMethodConfigHandler)
 	handlerFactory[console.Dashboard](console.QueryRevenueStatisticsHandler)
 	handlerFactory[console.Dashboard](console.QueryServerTotalDataHandler)
 	handlerFactory[console.Dashboard](console.QueryTicketWaitReplyHandler)

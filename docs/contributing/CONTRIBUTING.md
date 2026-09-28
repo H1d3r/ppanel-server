@@ -21,6 +21,8 @@ To ensure the quality of the codebase and maintainability of the project, please
 - **Functional Testing**: Fully test new features or bug fixes to ensure no missing functionality or regressions.
 - **Unit Tests**: Write unit tests for added or modified functionality and ensure all tests pass.
 - **Documentation Updates**: Update documentation if the PR includes new features or API changes.
+- **File Names**: Go files and directories are lowercase snake_case (`update_server_handler.go`, not
+  `updateServerHandler.go`); `internal/arch` fails on any other name.
 
 ### Local checks
 

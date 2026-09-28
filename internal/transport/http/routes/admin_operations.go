@@ -2,7 +2,7 @@ package routes
 
 import (
 	"github.com/cloudwego/hertz/pkg/app/server"
-	adminAuthMethod "github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod"
+	adminAuthMethod "github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod"
 	adminServer "github.com/perfect-panel/server/internal/module/network/transport/http/admin/server"
 	adminConsole "github.com/perfect-panel/server/internal/module/platform/transport/http/admin/console"
 	adminLog "github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log"

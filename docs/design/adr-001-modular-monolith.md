@@ -86,7 +86,8 @@ internal/module/<name>/
   - `TestModuleTransportOwnership`：handler 只能依赖所属模块门面与 contract；
   - `TestModuleCoreDoesNotImportTransport`：模块核心不得反向导入 `transport/`；
   - `TestHandlerFactories_returnNativeHertzHandlers`：handler 工厂返回 Hertz 原生 handler 类型；
-  - `TestLegacyHandlerTreeRemoved`：禁止恢复顶层 `internal/handler`。
+  - `TestLegacyHandlerTreeRemoved`：禁止恢复顶层 `internal/handler`；
+  - `TestGoFileNamesAreLowercase`：Go 文件与目录一律使用小写 snake_case 命名。
 
 ## 迁移路径
 
@@ -295,7 +296,7 @@ transport 子包，不再归一化成已删除的 `internal/handler`。
 **错误码按域分段（2026-07-25）**：存量 66 码**冻结原值**（客户端按数值分支，重编号即
 breaking change），新码必须落在属主模块的万段内：Shared=10xxxx、identity=11xxxx、
 billing=12xxxx、subscription=13xxxx、network=14xxxx、support=15xxxx、platform=16xxxx、
-notification=17xxxx（`pkg/xerr/errCode.go` 的 Band* 常量）。
+notification=17xxxx（`pkg/xerr/err_code.go` 的 Band* 常量）。
 `TestErrorCodeSegmentation`（AST 解析）强制：值唯一、冻结集不增不减、新码必须入段且
 必须有 message；4 个历史无 message 的码（20010/61005/90002/90009）单列冻结，只许收窄。
 第 6 步 gRPC 化时业务码经 status detail 过线，分段保证多服务独立演进不撞号。

@@ -7,10 +7,10 @@ GET /v1/admin/announcement/detail github.com/perfect-panel/server/internal/modul
 GET /v1/admin/announcement/list github.com/perfect-panel/server/internal/module/support/transport/http/admin/announcement.GetAnnouncementListHandler
 GET /v1/admin/application/preview github.com/perfect-panel/server/internal/module/subscription/transport/http/admin/application.PreviewSubscribeTemplateHandler
 GET /v1/admin/application/subscribe_application_list github.com/perfect-panel/server/internal/module/subscription/transport/http/admin/application.GetSubscribeApplicationListHandler
-GET /v1/admin/auth-method/config github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.GetAuthMethodConfigHandler
-GET /v1/admin/auth-method/email_platform github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.GetEmailPlatformHandler
-GET /v1/admin/auth-method/list github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.GetAuthMethodListHandler
-GET /v1/admin/auth-method/sms_platform github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.GetSmsPlatformHandler
+GET /v1/admin/auth-method/config github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.GetAuthMethodConfigHandler
+GET /v1/admin/auth-method/email_platform github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.GetEmailPlatformHandler
+GET /v1/admin/auth-method/list github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.GetAuthMethodListHandler
+GET /v1/admin/auth-method/sms_platform github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.GetSmsPlatformHandler
 GET /v1/admin/console/revenue github.com/perfect-panel/server/internal/module/platform/transport/http/admin/console.QueryRevenueStatisticsHandler
 GET /v1/admin/console/server github.com/perfect-panel/server/internal/module/platform/transport/http/admin/console.QueryServerTotalDataHandler
 GET /v1/admin/console/ticket github.com/perfect-panel/server/internal/module/platform/transport/http/admin/console.QueryTicketWaitReplyHandler
@@ -119,8 +119,8 @@ POST /v1/server/status github.com/perfect-panel/server/internal/module/network/t
 POST /v1/admin/ads/ github.com/perfect-panel/server/internal/module/support/transport/http/admin/ads.CreateAdsHandler
 POST /v1/admin/announcement/ github.com/perfect-panel/server/internal/module/support/transport/http/admin/announcement.CreateAnnouncementHandler
 POST /v1/admin/application/ github.com/perfect-panel/server/internal/module/subscription/transport/http/admin/application.CreateSubscribeApplicationHandler
-POST /v1/admin/auth-method/test_email_send github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.TestEmailSendHandler
-POST /v1/admin/auth-method/test_sms_send github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.TestSmsSendHandler
+POST /v1/admin/auth-method/test_email_send github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.TestEmailSendHandler
+POST /v1/admin/auth-method/test_sms_send github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.TestSmsSendHandler
 POST /v1/admin/coupon/ github.com/perfect-panel/server/internal/module/billing/transport/http/admin/coupon.CreateCouponHandler
 POST /v1/admin/document/ github.com/perfect-panel/server/internal/module/support/transport/http/admin/document.CreateDocumentHandler
 POST /v1/admin/log/setting github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.UpdateLogSettingHandler
@@ -195,7 +195,7 @@ POST /v2/public/orders/:orderNo/session github.com/perfect-panel/server/internal
 PUT /v1/admin/ads/ github.com/perfect-panel/server/internal/module/support/transport/http/admin/ads.UpdateAdsHandler
 PUT /v1/admin/announcement/ github.com/perfect-panel/server/internal/module/support/transport/http/admin/announcement.UpdateAnnouncementHandler
 PUT /v1/admin/application/subscribe_application github.com/perfect-panel/server/internal/module/subscription/transport/http/admin/application.UpdateSubscribeApplicationHandler
-PUT /v1/admin/auth-method/config github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authMethod.UpdateAuthMethodConfigHandler
+PUT /v1/admin/auth-method/config github.com/perfect-panel/server/internal/module/identity/transport/http/admin/authmethod.UpdateAuthMethodConfigHandler
 PUT /v1/admin/coupon/ github.com/perfect-panel/server/internal/module/billing/transport/http/admin/coupon.UpdateCouponHandler
 PUT /v1/admin/document/ github.com/perfect-panel/server/internal/module/support/transport/http/admin/document.UpdateDocumentHandler
 PUT /v1/admin/order/status github.com/perfect-panel/server/internal/module/billing/transport/http/admin/order.UpdateOrderStatusHandler
