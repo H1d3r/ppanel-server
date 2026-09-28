@@ -10,6 +10,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// OAuthLoginGetTokenService is the part of the identity facade
+// OAuthLoginGetTokenHandler calls.
+type OAuthLoginGetTokenService interface {
+	OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGetTokenRequest) (*dto.LoginResponse, error)
+}
+
+var _ OAuthLoginGetTokenService = identity.Service(nil)
+
 // OAuthLoginGetTokenHandler documents OAuth login get token.
 //
 // @Summary OAuth login get token
@@ -19,7 +27,7 @@ import (
 // @Param request body dto.OAuthLoginGetTokenRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/oauth/login/token [post]
-func OAuthLoginGetTokenHandler(service identity.Service) app.HandlerFunc {
+func OAuthLoginGetTokenHandler(service OAuthLoginGetTokenService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.OAuthLoginGetTokenRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

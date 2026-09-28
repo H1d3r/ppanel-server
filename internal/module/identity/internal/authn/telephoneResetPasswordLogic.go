@@ -31,6 +31,5 @@ func (s *Service) TelephoneResetPassword(ctx context.Context, req *dto.Telephone
 		code:       req.Code,
 		password:   req.Password,
 		device:     req.Identifier,
-		loginType:  req.LoginType,
 	})
 }

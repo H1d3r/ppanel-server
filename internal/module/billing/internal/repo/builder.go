@@ -1,3 +1,7 @@
+// Package repo holds the billing module's repository implementations over
+// GORM: orders with their event outbox, payment methods, coupons, and the
+// wallet and withdrawal rows. The module facade exports them through
+// NewBuilder for store assembly (ADR-001 step-6 preparation).
 package repo
 
 import "github.com/perfect-panel/server/internal/repository"

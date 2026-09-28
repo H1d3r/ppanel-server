@@ -1,3 +1,5 @@
+// Package auth holds the identity module's handlers of the sign-in,
+// registration and password-reset endpoints under /v1/auth.
 package auth
 
 import (
@@ -10,11 +12,17 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// UserLoginService is the part of the identity facade UserLoginHandler
+// calls.
+type UserLoginService interface {
+	UserLogin(ctx context.Context, req *dto.UserLoginRequest) (*dto.LoginResponse, error)
+}
+
+var _ UserLoginService = identity.Service(nil)
+
 // UserLoginHandler documents User login.
 //
-// The identity service applies the configured Turnstile check, so the
-// verify-config argument is no longer read; it stays until the route
-// wiring drops it.
+// The identity service applies the configured Turnstile check.
 //
 // @Summary User login
 // @Tags common
@@ -23,7 +31,7 @@ import (
 // @Param request body dto.UserLoginRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/login [post]
-func UserLoginHandler(service identity.Service) app.HandlerFunc {
+func UserLoginHandler(service UserLoginService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.UserLoginRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

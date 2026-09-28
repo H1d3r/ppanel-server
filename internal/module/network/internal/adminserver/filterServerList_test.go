@@ -37,9 +37,9 @@ type subscriptionDetails struct {
 	calls [][]int64
 }
 
-var _ onlineSubscriptionReader = (*subscriptionDetails)(nil)
+var _ OnlineSubscriptionReader = (*subscriptionDetails)(nil)
 
-func (d *subscriptionDetails) FindSubscribeDetailsByIds(_ context.Context, ids []int64) ([]*usersub.SubscribeDetails, error) {
+func (d *subscriptionDetails) SubscriptionDetailsByIDs(_ context.Context, ids []int64) ([]*usersub.SubscribeDetails, error) {
 	d.calls = append(d.calls, ids)
 	var found []*usersub.SubscribeDetails
 	for _, id := range ids {
@@ -104,5 +104,29 @@ func TestFilterServerListReadsOnlineSubscriptionsInOneQuery(t *testing.T) {
 	}
 	if resp.List[1].Status.Cpu != 2 || len(resp.List[0].Protocols) != 2 {
 		t.Fatalf("server fields lost: %+v", resp.List)
+	}
+}
+
+// A listed server keeps the stored fields in their API form: the times in
+// Unix milliseconds, and a zero report time for a server that never reported.
+// The list itself fills in the protocols and the status.
+func TestServerDTOMapsTheStoredFields(t *testing.T) {
+	reported := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	stored := &node.Server{
+		Id: 7, Name: "tokyo", Country: "JP", City: "Tokyo", Address: "203.0.113.7", Sort: 3,
+		Protocols: `[{"type":"vless"}]`, LastReportedAt: &reported,
+		CreatedAt: reported.Add(-time.Hour), UpdatedAt: reported.Add(-time.Minute),
+	}
+	want := dto.Server{
+		Id: 7, Name: "tokyo", Country: "JP", City: "Tokyo", Address: "203.0.113.7", Sort: 3,
+		LastReportedAt: reported.UnixMilli(),
+		CreatedAt:      reported.Add(-time.Hour).UnixMilli(), UpdatedAt: reported.Add(-time.Minute).UnixMilli(),
+	}
+	if got := serverDTO(stored); !reflect.DeepEqual(got, want) {
+		t.Fatalf("serverDTO = %+v, want %+v", got, want)
+	}
+	stored.LastReportedAt = nil
+	if got := serverDTO(stored); got.LastReportedAt != 0 {
+		t.Fatalf("a server that never reported has report time %d", got.LastReportedAt)
 	}
 }

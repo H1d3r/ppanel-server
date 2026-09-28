@@ -98,7 +98,7 @@ func (g *epayGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconcil
 			)
 			return Reconciliation{}, nil
 		}
-		return Reconciliation{}, fmt.Errorf("cannot safely expire EPay order %s: %v: %w", o.OrderNo, err, ErrUnconfirmed)
+		return Reconciliation{}, fmt.Errorf("cannot safely expire EPay order %s: %w: %w", o.OrderNo, err, ErrUnconfirmed)
 	}
 	if !result.Paid {
 		if req.Explicit {

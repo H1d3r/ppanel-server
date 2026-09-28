@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/timeutil"
@@ -63,148 +64,208 @@ func canonicalTime(t *time.Time) *time.Time {
 }
 
 func (s *Service) reconcileEntitlement(ctx context.Context, cmd dto.ReconcileEntitlementCommand) (*dto.EntitlementResult, error) {
-	stateID := entitlementKey(cmd.Source, cmd.Scope, cmd.SubscriptionKey)
-	periodID := entitlementKey(cmd.Source, cmd.Scope, cmd.TransactionKey)
-	payload, _ := json.Marshal(cmd)
-	fingerprint := entitlementKey(string(payload))
-	result := &dto.EntitlementResult{}
-	var projected *usersub.Subscribe
-	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
-		// The user lock serializes first purchases and quota checks. The state
-		// primary key additionally protects the same chain across users.
-		if err := store.UserSubscription().LockUserSerial(ctx, cmd.UserID); err != nil {
-			return err
-		}
-		state, err := store.Entitlement().FindStateForUpdate(ctx, stateID)
-		if err != nil {
-			return err
-		}
-		if state != nil {
-			if state.UserID != cmd.UserID || state.Mode != cmd.Mode {
-				return ErrEntitlementConflict
-			}
-			projected, err = store.UserSubscription().FindOneSubscribeForUpdate(ctx, state.UserSubscribeID)
-			if err != nil {
-				return err
-			}
-			if projected.UserId != cmd.UserID || projected.EntitlementSource != cmd.Source {
-				return ErrEntitlementConflict
-			}
-			if cmd.Revision <= state.Revision {
-				if cmd.Revision == state.Revision && fingerprint != state.Fingerprint {
-					return ErrEntitlementConflict
-				}
-				result.UserSubscribeID, result.Revision, result.AccessUntil = projected.Id, state.Revision, projected.ExpireTime
-				return nil
-			}
-		}
-		plan, err := store.Subscribe().FindOne(ctx, cmd.PlanID)
-		if err != nil {
-			return err
-		}
-		period, err := store.Entitlement().FindPeriod(ctx, periodID)
-		if err != nil {
-			return err
-		}
-		if period != nil && (period.EntitlementID != stateID || period.PlanID != cmd.PlanID || period.OrderID != cmd.OrderID || period.BillingInterval != cmd.BillingInterval || !period.StartAt.Equal(cmd.PeriodStart)) {
-			return ErrEntitlementConflict
-		}
-		trafficLimit := plan.Traffic
-		if period != nil {
-			trafficLimit = period.TrafficLimit
-		}
-		now := timeutil.Now()
-		until := entitlementAccessUntil(cmd)
-		if state == nil {
-			if s.deps.SingleModel != nil && s.deps.SingleModel() {
-				blocked, err := store.UserSubscription().HasBlockingSubscription(ctx, cmd.UserID)
-				if err != nil {
-					return err
-				}
-				if blocked {
-					return fmt.Errorf("single subscription mode exceeds limit; entitlement delivery must be retried")
-				}
-			}
-			if plan.Quota > 0 {
-				count, err := store.UserSubscription().CountQuotaConsumingSubscriptions(ctx, cmd.UserID, cmd.PlanID)
-				if err != nil {
-					return err
-				}
-				if count >= plan.Quota {
-					return fmt.Errorf("subscription quota exceeded; entitlement delivery must be retried")
-				}
-			}
-			projected = &usersub.Subscribe{UserId: cmd.UserID, OrderId: cmd.OrderID, SubscribeId: cmd.PlanID,
-				StartTime: cmd.PeriodStart, ExpireTime: until, Traffic: trafficLimit,
-				Token: usersub.NewToken(), UUID: uuid.NewV4().String(), EntitlementSource: cmd.Source}
-			projectEntitlement(projected, cmd, until, now, false)
-			if err := store.UserSubscription().InsertSubscribe(ctx, projected); err != nil {
-				return err
-			}
-		} else {
-			// Switching plan or refunding does not grant another quota reset.
-			// A reset requires a previously unseen provider transaction.
-			reset := period == nil && cmd.ResetTraffic && plan.ResetCycle == 0 && !cmd.PeriodStart.After(now) && cmd.PeriodEnd.After(now) && cmd.Status == "active"
-			projected.SubscribeId = cmd.PlanID
-			projected.Traffic = trafficLimit
-			projectEntitlement(projected, cmd, until, now, reset)
-			if err := store.UserSubscription().ApplyEntitlementProjection(ctx, projected); err != nil {
-				return err
-			}
-		}
-		if period == nil {
-			period = &entitlement.Period{ID: periodID, EntitlementID: stateID, TransactionKey: cmd.TransactionKey,
-				BillingInterval: cmd.BillingInterval,
-				TrafficLimit:    trafficLimit,
-				UserSubscribeID: projected.Id, OrderID: cmd.OrderID, PlanID: cmd.PlanID, StartAt: cmd.PeriodStart,
-				EndAt: cmd.PeriodEnd, TrafficReset: cmd.ResetTraffic && plan.ResetCycle == 0 && cmd.Status == "active" && !cmd.PeriodStart.After(now) && cmd.PeriodEnd.After(now)}
-			if err := store.Entitlement().InsertPeriod(ctx, period); err != nil {
-				return err
-			}
-		} else {
-			// End dates may be corrected/extended by the provider. Replaying
-			// this period never repeats its original traffic reset.
-			period.EndAt = cmd.PeriodEnd
-			if err := store.Entitlement().UpdatePeriod(ctx, period); err != nil {
-				return err
-			}
-		}
-		newState := &entitlement.State{ID: stateID, Source: cmd.Source, Scope: cmd.Scope, SubscriptionKey: cmd.SubscriptionKey,
-			UserID: cmd.UserID, UserSubscribeID: projected.Id, Revision: cmd.Revision, Fingerprint: fingerprint,
-			PeriodID: periodID, Mode: cmd.Mode, Status: cmd.Status, AutoRenew: cmd.AutoRenew,
-			GraceUntil: cmd.GraceUntil, RevokedAt: cmd.RevokedAt}
-		if state == nil {
-			err = store.Entitlement().InsertState(ctx, newState)
-		} else {
-			err = store.Entitlement().UpdateState(ctx, newState)
-		}
-		if err != nil {
-			return err
-		}
-		if err := store.Entitlement().InsertRevision(ctx, &entitlement.Revision{ID: stateID + ":" + strconv.FormatInt(cmd.Revision, 10), EntitlementID: stateID, Payload: string(payload)}); err != nil {
-			return err
-		}
-		result.UserSubscribeID, result.Revision, result.AccessUntil, result.Applied = projected.Id, cmd.Revision, until, true
-		return nil
-	})
+	payload, err := json.Marshal(cmd)
 	if err != nil {
+		return nil, fmt.Errorf("encode the entitlement snapshot: %w", err)
+	}
+	r := &reconciliation{
+		cmd:         cmd,
+		stateID:     entitlementKey(cmd.Source, cmd.Scope, cmd.SubscriptionKey),
+		periodID:    entitlementKey(cmd.Source, cmd.Scope, cmd.TransactionKey),
+		payload:     string(payload),
+		fingerprint: entitlementKey(string(payload)),
+		singleModel: s.deps.SingleModel != nil && s.deps.SingleModel(),
+		result:      &dto.EntitlementResult{},
+	}
+	if err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+		return r.apply(ctx, store)
+	}); err != nil {
 		return nil, err
 	}
 	// Return cache failures so durable callers retry even after DB commit.
 	// Replays perform these invalidations again without mutating periods.
-	if err := s.deps.Cache.ClearSubscribeCache(ctx, projected); err != nil {
+	if err := s.deps.Cache.ClearSubscribeCache(ctx, r.projected); err != nil {
 		return nil, err
 	}
 	// Include every previously referenced plan: several reconciliations may
 	// commit while caches are unavailable, before any retry can invalidate.
-	planIDs, err := s.deps.Store.Entitlement().PlanIDs(ctx, stateID)
+	planIDs, err := s.deps.Store.Entitlement().PlanIDs(ctx, r.stateID)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.deps.Plans.ClearCache(ctx, planIDs...); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return r.result, nil
+}
+
+// reconciliation applies one entitlement snapshot inside a subscription
+// transaction: it projects the snapshot onto the user subscription it owns,
+// records the billing period and the entitlement state, and keeps the
+// snapshot as a revision.
+type reconciliation struct {
+	cmd                  dto.ReconcileEntitlementCommand
+	stateID, periodID    string
+	payload, fingerprint string
+	singleModel          bool
+	result               *dto.EntitlementResult
+	projected            *usersub.Subscribe
+}
+
+func (r *reconciliation) apply(ctx context.Context, store repository.SubscriptionStore) error {
+	cmd := r.cmd
+	// The user lock serializes first purchases and quota checks. The state
+	// primary key additionally protects the same chain across users.
+	if err := store.UserSubscription().LockUserSerial(ctx, cmd.UserID); err != nil {
+		return err
+	}
+	state, err := store.Entitlement().FindStateForUpdate(ctx, r.stateID)
+	if err != nil {
+		return err
+	}
+	if state != nil {
+		current, err := r.loadProjection(ctx, store, state)
+		if err != nil || current {
+			return err
+		}
+	}
+	plan, err := store.Subscribe().FindOne(ctx, cmd.PlanID)
+	if err != nil {
+		return err
+	}
+	period, err := store.Entitlement().FindPeriod(ctx, r.periodID)
+	if err != nil {
+		return err
+	}
+	if period != nil && (period.EntitlementID != r.stateID || period.PlanID != cmd.PlanID || period.OrderID != cmd.OrderID || period.BillingInterval != cmd.BillingInterval || !period.StartAt.Equal(cmd.PeriodStart)) {
+		return ErrEntitlementConflict
+	}
+	trafficLimit := plan.Traffic
+	if period != nil {
+		trafficLimit = period.TrafficLimit
+	}
+	now := timeutil.Now()
+	until := entitlementAccessUntil(cmd)
+	if state == nil {
+		err = r.createProjection(ctx, store, plan, trafficLimit, until, now)
+	} else {
+		// Switching plan or refunding does not grant another quota reset.
+		// A reset requires a previously unseen provider transaction.
+		r.projected.SubscribeId = cmd.PlanID
+		r.projected.Traffic = trafficLimit
+		projectEntitlement(r.projected, cmd, until, now, period == nil && resetsTraffic(cmd, plan, now))
+		err = store.UserSubscription().ApplyEntitlementProjection(ctx, r.projected)
+	}
+	if err != nil {
+		return err
+	}
+	if err := r.recordPeriod(ctx, store, period, plan, trafficLimit, now); err != nil {
+		return err
+	}
+	if err := r.recordState(ctx, store, state); err != nil {
+		return err
+	}
+	r.result.UserSubscribeID, r.result.Revision, r.result.AccessUntil, r.result.Applied = r.projected.Id, cmd.Revision, until, true
+	return nil
+}
+
+// loadProjection locks the user subscription an existing entitlement owns.
+// current reports that the snapshot is not newer than the recorded one:
+// the result then describes the recorded state and nothing changes. An
+// equal revision with other content is a conflict.
+func (r *reconciliation) loadProjection(ctx context.Context, store repository.SubscriptionStore, state *entitlement.State) (current bool, err error) {
+	cmd := r.cmd
+	if state.UserID != cmd.UserID || state.Mode != cmd.Mode {
+		return false, ErrEntitlementConflict
+	}
+	r.projected, err = store.UserSubscription().FindOneSubscribeForUpdate(ctx, state.UserSubscribeID)
+	if err != nil {
+		return false, err
+	}
+	if r.projected.UserId != cmd.UserID || r.projected.EntitlementSource != cmd.Source {
+		return false, ErrEntitlementConflict
+	}
+	if cmd.Revision > state.Revision {
+		return false, nil
+	}
+	if cmd.Revision == state.Revision && r.fingerprint != state.Fingerprint {
+		return false, ErrEntitlementConflict
+	}
+	r.result.UserSubscribeID, r.result.Revision, r.result.AccessUntil = r.projected.Id, state.Revision, r.projected.ExpireTime
+	return true, nil
+}
+
+// createProjection creates the user subscription of a first entitlement,
+// under the same single-subscription and quota rules as a purchase. A refusal
+// asks the provider to deliver the entitlement again later.
+func (r *reconciliation) createProjection(ctx context.Context, store repository.SubscriptionStore, plan *subscribe.Subscribe, trafficLimit int64, until, now time.Time) error {
+	cmd := r.cmd
+	if r.singleModel {
+		blocked, err := store.UserSubscription().HasBlockingSubscription(ctx, cmd.UserID)
+		if err != nil {
+			return err
+		}
+		if blocked {
+			return fmt.Errorf("single subscription mode exceeds limit; entitlement delivery must be retried")
+		}
+	}
+	if plan.Quota > 0 {
+		count, err := store.UserSubscription().CountQuotaConsumingSubscriptions(ctx, cmd.UserID, cmd.PlanID)
+		if err != nil {
+			return err
+		}
+		if count >= plan.Quota {
+			return fmt.Errorf("subscription quota exceeded; entitlement delivery must be retried")
+		}
+	}
+	r.projected = &usersub.Subscribe{UserId: cmd.UserID, OrderId: cmd.OrderID, SubscribeId: cmd.PlanID,
+		StartTime: cmd.PeriodStart, ExpireTime: until, Traffic: trafficLimit,
+		Token: usersub.NewToken(), UUID: uuid.NewV4().String(), EntitlementSource: cmd.Source}
+	projectEntitlement(r.projected, cmd, until, now, false)
+	return store.UserSubscription().InsertSubscribe(ctx, r.projected)
+}
+
+// recordPeriod records the snapshot's billing period, or extends the end of
+// a period seen before: providers correct and extend end dates, and replaying
+// a period never repeats its original traffic reset.
+func (r *reconciliation) recordPeriod(ctx context.Context, store repository.SubscriptionStore, period *entitlement.Period, plan *subscribe.Subscribe, trafficLimit int64, now time.Time) error {
+	cmd := r.cmd
+	if period != nil {
+		period.EndAt = cmd.PeriodEnd
+		return store.Entitlement().UpdatePeriod(ctx, period)
+	}
+	return store.Entitlement().InsertPeriod(ctx, &entitlement.Period{ID: r.periodID, EntitlementID: r.stateID, TransactionKey: cmd.TransactionKey,
+		BillingInterval: cmd.BillingInterval,
+		TrafficLimit:    trafficLimit,
+		UserSubscribeID: r.projected.Id, OrderID: cmd.OrderID, PlanID: cmd.PlanID, StartAt: cmd.PeriodStart,
+		EndAt: cmd.PeriodEnd, TrafficReset: resetsTraffic(cmd, plan, now)})
+}
+
+// recordState records the entitlement's new state and keeps the snapshot as
+// its revision.
+func (r *reconciliation) recordState(ctx context.Context, store repository.SubscriptionStore, state *entitlement.State) error {
+	cmd := r.cmd
+	newState := &entitlement.State{ID: r.stateID, Source: cmd.Source, Scope: cmd.Scope, SubscriptionKey: cmd.SubscriptionKey,
+		UserID: cmd.UserID, UserSubscribeID: r.projected.Id, Revision: cmd.Revision, Fingerprint: r.fingerprint,
+		PeriodID: r.periodID, Mode: cmd.Mode, Status: cmd.Status, AutoRenew: cmd.AutoRenew,
+		GraceUntil: cmd.GraceUntil, RevokedAt: cmd.RevokedAt}
+	var err error
+	if state == nil {
+		err = store.Entitlement().InsertState(ctx, newState)
+	} else {
+		err = store.Entitlement().UpdateState(ctx, newState)
+	}
+	if err != nil {
+		return err
+	}
+	return store.Entitlement().InsertRevision(ctx, &entitlement.Revision{ID: r.stateID + ":" + strconv.FormatInt(cmd.Revision, 10), EntitlementID: r.stateID, Payload: r.payload})
+}
+
+// resetsTraffic reports whether the snapshot's period resets the plan's
+// traffic: an active period in force now, of a plan without its own reset
+// cycle, whose provider asked for a reset.
+func resetsTraffic(cmd dto.ReconcileEntitlementCommand, plan *subscribe.Subscribe, now time.Time) bool {
+	return cmd.ResetTraffic && plan.ResetCycle == 0 && cmd.Status == "active" && !cmd.PeriodStart.After(now) && cmd.PeriodEnd.After(now)
 }
 
 func entitlementAccessUntil(cmd dto.ReconcileEntitlementCommand) time.Time {
@@ -264,7 +325,7 @@ func validateEntitlement(c dto.ReconcileEntitlementCommand) error {
 		return fmt.Errorf("only auto-renewable Apple subscriptions are supported")
 	}
 	if c.BillingInterval != "month" && c.BillingInterval != "year" {
-		return fmt.Errorf("Apple subscriptions must have a monthly or yearly billing interval")
+		return fmt.Errorf("only monthly or yearly Apple subscriptions are supported")
 	}
 	switch c.Status {
 	case "active", "expired", "billing_retry", "revoked", "grace":

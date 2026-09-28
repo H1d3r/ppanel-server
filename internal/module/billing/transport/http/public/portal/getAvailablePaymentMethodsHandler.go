@@ -1,3 +1,6 @@
+// Package portal holds the HTTP handlers of the guest storefront API: plans,
+// payment methods, guest orders, their checkout and status; they adapt
+// requests to the billing facade.
 package portal
 
 import (

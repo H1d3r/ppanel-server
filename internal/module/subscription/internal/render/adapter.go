@@ -1,3 +1,6 @@
+// Package render builds the client configurations of subscription delivery
+// and template previews: it maps nodes to the proxies a client template
+// renders and executes the template in the application's output format.
 package render
 
 import (
@@ -7,15 +10,16 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
+// Adapter collects what a client configuration is rendered from.
 type Adapter struct {
-	Type           string            // 协议类型
-	SiteName       string            // 站点名称
-	Servers        []*node.Node      // 服务器列表
-	UserInfo       User              // 用户信息
-	ClientTemplate string            // 客户端配置模板
-	OutputFormat   string            // 输出格式，默认是 base64
-	SubscribeName  string            // 订阅名称
-	Params         map[string]string // 其他参数
+	Type           string            // Protocol type
+	SiteName       string            // Site name
+	Servers        []*node.Node      // Nodes the configuration lists
+	UserInfo       User              // Subscriber the configuration is for
+	ClientTemplate string            // Client configuration template
+	OutputFormat   string            // Output format, base64 by default
+	SubscribeName  string            // Subscription (plan) name
+	Params         map[string]string // Template parameters
 }
 
 type Option func(*Adapter)
@@ -26,35 +30,35 @@ func WithParams(params map[string]string) Option {
 	}
 }
 
-// WithServers 设置服务器列表
+// WithServers sets the nodes the configuration lists.
 func WithServers(servers []*node.Node) Option {
 	return func(opts *Adapter) {
 		opts.Servers = servers
 	}
 }
 
-// WithUserInfo 设置用户信息
+// WithUserInfo sets the subscriber the configuration is for.
 func WithUserInfo(user User) Option {
 	return func(opts *Adapter) {
 		opts.UserInfo = user
 	}
 }
 
-// WithOutputFormat 设置输出格式
+// WithOutputFormat sets the output format.
 func WithOutputFormat(format string) Option {
 	return func(opts *Adapter) {
 		opts.OutputFormat = format
 	}
 }
 
-// WithSiteName 设置站点名称
+// WithSiteName sets the site name.
 func WithSiteName(name string) Option {
 	return func(opts *Adapter) {
 		opts.SiteName = name
 	}
 }
 
-// WithSubscribeName 设置订阅名称
+// WithSubscribeName sets the subscription (plan) name.
 func WithSubscribeName(name string) Option {
 	return func(opts *Adapter) {
 		opts.SubscribeName = name
@@ -66,7 +70,7 @@ func NewAdapter(tpl string, opts ...Option) *Adapter {
 		Servers:        []*node.Node{},
 		UserInfo:       User{},
 		ClientTemplate: tpl,
-		OutputFormat:   "base64", // 默认输出格式
+		OutputFormat:   "base64",
 	}
 
 	for _, opt := range opts {

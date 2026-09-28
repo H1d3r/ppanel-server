@@ -91,7 +91,7 @@ func TestQueryCtxBypassesCacheInsideTransaction(t *testing.T) {
 	value := cachedUser{}
 	queryCalled := false
 	conn := NewConn(db, client, WithInvalidationQueue(NewInvalidationQueue()))
-	if err := conn.QueryCtx(ctx, &value, "user:42", func(_ *gorm.DB, v interface{}) error {
+	if err := conn.QueryCtx(ctx, &value, "user:42", func(_ *gorm.DB, v any) error {
 		queryCalled = true
 		*v.(*cachedUser) = cachedUser{ID: 42, Email: "new@example.com"}
 		return nil
@@ -129,9 +129,9 @@ func TestQueryCtxCachesRecordNotFoundAndInvalidationClearsIt(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
-	conn := NewConn(newDryRunDB(t), client, WithNotFoundExpiry(time.Minute))
+	conn := NewConn(newDryRunDB(t), client)
 	queries := 0
-	query := func(_ *gorm.DB, _ interface{}) error {
+	query := func(_ *gorm.DB, _ any) error {
 		queries++
 		return gorm.ErrRecordNotFound
 	}

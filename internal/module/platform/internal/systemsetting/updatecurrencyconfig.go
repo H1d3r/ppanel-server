@@ -14,6 +14,5 @@ func (s *Service) UpdateCurrencyConfig(ctx context.Context, req *dto.CurrencyCon
 	if err := updateConfigFields(ctx, s.deps, "currency", convertedConfigFields(*req)); err != nil {
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update currency config: %v", err)
 	}
-	s.deps.reinit("currency")
-	return nil
+	return s.deps.reinit("currency")
 }

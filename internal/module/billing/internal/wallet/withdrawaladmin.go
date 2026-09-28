@@ -9,24 +9,14 @@ import (
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type WithdrawalAdminLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-func newWithdrawalAdminLogic(ctx context.Context, deps Deps) *WithdrawalAdminLogic {
-	return &WithdrawalAdminLogic{Logger: logger.WithContext(ctx), ctx: ctx, deps: deps}
-}
-
-func (l *WithdrawalAdminLogic) GetWithdrawalList(req *dto.GetWithdrawalListRequest) (*dto.GetWithdrawalListResponse, error) {
-	data, total, err := l.deps.Withdrawals.QueryWithdrawalList(l.ctx, req.UserId, req.Status, req.Page, req.Size)
+// GetWithdrawalList pages the withdrawal requests for the administrator,
+// optionally only one user's or those in one status.
+func (s *Service) GetWithdrawalList(ctx context.Context, req *dto.GetWithdrawalListRequest) (*dto.GetWithdrawalListResponse, error) {
+	data, total, err := s.deps.Withdrawals.QueryWithdrawalList(ctx, req.UserId, req.Status, req.Page, req.Size)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "query withdrawals failed")
 	}
@@ -37,37 +27,41 @@ func (l *WithdrawalAdminLogic) GetWithdrawalList(req *dto.GetWithdrawalListReque
 	return &dto.GetWithdrawalListResponse{List: list, Total: total}, nil
 }
 
-func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest) error {
+// ReviewWithdrawal records the administrator's decision on a pending
+// withdrawal. A rejection needs a reason and returns the withdrawn amount to
+// the user's commission with its log entry; a request that is no longer
+// pending is refused, so the refund happens at most once.
+func (s *Service) ReviewWithdrawal(ctx context.Context, req *dto.ReviewWithdrawalRequest) error {
 	reason := strings.TrimSpace(req.Reason)
 	if req.Status == walletEntity.WithdrawalStatusRejected && reason == "" {
-		return errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "rejection reason is required")
+		return xerr.Errorf(xerr.InvalidParams, "rejection reason is required")
 	}
 	if req.Status != walletEntity.WithdrawalStatusApproved && req.Status != walletEntity.WithdrawalStatusRejected {
-		return errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "withdrawal status must be approved or rejected")
+		return xerr.Errorf(xerr.InvalidParams, "withdrawal status must be approved or rejected")
 	}
 	if req.Status == walletEntity.WithdrawalStatusApproved {
 		reason = ""
 	}
 
-	return l.deps.Tx.InBillingTx(l.ctx, func(store repository.BillingStore) error {
-		withdrawal, err := store.UserWithdrawal().FindWithdrawalForUpdate(l.ctx, req.Id)
+	return s.deps.Tx.InBillingTx(ctx, func(store repository.BillingStore) error {
+		withdrawal, err := store.UserWithdrawal().FindWithdrawalForUpdate(ctx, req.Id)
 		if err != nil {
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find withdrawal failed")
 		}
 		if withdrawal.Status != walletEntity.WithdrawalStatusPending {
-			return errors.Wrap(xerr.NewErrCode(xerr.WithdrawalAlreadyReviewed), "withdrawal is no longer pending")
+			return xerr.Errorf(xerr.WithdrawalAlreadyReviewed, "withdrawal is no longer pending")
 		}
 
 		if req.Status == walletEntity.WithdrawalStatusRejected {
-			account, err := store.Wallet().FindOneForUpdate(l.ctx, withdrawal.UserId)
+			account, err := store.Wallet().FindOneForUpdate(ctx, withdrawal.UserId)
 			if err != nil {
 				return err
 			}
 			if withdrawal.Amount > math.MaxInt64-account.Commission {
-				return errors.Wrap(xerr.NewErrCode(xerr.DatabaseUpdateError), "withdrawal refund would overflow commission balance")
+				return xerr.Errorf(xerr.DatabaseUpdateError, "withdrawal refund would overflow commission balance")
 			}
 			account.Commission += withdrawal.Amount
-			if err := store.Wallet().UpdateCommission(l.ctx, account); err != nil {
+			if err := store.Wallet().UpdateCommission(ctx, account); err != nil {
 				return xerr.Wrapf(err, xerr.DatabaseUpdateError, "refund withdrawal commission failed")
 			}
 			entry := log.Commission{Type: log.CommissionTypeWithdraw, Amount: withdrawal.Amount, Timestamp: timeutil.Now().UnixMilli()}
@@ -75,7 +69,7 @@ func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest
 			if err != nil {
 				return err
 			}
-			if err := store.Log().Insert(l.ctx, &log.SystemLog{
+			if err := store.Log().Insert(ctx, &log.SystemLog{
 				Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format("2006-01-02"),
 				ObjectID: withdrawal.UserId, Content: string(content), CreatedAt: timeutil.Now(),
 			}); err != nil {
@@ -84,13 +78,13 @@ func (l *WithdrawalAdminLogic) ReviewWithdrawal(req *dto.ReviewWithdrawalRequest
 		}
 
 		updated, err := store.UserWithdrawal().UpdateWithdrawalStatus(
-			l.ctx, withdrawal.Id, walletEntity.WithdrawalStatusPending, req.Status, reason,
+			ctx, withdrawal.Id, walletEntity.WithdrawalStatusPending, req.Status, reason,
 		)
 		if err != nil {
 			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update withdrawal failed")
 		}
 		if !updated {
-			return errors.Wrap(xerr.NewErrCode(xerr.WithdrawalAlreadyReviewed), "withdrawal changed concurrently")
+			return xerr.Errorf(xerr.WithdrawalAlreadyReviewed, "withdrawal changed concurrently")
 		}
 		return nil
 	})

@@ -1,3 +1,6 @@
+// Package authmethod holds the identity module's admin handlers of the
+// authentication methods: their configuration, the sender platforms and the
+// test sends.
 package authmethod
 
 import (

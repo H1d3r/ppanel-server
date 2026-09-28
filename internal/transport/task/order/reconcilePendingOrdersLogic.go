@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
 const (
@@ -16,23 +17,32 @@ const (
 	pendingOrderExpiry             = 15 * time.Minute
 )
 
-// ReconcilePendingOrdersLogic is a durable fallback for deferred close tasks.
+// pendingOrderCloser is billing as the pending-order reconciler uses it: the
+// scan of the pending orders and the close flow.
+type pendingOrderCloser interface {
+	orderScanner
+	CloseOrder(ctx context.Context, req *dto.CloseOrderRequest) error
+}
+
+// ReconcilePendingOrdersHandler is a durable fallback for deferred close tasks.
 // State transitions in CloseOrder remain conditional, so a late callback can
 // safely race this scan without turning a paid order back into a close order.
-type ReconcilePendingOrdersLogic struct {
-	deps Dependencies
+type ReconcilePendingOrdersHandler struct {
+	orders pendingOrderCloser
 }
 
-func NewReconcilePendingOrdersLogic(deps Dependencies) *ReconcilePendingOrdersLogic {
-	return &ReconcilePendingOrdersLogic{deps: deps}
+// NewReconcilePendingOrdersHandler builds the reconciler over the billing
+// facade.
+func NewReconcilePendingOrdersHandler(deps Dependencies) *ReconcilePendingOrdersHandler {
+	return &ReconcilePendingOrdersHandler{orders: deps.Billing}
 }
 
-func (l *ReconcilePendingOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+func (h *ReconcilePendingOrdersHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	var afterID int64
 	var unconfirmed int
-	cutoff := time.Now().Add(-pendingOrderExpiry)
+	cutoff := timeutil.Now().Add(-pendingOrderExpiry)
 	for {
-		orders, err := l.deps.Store.Order().QueryOrdersByStatusAfterID(ctx, OrderStatusPending, afterID, pendingOrderReconcileBatchSize)
+		orders, err := h.orders.OrdersByStatusAfter(ctx, OrderStatusPending, afterID, pendingOrderReconcileBatchSize)
 		if err != nil {
 			return err
 		}
@@ -41,7 +51,7 @@ func (l *ReconcilePendingOrdersLogic) ProcessTask(ctx context.Context, _ *asynq.
 			if orderInfo.CreatedAt.After(cutoff) {
 				continue
 			}
-			if err := l.deps.Billing.CloseOrder(ctx, &dto.CloseOrderRequest{OrderNo: orderInfo.OrderNo}); err != nil {
+			if err := h.orders.CloseOrder(ctx, &dto.CloseOrderRequest{OrderNo: orderInfo.OrderNo}); err != nil {
 				// Staying pending until the gateway confirms payment is the
 				// intended behaviour for EPay orders, and the same orders
 				// recur every scan — count them once instead of emitting a

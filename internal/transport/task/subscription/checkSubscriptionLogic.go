@@ -1,3 +1,6 @@
+// Package subscription holds the queue handlers of the scheduled
+// subscription tasks: the lifecycle sweep and the pre-expiry reminder. The
+// business rules live in the subscription module; the handlers only run it.
 package subscription
 
 import (
@@ -7,17 +10,17 @@ import (
 	module "github.com/perfect-panel/server/internal/module/subscription"
 )
 
-// CheckSubscriptionLogic is the queue shell for the subscription lifecycle
-// sweep; the business logic lives in the subscription module (ADR-001
-// step 6 preparation).
-type CheckSubscriptionLogic struct {
+// CheckSubscriptionHandler is the queue shell of the subscription lifecycle
+// sweep.
+type CheckSubscriptionHandler struct {
 	service module.Service
 }
 
-func NewCheckSubscriptionLogic(service module.Service) *CheckSubscriptionLogic {
-	return &CheckSubscriptionLogic{service: service}
+// NewCheckSubscriptionHandler builds the shell over the subscription facade.
+func NewCheckSubscriptionHandler(service module.Service) *CheckSubscriptionHandler {
+	return &CheckSubscriptionHandler{service: service}
 }
 
-func (l *CheckSubscriptionLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
-	return l.service.CheckSubscriptions(ctx)
+func (h *CheckSubscriptionHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+	return h.service.CheckSubscriptions(ctx)
 }

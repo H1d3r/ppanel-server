@@ -5,9 +5,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
-	"github.com/perfect-panel/server/pkg/cache"
-	"github.com/redis/go-redis/v9"
-	"gorm.io/gorm"
+	"github.com/perfect-panel/server/internal/repository/kernel"
 )
 
 // The store is assembled from per-module repository bundles (ADR-001 step-6
@@ -19,19 +17,10 @@ import (
 // (cache-retry singletons and similar) belongs in the closure that produced
 // the builder, not in the bundle.
 
-// ModuleConn is the per-connection context handed to a repo builder.
-type ModuleConn struct {
-	DB    *gorm.DB
-	Redis *redis.Client
-	// Invalidations batches cache invalidation keys during a transaction;
-	// nil outside transactions.
-	Invalidations *cache.InvalidationQueue
-}
-
-// Conn builds the cached connection every repository implementation wraps.
-func (c ModuleConn) Conn() cache.CachedConn {
-	return newCachedConn(c.DB, c.Redis, c.Invalidations)
-}
+// ModuleConn is the per-connection context handed to a repo builder. The
+// kernel package declares it, with the platform bundle below, so the platform
+// module builds its repositories without depending on this package.
+type ModuleConn = kernel.ModuleConn
 
 // SubscriptionCacheBridge is the identity bundle's window onto the
 // subscription domain's cache concerns: the user-deletion cascade collects
@@ -87,16 +76,10 @@ type IdentityBridges struct {
 }
 
 // PlatformRepos is the shared-kernel bundle.
-type PlatformRepos struct {
-	System SystemRepo
-	Logs   LogRepo
-	Tasks  TaskRepo
-	Client ClientRepo
-	Inbox  InboxRepo
-	Outbox OutboxRepo
-}
-
-type PlatformBuilder func(conn ModuleConn) PlatformRepos
+type (
+	PlatformRepos   = kernel.PlatformRepos
+	PlatformBuilder = kernel.PlatformBuilder
+)
 
 // BillingRepos is the billing domain bundle.
 type BillingRepos struct {
@@ -118,6 +101,8 @@ type SubscriptionRepos struct {
 	Plans        SubscribeRepo
 	UserSubs     UserSubscriptionRepo
 	Traffic      SubscriptionTrafficRepo
+	// Clients holds the subscribe_application rows delivery renders for.
+	Clients ClientRepo
 	// CacheBridge feeds the identity bundle's cross-domain cache cascade.
 	CacheBridge SubscriptionCacheBridge
 	// ScopeBridge feeds the identity bundle's subscription-membership

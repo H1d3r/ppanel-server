@@ -122,9 +122,10 @@ func TestRejectWithdrawalRefundsExactlyOnce(t *testing.T) {
 	wallet := &withdrawalTestWallet{item: &walletEntity.Wallet{UserId: 7, Commission: 70}}
 	logs := &withdrawalTestLogs{}
 	store := &withdrawalTestStore{withdrawals: &withdrawalTestRepo{item: withdrawal}, wallet: wallet, logs: logs}
-	logic := newWithdrawalAdminLogic(context.Background(), Deps{Tx: withdrawalTestTx{store: store}})
+	svc := NewService(Deps{Tx: withdrawalTestTx{store: store}})
+	ctx := context.Background()
 
-	err := logic.ReviewWithdrawal(&dto.ReviewWithdrawalRequest{Id: 4, Status: walletEntity.WithdrawalStatusRejected, Reason: "invalid account"})
+	err := svc.ReviewWithdrawal(ctx, &dto.ReviewWithdrawalRequest{Id: 4, Status: walletEntity.WithdrawalStatusRejected, Reason: "invalid account"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestRejectWithdrawalRefundsExactlyOnce(t *testing.T) {
 		t.Fatalf("refund log = %+v", entry)
 	}
 
-	if err := logic.ReviewWithdrawal(&dto.ReviewWithdrawalRequest{Id: 4, Status: walletEntity.WithdrawalStatusRejected, Reason: "retry"}); xerr.CodeOf(err) != xerr.WithdrawalAlreadyReviewed {
+	if err := svc.ReviewWithdrawal(ctx, &dto.ReviewWithdrawalRequest{Id: 4, Status: walletEntity.WithdrawalStatusRejected, Reason: "retry"}); xerr.CodeOf(err) != xerr.WithdrawalAlreadyReviewed {
 		t.Fatalf("second review = %v, want WithdrawalAlreadyReviewed", err)
 	}
 	if wallet.item.Commission != 100 || len(logs.entries) != 1 {
@@ -153,9 +154,9 @@ func TestCommissionWithdrawCreatesPendingRequestWithWithdrawLog(t *testing.T) {
 	logs := &withdrawalTestLogs{}
 	store := &withdrawalTestStore{withdrawals: withdrawals, wallet: wallet, logs: logs}
 	ctx := userEntity.NewContext(context.Background(), &userEntity.User{Id: 7})
-	logic := newCommissionWithdrawLogic(ctx, Deps{Tx: withdrawalTestTx{store: store}})
+	svc := NewService(Deps{Tx: withdrawalTestTx{store: store}})
 
-	resp, err := logic.CommissionWithdraw(&dto.CommissionWithdrawRequest{Amount: 30, Content: "bank"})
+	resp, err := svc.CommissionWithdraw(ctx, &dto.CommissionWithdrawRequest{Amount: 30, Content: "bank"})
 	if err != nil {
 		t.Fatal(err)
 	}

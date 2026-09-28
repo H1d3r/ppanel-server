@@ -14,6 +14,7 @@ import (
 	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
+	trafficEntity "github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	inboxEntity "github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription"
@@ -24,13 +25,19 @@ import (
 	"gorm.io/gorm"
 )
 
-// newActivationDeps wires the real subscription/billing modules over the fake
-// store so the saga tests exercise the same facade path production uses.
-func newActivationDeps(store *activationStore, singleModel bool) Dependencies {
+// activationModules are the real facades a saga test drives.
+type activationModules struct {
+	Subscription subscription.Service
+	Billing      billing.Service
+}
+
+// newActivationModules wires the real subscription and billing modules over
+// the in-memory store below, so the saga tests exercise the facade path
+// production uses.
+func newActivationModules(store *activationStore, singleModel bool) activationModules {
 	subMod := subscription.New(subscription.Deps{
 		Plans:       store.subscribes,
 		UserSubs:    store.users,
-		Cache:       store.users,
 		Orders:      store.orders,
 		Operations:  store,
 		SingleModel: func() bool { return singleModel },
@@ -45,12 +52,20 @@ func newActivationDeps(store *activationStore, singleModel bool) Dependencies {
 		SingleModel:  func() bool { return false },
 		CurrencyUnit: func() string { return "CNY" },
 	})
-	return Dependencies{Store: store, Subscription: subMod, Billing: bilMod}
+	return activationModules{Subscription: subMod, Billing: bilMod}
 }
 
+// errNotInScenario answers the repository calls no activation scenario
+// makes. The billing and subscription facades take the complete repository
+// contracts, so the fakes implement every method; the ones outside the
+// scenarios are collected at the end of the file.
+var errNotInScenario = errors.New("not part of the activation scenarios")
+
+// activationStore is the persistence of one activation scenario. It serves
+// the facades' store and transaction ports, and the billing and subscription
+// transactions run their closures directly on it.
 type activationStore struct {
-	periods activationPeriodRepo
-	repository.Store
+	periods    activationPeriodRepo
 	wallet     *activationWalletRepo
 	orders     *activationOrderRepo
 	users      *activationUserRepo
@@ -59,15 +74,70 @@ type activationStore struct {
 	inbox      *activationInboxRepo
 }
 
-type activationPeriodRepo struct {
-	repository.EntitlementRepo
-	rows map[string]*entitlement.Period
+var (
+	_ billing.Store                = (*activationStore)(nil)
+	_ billing.Transactor           = (*activationStore)(nil)
+	_ subscription.Store           = (*activationStore)(nil)
+	_ repository.BillingStore      = (*activationStore)(nil)
+	_ repository.SubscriptionStore = (*activationStore)(nil)
+)
+
+func (s *activationStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
+	return fn(s)
+}
+
+func (s *activationStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
+	return fn(s)
+}
+
+// InPlatformTx serves the subscription module's quota tasks, which no
+// activation scenario runs.
+func (s *activationStore) InPlatformTx(context.Context, func(repository.PlatformStore) error) error {
+	return errNotInScenario
 }
 
 func (s *activationStore) Entitlement() repository.EntitlementRepo { return &s.periods }
+func (s *activationStore) Wallet() repository.WalletRepo           { return s.walletRepo() }
+func (s *activationStore) Order() repository.OrderRepo             { return s.orders }
+func (s *activationStore) UserSubscription() repository.UserSubscriptionRepo {
+	return s.users
+}
+func (s *activationStore) Log() repository.LogRepo             { return s.logs }
+func (s *activationStore) Subscribe() repository.SubscribeRepo { return s.subscribes }
+func (s *activationStore) Inbox() repository.InboxRepo         { return s.inbox }
+
+// The activation scenarios read or write no order events, payments, coupons,
+// withdrawals, outbox events, traffic resets or task rows; these accessors
+// only complete the store views the facades expect.
+func (s *activationStore) OrderEvent() repository.OrderEventRepo         { return nil }
+func (s *activationStore) Payment() repository.PaymentRepo               { return nil }
+func (s *activationStore) Coupon() repository.CouponRepo                 { return nil }
+func (s *activationStore) UserWithdrawal() repository.UserWithdrawalRepo { return nil }
+func (s *activationStore) Outbox() repository.OutboxRepo                 { return nil }
+func (s *activationStore) SubscriptionTraffic() repository.SubscriptionTrafficRepo {
+	return nil
+}
+func (s *activationStore) Task() repository.TaskRepo { return nil }
+
+func (s *activationStore) walletRepo() *activationWalletRepo {
+	if s.wallet == nil {
+		s.wallet = &activationWalletRepo{}
+	}
+	return s.wallet
+}
+
+// activationPeriodRepo keeps the entitlement periods the fulfillment
+// records.
+type activationPeriodRepo struct {
+	rows map[string]*entitlement.Period
+}
+
+var _ repository.EntitlementRepo = (*activationPeriodRepo)(nil)
+
 func (r *activationPeriodRepo) FindPeriod(_ context.Context, id string) (*entitlement.Period, error) {
 	return r.rows[id], nil
 }
+
 func (r *activationPeriodRepo) InsertPeriod(_ context.Context, p *entitlement.Period) error {
 	if r.rows == nil {
 		r.rows = make(map[string]*entitlement.Period)
@@ -79,37 +149,13 @@ func (r *activationPeriodRepo) InsertPeriod(_ context.Context, p *entitlement.Pe
 	return nil
 }
 
-func (s *activationStore) InTx(_ context.Context, fn func(repository.Store) error) error {
-	return fn(s)
-}
-
-func (s *activationStore) InBillingTx(_ context.Context, fn func(repository.BillingStore) error) error {
-	return fn(s)
-}
-
-func (s *activationStore) InIdentityTx(_ context.Context, fn func(repository.IdentityStore) error) error {
-	return fn(s)
-}
-
-func (s *activationStore) InSubscriptionTx(_ context.Context, fn func(repository.SubscriptionStore) error) error {
-	return fn(s)
-}
-
-func (s *activationStore) Wallet() repository.WalletRepo { return s.walletRepo() }
-func (s *activationStore) Order() repository.OrderRepo   { return s.orders }
-func (s *activationStore) User() repository.UserRepo     { return s.users }
-func (s *activationStore) UserSubscription() repository.UserSubscriptionRepo {
-	return s.users
-}
-func (s *activationStore) UserCache() repository.UserCacheRepo { return s.users }
-func (s *activationStore) Log() repository.LogRepo             { return s.logs }
-func (s *activationStore) Subscribe() repository.SubscribeRepo { return s.subscribes }
-func (s *activationStore) Inbox() repository.InboxRepo         { return s.inbox }
-
+// activationInboxRepo keeps the inbox markers the activation stages record
+// to skip themselves on a replay.
 type activationInboxRepo struct {
-	repository.InboxRepo
 	records map[string]*inboxEntity.Record
 }
+
+var _ repository.InboxRepo = (*activationInboxRepo)(nil)
 
 func newActivationInboxRepo() *activationInboxRepo {
 	return &activationInboxRepo{records: map[string]*inboxEntity.Record{}}
@@ -120,8 +166,8 @@ func (r *activationInboxRepo) Find(_ context.Context, consumer, eventKey string)
 	if !ok {
 		return nil, nil
 	}
-	copy := *record
-	return &copy, nil
+	found := *record
+	return &found, nil
 }
 
 func (r *activationInboxRepo) Insert(_ context.Context, consumer, eventKey, result string) error {
@@ -133,18 +179,21 @@ func (r *activationInboxRepo) Insert(_ context.Context, consumer, eventKey, resu
 	return nil
 }
 
+// activationOrderRepo holds the scenario's one order. finalizeFailures fails
+// that many settlement writes (the Paid to Finished transition) first.
 type activationOrderRepo struct {
-	repository.OrderRepo
 	order            *orderEntity.Order
 	finalizeFailures int
 }
+
+var _ repository.OrderRepo = (*activationOrderRepo)(nil)
 
 func (r *activationOrderRepo) FindOneByOrderNo(_ context.Context, orderNo string) (*orderEntity.Order, error) {
 	if r.order.OrderNo != orderNo {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.order
-	return &copy, nil
+	found := *r.order
+	return &found, nil
 }
 
 func (r *activationOrderRepo) FindOneByOrderNoForUpdate(ctx context.Context, orderNo string) (*orderEntity.Order, error) {
@@ -174,17 +223,20 @@ func (r *activationOrderRepo) UpdateOrderStatusFrom(_ context.Context, orderNo s
 	return true, nil
 }
 
+// activationWalletRepo holds one wallet, the buyer's or the referrer's; a
+// locked read of a user without a wallet opens one, as the repository does.
 type activationWalletRepo struct {
-	repository.WalletRepo
 	wallet *walletEntity.Wallet
 }
+
+var _ repository.WalletRepo = (*activationWalletRepo)(nil)
 
 func (r *activationWalletRepo) FindWallet(_ context.Context, userId int64) (*walletEntity.Wallet, error) {
 	if r.wallet == nil || r.wallet.UserId != userId {
 		return nil, nil
 	}
-	copy := *r.wallet
-	return &copy, nil
+	found := *r.wallet
+	return &found, nil
 }
 
 func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*walletEntity.Wallet, error) {
@@ -194,8 +246,8 @@ func (r *activationWalletRepo) FindOneForUpdate(_ context.Context, id int64) (*w
 	if r.wallet.UserId != id {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.wallet
-	return &copy, nil
+	found := *r.wallet
+	return &found, nil
 }
 
 func (r *activationWalletRepo) UpdateBalanceFields(_ context.Context, data *walletEntity.Wallet) error {
@@ -209,13 +261,13 @@ func (r *activationWalletRepo) UpdateCommission(_ context.Context, data *walletE
 	return nil
 }
 
+// activationUserRepo is the buyer's side of the scenario: the account and
+// referrer profiles billing reads, and the user subscription the fulfillment
+// creates or extends. quotaCount and blocking steer the quota and
+// single-subscription checks, whose calls it counts.
 type activationUserRepo struct {
-	repository.UserRepo
-	repository.UserSubscriptionRepo
-	repository.UserCacheRepo
 	user             *userEntity.User
 	profiles         map[int64]*userEntity.User
-	updateCacheCalls int
 	quotaCount       int64
 	quotaCountCalls  int
 	blocking         bool
@@ -223,77 +275,19 @@ type activationUserRepo struct {
 	subscription     *usersub.Subscribe
 }
 
+var _ repository.UserSubscriptionRepo = (*activationUserRepo)(nil)
+
+// FindOne serves billing's profile reads of the buyer and the referrer.
 func (r *activationUserRepo) FindOne(_ context.Context, id int64) (*userEntity.User, error) {
 	if profile := r.profiles[id]; profile != nil {
-		copy := *profile
-		return &copy, nil
+		found := *profile
+		return &found, nil
 	}
 	if r.user == nil || r.user.Id != id {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.user
-	return &copy, nil
-}
-
-func TestCommissionIsNotCreditedAgainAfterFinalizeFailure(t *testing.T) {
-	expire := time.Now().Add(24 * time.Hour).Truncate(time.Second)
-	store := &activationStore{
-		orders: &activationOrderRepo{finalizeFailures: 1, order: &orderEntity.Order{
-			OrderNo: "commission-retry", UserId: 7, Type: OrderTypeRenewal, Status: OrderStatusPaid,
-			SubscribeId: 9, SubscribeToken: "renewal-token", Quantity: 1, Amount: 10000, FeeAmount: 100,
-		}},
-		wallet: &activationWalletRepo{wallet: &walletEntity.Wallet{UserId: 99}},
-		users: &activationUserRepo{
-			user:         &userEntity.User{Id: 7, RefererId: 99},
-			profiles:     map[int64]*userEntity.User{99: {Id: 99, ReferralPercentage: 20}},
-			subscription: &usersub.Subscribe{Id: 11, UserId: 7, SubscribeId: 9, Token: "renewal-token", ExpireTime: expire, Status: usersub.SubscribeStatusActive},
-		},
-		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9, UnitTime: "Month"}},
-		logs:       &activationLogRepo{}, inbox: newActivationInboxRepo(),
-	}
-	logic := NewActivateOrderLogic(newActivationDeps(store, false).Billing)
-	payload, err := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "commission-retry"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, payload)
-	if err := logic.ProcessTask(context.Background(), task); err == nil {
-		t.Fatal("expected finalize failure")
-	}
-	if store.wallet.wallet.Commission != 1980 || store.orders.order.Status != OrderStatusPaid {
-		t.Fatal("commission must commit before a retryable finalize failure")
-	}
-	extendedOnce := store.users.subscription.ExpireTime
-	for range 2 {
-		if err := logic.ProcessTask(context.Background(), task); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if store.wallet.wallet.Commission != 1980 || !store.users.subscription.ExpireTime.Equal(extendedOnce) || store.orders.order.Status != OrderStatusFinished {
-		t.Fatal("replay duplicated commission or subscription fulfillment")
-	}
-	commissionLogs := 0
-	for _, entry := range store.logs.logs {
-		if entry.Type == logEntity.TypeCommission.Uint8() {
-			commissionLogs++
-		}
-	}
-	if commissionLogs != 1 {
-		t.Fatalf("commission logs = %d, want 1", commissionLogs)
-	}
-}
-
-func (r *activationUserRepo) FindOneForUpdate(_ context.Context, id int64) (*userEntity.User, error) {
-	return r.FindOne(context.Background(), id)
-}
-
-func (r *activationUserRepo) UpdateColumns(_ context.Context, _ int64, _ map[string]interface{}) error {
-	return nil
-}
-
-func (r *activationUserRepo) UpdateUserCache(_ context.Context, _ *userEntity.User) error {
-	r.updateCacheCalls++
-	return nil
+	found := *r.user
+	return &found, nil
 }
 
 func (r *activationUserRepo) LockUserSerial(_ context.Context, _ int64) error {
@@ -314,8 +308,8 @@ func (r *activationUserRepo) FindOneSubscribeByToken(_ context.Context, token st
 	if r.subscription == nil || r.subscription.Token != token {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.subscription
-	return &copy, nil
+	found := *r.subscription
+	return &found, nil
 }
 
 func (r *activationUserRepo) FindOneSubscribeByTokenForUpdate(ctx context.Context, token string) (*usersub.Subscribe, error) {
@@ -323,8 +317,8 @@ func (r *activationUserRepo) FindOneSubscribeByTokenForUpdate(ctx context.Contex
 }
 
 func (r *activationUserRepo) UpdateSubscribeColumns(_ context.Context, data *usersub.Subscribe, _ ...string) error {
-	copy := *data
-	r.subscription = &copy
+	updated := *data
+	r.subscription = &updated
 	return nil
 }
 
@@ -332,31 +326,126 @@ func (r *activationUserRepo) ClearSubscribeCache(_ context.Context, _ ...*usersu
 	return nil
 }
 
+// activationLogRepo collects the audit entries the stages write.
 type activationLogRepo struct {
-	repository.LogRepo
 	logs []*logEntity.SystemLog
 }
+
+var _ repository.LogRepo = (*activationLogRepo)(nil)
 
 func (r *activationLogRepo) Insert(_ context.Context, data *logEntity.SystemLog) error {
 	r.logs = append(r.logs, data)
 	return nil
 }
 
+// activationSubscribeRepo holds the plan the order buys.
 type activationSubscribeRepo struct {
-	repository.SubscribeRepo
 	subscribe *subscribeEntity.Subscribe
 }
+
+var _ repository.SubscribeRepo = (*activationSubscribeRepo)(nil)
 
 func (r *activationSubscribeRepo) FindOne(_ context.Context, id int64) (*subscribeEntity.Subscribe, error) {
 	if r.subscribe == nil || r.subscribe.Id != id {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.subscribe
-	return &copy, nil
+	found := *r.subscribe
+	return &found, nil
 }
 
 func (r *activationSubscribeRepo) ClearCache(_ context.Context, _ ...int64) error {
 	return nil
+}
+
+// recordingActivator records the orders the handler asks billing to
+// activate.
+type recordingActivator struct {
+	orders []string
+	err    error
+}
+
+var _ PaidOrderActivator = (*recordingActivator)(nil)
+
+func (a *recordingActivator) ActivatePaidOrder(_ context.Context, orderNo string) error {
+	a.orders = append(a.orders, orderNo)
+	return a.err
+}
+
+// The handler hands billing the order number the task carries and returns
+// billing's failure for asynq to retry; a payload it cannot decode never
+// reaches billing.
+func TestActivateOrderHandlerHandsTheOrderToBilling(t *testing.T) {
+	activator := &recordingActivator{}
+	handler := NewActivateOrderHandler(activator)
+	payload, err := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "handler-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, payload)
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
+		t.Fatalf("activation = %v", err)
+	}
+	activator.err = errors.New("billing unavailable")
+	if err := handler.ProcessTask(context.Background(), task); !errors.Is(err, activator.err) {
+		t.Fatalf("failed activation = %v, want billing's error", err)
+	}
+	if len(activator.orders) != 2 || activator.orders[0] != "handler-order" {
+		t.Fatalf("activated orders = %v, want handler-order twice", activator.orders)
+	}
+	if err := handler.ProcessTask(context.Background(), asynq.NewTask(taskqueue.ForthwithActivateOrder, []byte("{"))); err == nil {
+		t.Fatal("an undecodable payload was accepted")
+	}
+	if len(activator.orders) != 2 {
+		t.Fatalf("an undecodable payload reached billing: %v", activator.orders)
+	}
+}
+
+func TestCommissionIsNotCreditedAgainAfterFinalizeFailure(t *testing.T) {
+	expire := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+	store := &activationStore{
+		orders: &activationOrderRepo{finalizeFailures: 1, order: &orderEntity.Order{
+			OrderNo: "commission-retry", UserId: 7, Type: OrderTypeRenewal, Status: OrderStatusPaid,
+			SubscribeId: 9, SubscribeToken: "renewal-token", Quantity: 1, Amount: 10000, FeeAmount: 100,
+		}},
+		wallet: &activationWalletRepo{wallet: &walletEntity.Wallet{UserId: 99}},
+		users: &activationUserRepo{
+			user:         &userEntity.User{Id: 7, RefererId: 99},
+			profiles:     map[int64]*userEntity.User{99: {Id: 99, ReferralPercentage: 20}},
+			subscription: &usersub.Subscribe{Id: 11, UserId: 7, SubscribeId: 9, Token: "renewal-token", ExpireTime: expire, Status: usersub.SubscribeStatusActive},
+		},
+		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9, UnitTime: "Month"}},
+		logs:       &activationLogRepo{}, inbox: newActivationInboxRepo(),
+	}
+	handler := NewActivateOrderHandler(newActivationModules(store, false).Billing)
+	payload, err := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "commission-retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, payload)
+	if err := handler.ProcessTask(context.Background(), task); err == nil {
+		t.Fatal("expected finalize failure")
+	}
+	if store.wallet.wallet.Commission != 1980 || store.orders.order.Status != OrderStatusPaid {
+		t.Fatal("commission must commit before a retryable finalize failure")
+	}
+	extendedOnce := store.users.subscription.ExpireTime
+	for range 2 {
+		if err := handler.ProcessTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.wallet.wallet.Commission != 1980 || !store.users.subscription.ExpireTime.Equal(extendedOnce) || store.orders.order.Status != OrderStatusFinished {
+		t.Fatal("replay duplicated commission or subscription fulfillment")
+	}
+	commissionLogs := 0
+	for _, entry := range store.logs.logs {
+		if entry.Type == logEntity.TypeCommission.Uint8() {
+			commissionLogs++
+		}
+	}
+	if commissionLogs != 1 {
+		t.Fatalf("commission logs = %d, want 1", commissionLogs)
+	}
 }
 
 func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
@@ -369,17 +458,17 @@ func TestActivateRechargeCommitsSettlementOnlyOnce(t *testing.T) {
 		logs:   &activationLogRepo{},
 		inbox:  newActivationInboxRepo(),
 	}
-	logic := NewActivateOrderLogic(newActivationDeps(store, false).Billing)
+	handler := NewActivateOrderHandler(newActivationModules(store, false).Billing)
 	payload, err := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "recharge-order"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, payload)
 
-	if err := logic.ProcessTask(context.Background(), task); err != nil {
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("first activation: %v", err)
 	}
-	if err := logic.ProcessTask(context.Background(), task); err != nil {
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("duplicate activation: %v", err)
 	}
 	if store.orders.order.Status != OrderStatusFinished {
@@ -407,20 +496,20 @@ func TestActivateRechargeReplayAfterFulfillmentSkipsSecondCredit(t *testing.T) {
 		logs:   &activationLogRepo{},
 		inbox:  newActivationInboxRepo(),
 	}
-	logic := NewActivateOrderLogic(newActivationDeps(store, false).Billing)
+	handler := NewActivateOrderHandler(newActivationModules(store, false).Billing)
 	payload, err := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "recharge-replay"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, payload)
 
-	if err := logic.ProcessTask(context.Background(), task); err != nil {
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("first activation: %v", err)
 	}
 	// Simulate the finalize stage having been lost: the order is Paid again.
 	store.orders.order.Status = OrderStatusPaid
 
-	if err := logic.ProcessTask(context.Background(), task); err != nil {
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("replayed activation: %v", err)
 	}
 	if store.wallet.wallet.Balance != 1750 {
@@ -454,14 +543,14 @@ func TestActivateRenewalReplayExtendsSubscriptionOnce(t *testing.T) {
 		logs:       &activationLogRepo{},
 		inbox:      newActivationInboxRepo(),
 	}
-	logic := NewActivateOrderLogic(newActivationDeps(store, false).Billing)
+	handler := NewActivateOrderHandler(newActivationModules(store, false).Billing)
 	payload, err := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "renewal-replay"})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, payload)
 
-	if err := logic.ProcessTask(context.Background(), task); err != nil {
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("first activation: %v", err)
 	}
 	extendedOnce := store.users.subscription.ExpireTime
@@ -472,7 +561,7 @@ func TestActivateRenewalReplayExtendsSubscriptionOnce(t *testing.T) {
 	// Simulate the finalize stage having been lost: the order is Paid again.
 	store.orders.order.Status = OrderStatusPaid
 
-	if err := logic.ProcessTask(context.Background(), task); err != nil {
+	if err := handler.ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("replayed activation: %v", err)
 	}
 	if !store.users.subscription.ExpireTime.Equal(extendedOnce) {
@@ -491,9 +580,9 @@ func TestFulfillmentEnforcesQuota(t *testing.T) {
 		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9, Quota: 1}},
 		inbox:      newActivationInboxRepo(),
 	}
-	svcCtx := newActivationDeps(store, false)
+	modules := newActivationModules(store, false)
 
-	_, err := svcCtx.Subscription.FulfillPaidOrder(context.Background(), "quota-order")
+	_, err := modules.Subscription.FulfillPaidOrder(context.Background(), "quota-order")
 	if err == nil {
 		t.Fatal("activation created a subscription after quota was exhausted")
 	}
@@ -510,9 +599,9 @@ func TestFulfillmentEnforcesSingleModel(t *testing.T) {
 		subscribes: &activationSubscribeRepo{subscribe: &subscribeEntity.Subscribe{Id: 9}},
 		inbox:      newActivationInboxRepo(),
 	}
-	svcCtx := newActivationDeps(store, true)
+	modules := newActivationModules(store, true)
 
-	_, err := svcCtx.Subscription.FulfillPaidOrder(context.Background(), "single-order")
+	_, err := modules.Subscription.FulfillPaidOrder(context.Background(), "single-order")
 	if err == nil {
 		t.Fatal("activation created a subscription despite a blocking subscription")
 	}
@@ -536,9 +625,9 @@ func TestFulfillResetTrafficClearsFinishedAt(t *testing.T) {
 		logs:       &activationLogRepo{},
 		inbox:      newActivationInboxRepo(),
 	}
-	svcCtx := newActivationDeps(store, false)
+	modules := newActivationModules(store, false)
 
-	if _, err := svcCtx.Subscription.FulfillPaidOrder(context.Background(), "reset-order"); err != nil {
+	if _, err := modules.Subscription.FulfillPaidOrder(context.Background(), "reset-order"); err != nil {
 		t.Fatalf("activate reset traffic: %v", err)
 	}
 	if store.users.subscription.FinishedAt != nil {
@@ -549,9 +638,254 @@ func TestFulfillResetTrafficClearsFinishedAt(t *testing.T) {
 	}
 }
 
-func (s *activationStore) walletRepo() *activationWalletRepo {
-	if s.wallet == nil {
-		s.wallet = &activationWalletRepo{}
-	}
-	return s.wallet
+// The repository methods below are outside every activation scenario: the
+// fakes implement them only to satisfy the contracts the facades take, and
+// each answers errNotInScenario.
+
+// The rest of repository.OrderRepo.
+func (*activationOrderRepo) CountPendingByPaymentID(context.Context, int64) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationOrderRepo) CountPendingGuestOrders(context.Context, string, string) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationOrderRepo) CountUserCouponUsage(context.Context, int64, string) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationOrderRepo) Delete(context.Context, int64) error { return errNotInScenario }
+func (*activationOrderRepo) FindOne(context.Context, int64) (*orderEntity.Order, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) FindOneByIdempotencyKey(context.Context, string) (*orderEntity.Order, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) FindOneDetails(context.Context, int64) (*orderEntity.Details, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) FindOneDetailsByOrderNo(context.Context, string) (*orderEntity.Details, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) Insert(context.Context, *orderEntity.Order) error {
+	return errNotInScenario
+}
+func (*activationOrderRepo) IsUserEligibleForNewOrder(context.Context, int64) (bool, error) {
+	return false, errNotInScenario
+}
+func (*activationOrderRepo) MarkOrderPaid(context.Context, string, string) (bool, error) {
+	return false, errNotInScenario
+}
+func (*activationOrderRepo) QueryDailyOrdersList(context.Context, time.Time) ([]orderEntity.OrdersTotalWithDate, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) QueryDailyReport(context.Context, time.Time) (*orderEntity.DailyReport, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) QueryDateOrders(context.Context, time.Time) (orderEntity.OrdersTotal, error) {
+	return orderEntity.OrdersTotal{}, errNotInScenario
+}
+func (*activationOrderRepo) QueryDateUserCounts(context.Context, time.Time) (int64, int64, error) {
+	return 0, 0, errNotInScenario
+}
+func (*activationOrderRepo) QueryMonthlyOrders(context.Context, time.Time) (orderEntity.OrdersTotal, error) {
+	return orderEntity.OrdersTotal{}, errNotInScenario
+}
+func (*activationOrderRepo) QueryMonthlyOrdersList(context.Context, time.Time) ([]orderEntity.OrdersTotalWithDate, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) QueryMonthlyUserCounts(context.Context, time.Time) (int64, int64, error) {
+	return 0, 0, errNotInScenario
+}
+func (*activationOrderRepo) QueryOrderListByPage(context.Context, int, int, uint8, int64, int64, string) (int64, []*orderEntity.Details, error) {
+	return 0, nil, errNotInScenario
+}
+func (*activationOrderRepo) QueryOrdersByStatusAfterID(context.Context, uint8, int64, int) ([]*orderEntity.Order, error) {
+	return nil, errNotInScenario
+}
+func (*activationOrderRepo) QueryTotalOrders(context.Context) (orderEntity.OrdersTotal, error) {
+	return orderEntity.OrdersTotal{}, errNotInScenario
+}
+func (*activationOrderRepo) QueryTotalUserCounts(context.Context) (int64, int64, error) {
+	return 0, 0, errNotInScenario
+}
+func (*activationOrderRepo) SetPaymentTradeNoIfEmpty(context.Context, string, string) (bool, error) {
+	return false, errNotInScenario
+}
+func (*activationOrderRepo) Update(context.Context, *orderEntity.Order) error {
+	return errNotInScenario
+}
+func (*activationOrderRepo) UpdatePaymentExpectation(context.Context, string, int64, string) (bool, error) {
+	return false, errNotInScenario
+}
+
+// The rest of repository.EntitlementRepo.
+func (*activationPeriodRepo) FindStateForUpdate(context.Context, string) (*entitlement.State, error) {
+	return nil, errNotInScenario
+}
+func (*activationPeriodRepo) InsertRevision(context.Context, *entitlement.Revision) error {
+	return errNotInScenario
+}
+func (*activationPeriodRepo) InsertState(context.Context, *entitlement.State) error {
+	return errNotInScenario
+}
+func (*activationPeriodRepo) PlanIDs(context.Context, string) ([]int64, error) {
+	return nil, errNotInScenario
+}
+func (*activationPeriodRepo) UpdatePeriod(context.Context, *entitlement.Period) error {
+	return errNotInScenario
+}
+func (*activationPeriodRepo) UpdateState(context.Context, *entitlement.State) error {
+	return errNotInScenario
+}
+
+// The rest of repository.InboxRepo.
+func (*activationInboxRepo) DeleteProcessedBefore(context.Context, time.Time) (int64, error) {
+	return 0, errNotInScenario
+}
+
+// The rest of repository.WalletRepo.
+func (*activationWalletRepo) FindWalletsByUserIds(context.Context, []int64) (map[int64]*walletEntity.Wallet, error) {
+	return nil, errNotInScenario
+}
+
+// The rest of repository.UserSubscriptionRepo.
+func (*activationUserRepo) ApplyEntitlementProjection(context.Context, *usersub.Subscribe) error {
+	return errNotInScenario
+}
+func (*activationUserRepo) BatchUpdateUserSubscribeWithTraffic(context.Context, []trafficEntity.SubscribeTrafficDelta) error {
+	return errNotInScenario
+}
+func (*activationUserRepo) CountSubscribesByFilter(context.Context, *usersub.SubscribeFilter) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationUserRepo) CountUserSubscribesBySubscribeIdAndStatus(context.Context, int64, ...int64) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationUserRepo) DeleteSubscribeById(context.Context, int64) error { return errNotInScenario }
+func (*activationUserRepo) FindExpiredSubscribes(context.Context, time.Time) ([]*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindExpiringSubscribes(context.Context, time.Time, time.Time) ([]*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindOneSubscribe(context.Context, int64) (*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindOneSubscribeByOrderId(context.Context, int64) (*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindOneSubscribeDetailsById(context.Context, int64) (*usersub.SubscribeDetails, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindOneSubscribeForUpdate(context.Context, int64) (*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindOneUserSubscribe(context.Context, int64) (*usersub.SubscribeDetails, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindSubscribeDetailsByIds(context.Context, []int64) ([]*usersub.SubscribeDetails, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindSubscribeDetailsByUserIds(context.Context, []int64) ([]*usersub.SubscribeDetails, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindSubscribesByIds(context.Context, []int64) ([]*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindTrafficExceededSubscribes(context.Context) ([]*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindUserSubscribesByStatus(context.Context, ...int64) ([]*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) FindUsersSubscribeBySubscribeIds(context.Context, []int64) ([]*usersub.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) InsertSubscribe(context.Context, *usersub.Subscribe) error {
+	return errNotInScenario
+}
+func (*activationUserRepo) MarkSubscribesFinished(context.Context, []int64, uint8, time.Time) error {
+	return errNotInScenario
+}
+func (*activationUserRepo) QueryActiveSubscriptions(context.Context, ...int64) (map[int64]int64, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) QuerySubscribeIdsByFilter(context.Context, *usersub.SubscribeFilter) ([]int64, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) QueryUserSubscribe(context.Context, int64, ...int64) ([]*usersub.SubscribeDetails, error) {
+	return nil, errNotInScenario
+}
+func (*activationUserRepo) RotateSubscribeCredentials(context.Context, []repository.SubscriptionCredentialRotation) error {
+	return errNotInScenario
+}
+
+// The rest of repository.LogRepo.
+func (*activationLogRepo) Delete(context.Context, int64) error           { return errNotInScenario }
+func (*activationLogRepo) DeleteBefore(context.Context, time.Time) error { return errNotInScenario }
+func (*activationLogRepo) DeleteBeforeBatch(context.Context, time.Time, int) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationLogRepo) FilterSystemLog(context.Context, *logEntity.FilterParams) ([]*logEntity.SystemLog, int64, error) {
+	return nil, 0, errNotInScenario
+}
+func (*activationLogRepo) FindByDatesType(context.Context, []string, uint8) ([]*logEntity.SystemLog, error) {
+	return nil, errNotInScenario
+}
+func (*activationLogRepo) FindFirstByDateType(context.Context, string, uint8) (*logEntity.SystemLog, error) {
+	return nil, errNotInScenario
+}
+func (*activationLogRepo) FindOne(context.Context, int64) (*logEntity.SystemLog, error) {
+	return nil, errNotInScenario
+}
+func (*activationLogRepo) InsertBatch(context.Context, []*logEntity.SystemLog, int) error {
+	return errNotInScenario
+}
+func (*activationLogRepo) SumAmountByTypeAndObjectID(context.Context, uint8, int64) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationLogRepo) Update(context.Context, *logEntity.SystemLog) error {
+	return errNotInScenario
+}
+
+// The rest of repository.SubscribeRepo.
+func (*activationSubscribeRepo) BatchDeleteGroup(context.Context, []int64) error {
+	return errNotInScenario
+}
+func (*activationSubscribeRepo) CreateGroup(context.Context, *subscribeEntity.Group) error {
+	return errNotInScenario
+}
+func (*activationSubscribeRepo) Delete(context.Context, int64) error      { return errNotInScenario }
+func (*activationSubscribeRepo) DeleteGroup(context.Context, int64) error { return errNotInScenario }
+func (*activationSubscribeRepo) FilterList(context.Context, *subscribeEntity.FilterParams) (int64, []*subscribeEntity.Subscribe, error) {
+	return 0, nil, errNotInScenario
+}
+func (*activationSubscribeRepo) FindByNodeScope(context.Context, []int64, []string) ([]*subscribeEntity.Subscribe, error) {
+	return nil, errNotInScenario
+}
+func (*activationSubscribeRepo) Insert(context.Context, *subscribeEntity.Subscribe) error {
+	return errNotInScenario
+}
+func (*activationSubscribeRepo) QueryGroupList(context.Context) (int64, []*subscribeEntity.Group, error) {
+	return 0, nil, errNotInScenario
+}
+func (*activationSubscribeRepo) QueryResetCycleSubscribeIds(context.Context, int) ([]int64, error) {
+	return nil, errNotInScenario
+}
+func (*activationSubscribeRepo) QuerySubscribeMinSortByIds(context.Context, []int64) (int64, error) {
+	return 0, errNotInScenario
+}
+func (*activationSubscribeRepo) ReserveInventory(context.Context, int64) (bool, error) {
+	return false, errNotInScenario
+}
+func (*activationSubscribeRepo) RestoreInventory(context.Context, int64) error {
+	return errNotInScenario
+}
+func (*activationSubscribeRepo) Update(context.Context, *subscribeEntity.Subscribe) error {
+	return errNotInScenario
+}
+func (*activationSubscribeRepo) UpdateGroup(context.Context, *subscribeEntity.Group) error {
+	return errNotInScenario
+}
+func (*activationSubscribeRepo) UpdateSort(context.Context, []*subscribeEntity.Subscribe) error {
+	return errNotInScenario
 }

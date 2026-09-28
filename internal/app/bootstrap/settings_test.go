@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/module/platform/entity/system"
@@ -10,7 +11,7 @@ import (
 // keys; they must reach the runtime config instead of falling back to the
 // hard-coded defaults.
 func TestVerifyCodeFromSettingsReadsStoredKeys(t *testing.T) {
-	got := verifyCodeFromSettings([]*system.System{
+	got := verifyCodeFromSettings(context.Background(), []*system.System{
 		{Category: "verify_code", Key: "VerifyCodeExpireTime", Value: "600", Type: "int"},
 		{Category: "verify_code", Key: "VerifyCodeLimit", Value: "5", Type: "int"},
 		{Category: "verify_code", Key: "VerifyCodeInterval", Value: "120", Type: "int"},

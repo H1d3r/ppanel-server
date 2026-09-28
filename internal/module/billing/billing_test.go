@@ -19,7 +19,7 @@ import (
 // facade is the billing module assembled like the application assembles it,
 // over the real repositories.
 type facade struct {
-	billing.Service
+	svc   billing.Service
 	h     *billingtest.Harness
 	queue *billingtest.Queue
 }
@@ -32,16 +32,16 @@ func newFacade(t *testing.T) *facade {
 		Orders: h.Store.Order(), OrderEvents: h.Store.OrderEvent(), Payments: h.Store.Payment(), Coupons: h.Store.Coupon(),
 		Withdrawals: h.Store.UserWithdrawal(), Plans: h.Store.Subscribe(), UserSubs: h.Store.UserSubscription(),
 		Store: h.Store, Inventory: subscription.NewInventory(h.Store), Tx: h.Store, Queue: queue, Redis: h.Redis,
-		SingleModel: func() bool { return false }, CurrencyUnit: func() string { return "CNY" }, Host: "panel.example.com",
-		Logs: h.Store.Log(), UserCache: h.Store.UserCache(), Affiliates: h.Store.User(), AuthMethods: h.Store.UserAuth(),
+		SingleModel: func() bool { return false }, CurrencyUnit: func() string { return "CNY" },
+		Logs: h.Store.Log(), UserCache: &billingtest.UserCache{}, Affiliates: h.Store.User(), AuthMethods: h.Store.UserAuth(),
 		UserProfiles: h.Store.User(), InvitePolicy: func() (uint8, bool) { return 0, false },
 		PortalPlans: h.Store.Subscribe(), GuestAccounts: h.Store.UserAuth(), Sessions: h.Redis, GuestCheckoutCache: h.Redis,
 		ExchangeRate: billing.NewCurrencyRateCache(0),
 		Portal: billing.PortalConfig{
-			Host: "panel.example.com", CurrencyUnit: func() string { return "CNY" }, JwtSecret: "secret", JwtExpire: 3600,
+			SiteHost: func() string { return "panel.example.com" }, CurrencyUnit: func() string { return "CNY" }, JwtSecret: "secret", JwtExpire: 3600,
 		},
 	})
-	return &facade{Service: svc, h: h, queue: queue}
+	return &facade{svc: svc, h: h, queue: queue}
 }
 
 const epayConfig = `{"pid":"1001","url":"https://pay.example","key":"secret","type":"alipay"}`
@@ -70,7 +70,7 @@ func TestUpdateOrderStatusRejectsInvalidTransitions(t *testing.T) {
 		{&dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed, PaymentId: 9}, xerr.InvalidOrderCloseRequest},
 		{&dto.UpdateOrderStatusRequest{Id: o.Id + 100, Status: order.StatusClosed}, xerr.OrderNotExist},
 	} {
-		assertCode(t, f.UpdateOrderStatus(adminContext, tt.req), tt.code)
+		assertCode(t, f.svc.UpdateOrderStatus(adminContext, tt.req), tt.code)
 	}
 	if f.h.ReloadOrder("o-1").Status != order.StatusPending || len(f.queue.Activations) != 0 {
 		t.Fatal("a rejected transition changed the order")
@@ -81,7 +81,7 @@ func TestUpdateOrderStatusMarksPaidAndEnqueuesActivation(t *testing.T) {
 	f := newFacade(t)
 	o := f.h.Order(&order.Order{OrderNo: "o-2", Status: order.StatusPending})
 
-	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-1"}); err != nil {
+	if err := f.svc.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-1"}); err != nil {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
 	if paid := f.h.ReloadOrder("o-2"); paid.Status != order.StatusPaid || paid.TradeNo != "trade-1" {
@@ -90,7 +90,7 @@ func TestUpdateOrderStatusMarksPaidAndEnqueuesActivation(t *testing.T) {
 	if len(f.queue.Activations) != 1 || f.queue.Activations[0] != "o-2" {
 		t.Fatalf("activations = %v", f.queue.Activations)
 	}
-	assertCode(t, f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-2"}), xerr.OrderStatusError)
+	assertCode(t, f.svc.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-2"}), xerr.OrderStatusError)
 }
 
 // Marking an order paid commits the order; a queue that is down only delays
@@ -100,7 +100,7 @@ func TestUpdateOrderStatusReportsThePaidOrderWhenTheQueueIsDown(t *testing.T) {
 	f.queue.ActivationErr = errors.New("queue unavailable")
 	o := f.h.Order(&order.Order{OrderNo: "o-3", Status: order.StatusPending})
 
-	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-3"}); err != nil {
+	if err := f.svc.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusPaid, TradeNo: "trade-3"}); err != nil {
 		t.Fatalf("UpdateOrderStatus = %v, want the committed outcome", err)
 	}
 	if paid := f.h.ReloadOrder("o-3"); paid.Status != order.StatusPaid {
@@ -117,13 +117,13 @@ func TestUpdateOrderStatusCloseReleasesReservations(t *testing.T) {
 	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 3 })
 	method := f.h.Payment("EPay", epayConfig)
 	f.h.Coupon("SPRING", func(c *coupon.Coupon) { c.Count = 5 })
-	resp, err := f.Purchase(billingtest.UserContext(buyer), &dto.PurchaseOrderRequest{SubscribeId: plan.Id, Quantity: 1, Payment: method.Id, Coupon: "SPRING"})
+	resp, err := f.svc.Purchase(billingtest.UserContext(buyer), &dto.PurchaseOrderRequest{SubscribeId: plan.Id, Quantity: 1, Payment: method.Id, Coupon: "SPRING"})
 	if err != nil {
 		t.Fatalf("Purchase: %v", err)
 	}
 	o := f.h.ReloadOrder(resp.OrderNo)
 
-	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}); err != nil {
+	if err := f.svc.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}); err != nil {
 		t.Fatalf("UpdateOrderStatus: %v", err)
 	}
 	if f.h.ReloadOrder(o.OrderNo).Status != order.StatusClosed || len(f.queue.Activations) != 0 {
@@ -132,7 +132,7 @@ func TestUpdateOrderStatusCloseReleasesReservations(t *testing.T) {
 	if f.h.ReloadCoupon("SPRING").UsedCount != 0 || f.h.ReloadWallet(buyer.Id).GiftAmount != 400 || f.h.ReloadPlan(plan.Id).Inventory != 3 {
 		t.Fatal("the close kept the coupon use, gift credit or stock")
 	}
-	assertCode(t, f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}), xerr.OrderStatusError)
+	assertCode(t, f.svc.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}), xerr.OrderStatusError)
 	if f.h.ReloadWallet(buyer.Id).GiftAmount != 400 {
 		t.Fatal("a repeated close refunded the gift credit again")
 	}
@@ -143,11 +143,11 @@ func TestDeletePaymentMethodGuardsPendingOrders(t *testing.T) {
 	method := f.h.Payment("EPay", epayConfig)
 	o := f.h.Order(&order.Order{OrderNo: "o-5", Status: order.StatusPending, PaymentId: method.Id, Method: "EPay"})
 
-	assertCode(t, f.DeletePaymentMethod(adminContext, &dto.DeletePaymentMethodRequest{Id: method.Id}), xerr.PaymentMethodHasPendingOrders)
-	if err := f.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}); err != nil {
+	assertCode(t, f.svc.DeletePaymentMethod(adminContext, &dto.DeletePaymentMethodRequest{Id: method.Id}), xerr.PaymentMethodHasPendingOrders)
+	if err := f.svc.UpdateOrderStatus(adminContext, &dto.UpdateOrderStatusRequest{Id: o.Id, Status: order.StatusClosed}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.DeletePaymentMethod(adminContext, &dto.DeletePaymentMethodRequest{Id: method.Id}); err != nil {
+	if err := f.svc.DeletePaymentMethod(adminContext, &dto.DeletePaymentMethodRequest{Id: method.Id}); err != nil {
 		t.Fatalf("DeletePaymentMethod: %v", err)
 	}
 	var remaining int64
@@ -159,9 +159,9 @@ func TestDeletePaymentMethodGuardsPendingOrders(t *testing.T) {
 func TestCreatePaymentMethodValidatesFeeAndPlatform(t *testing.T) {
 	f := newFacade(t)
 	enabled := true
-	_, err := f.CreatePaymentMethod(adminContext, &dto.CreatePaymentMethodRequest{Name: "n", Platform: "Nope", Config: map[string]any{}, Enable: &enabled})
+	_, err := f.svc.CreatePaymentMethod(adminContext, &dto.CreatePaymentMethodRequest{Name: "n", Platform: "Nope", Config: map[string]any{}, Enable: &enabled})
 	assertCode(t, err, xerr.UnsupportedPaymentPlatform)
-	_, err = f.CreatePaymentMethod(adminContext, &dto.CreatePaymentMethodRequest{
+	_, err = f.svc.CreatePaymentMethod(adminContext, &dto.CreatePaymentMethodRequest{
 		Name: "n", Platform: "EPay", FeeMode: 9, Enable: &enabled,
 		Config: map[string]any{"pid": "1001", "url": "https://pay.example", "key": "secret", "type": "alipay"},
 	})
@@ -173,12 +173,12 @@ func TestCreatePaymentMethodValidatesFeeAndPlatform(t *testing.T) {
 func TestPaymentCallbackStyles(t *testing.T) {
 	f := newFacade(t)
 	for _, platform := range []string{"EPay", "AlipayF2F", "Stripe", "Cryptomus"} {
-		if _, ok := f.PaymentCallbackStyle(platform); !ok {
+		if _, ok := f.svc.PaymentCallbackStyle(platform); !ok {
 			t.Fatalf("%s has no callback style", platform)
 		}
 	}
 	for _, platform := range []string{"balance", "Unknown", ""} {
-		if _, ok := f.PaymentCallbackStyle(platform); ok {
+		if _, ok := f.svc.PaymentCallbackStyle(platform); ok {
 			t.Fatalf("%s must not accept callbacks", platform)
 		}
 	}

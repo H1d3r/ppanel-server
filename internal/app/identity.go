@@ -8,8 +8,8 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-// newIdentityModule wires the identity module against the legacy store;
-// device kicking is a closure over the service context's device manager.
+// newIdentityModule wires the identity module against the shared store;
+// device kicking is a closure over the application's device manager.
 // The trial settings are not passed: the subscription module grants trials
 // when it consumes the registration event.
 func newIdentityModule(store repository.Store, srv *Application) identity.Service {
@@ -18,7 +18,6 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 		UserAuths: store.UserAuth(),
 		Devices:   store.UserDevice(),
 		Cache:     store.UserCache(),
-		UserSubs:  store.UserSubscription(),
 		Logs:      store.Log(),
 		Store:     store,
 		KickDevice: func(userID int64, identifier string) {
@@ -26,8 +25,13 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 				srv.DeviceManager.KickDevice(userID, identifier)
 			}
 		},
+		// Deleted and disabled accounts lose their cached access at once.
+		SubscriptionCaches: srv.Subscription,
+		ServerCaches:       identityServerCaches{srv},
 
-		Wallet: store.Wallet(),
+		// Billing is constructed before identity, so its facade is bound
+		// directly.
+		Wallet: srv.Billing,
 		Auths:  store.Auth(),
 		Redis:  srv.Redis,
 		EmailDomains: func() (string, bool) {
@@ -97,18 +101,11 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 }
 
 // normalizeIdentityData runs the identity module's idempotent startup data
-// fix-ups once the schema is current. They repair stored identifiers, so a
-// failure is logged and the server still starts.
-func normalizeIdentityData(ctx context.Context, store repository.Store) {
-	result, err := store.UserAuth().NormalizeMobileIdentifiers(ctx)
-	if err != nil {
+// fix-ups once the schema is current; the module logs what they changed.
+// They repair stored identifiers, so a failure is logged and the server still
+// starts.
+func normalizeIdentityData(ctx context.Context, accounts IdentityStartup) {
+	if err := accounts.NormalizePhoneNumbers(ctx); err != nil {
 		logger.Errorw("[Identity] normalize stored phone numbers failed", logger.Field("error", err.Error()))
-		return
-	}
-	if result.Converted > 0 || result.Conflicts > 0 || result.Unparsable > 0 {
-		logger.Infow("[Identity] normalized stored phone numbers to E.164",
-			logger.Field("converted", result.Converted),
-			logger.Field("conflicts", result.Conflicts),
-			logger.Field("unparsable", result.Unparsable))
 	}
 }

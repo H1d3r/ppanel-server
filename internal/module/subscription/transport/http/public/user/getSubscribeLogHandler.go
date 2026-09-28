@@ -1,3 +1,5 @@
+// Package user holds the HTTP handlers through which users manage their own
+// subscriptions.
 package user
 
 import (

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/httpx"
 )
@@ -18,7 +17,7 @@ var _ dto.PrivacyPolicyConfig
 // @Produce json
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.PrivacyPolicyConfig}
 // @Router /v1/common/site/privacy [get]
-func GetPrivacyPolicyHandler(service platform.Service) app.HandlerFunc {
+func GetPrivacyPolicyHandler(service PublicInfo) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 
 		resp, err := service.GetPrivacyPolicy(ctx)

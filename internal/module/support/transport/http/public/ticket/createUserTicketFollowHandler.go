@@ -1,3 +1,5 @@
+// Package ticket holds the Hertz handlers of a user's own tickets: opening,
+// following up, reading and closing them.
 package ticket
 
 import (

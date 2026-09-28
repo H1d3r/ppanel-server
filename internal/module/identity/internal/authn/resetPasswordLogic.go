@@ -31,7 +31,6 @@ func (s *Service) ResetPassword(ctx context.Context, req *dto.ResetPasswordReque
 		code:       req.Code,
 		password:   req.Password,
 		device:     req.Identifier,
-		loginType:  req.LoginType,
 	})
 }
 
@@ -40,7 +39,7 @@ type passwordReset struct {
 	method, identifier string
 	codeKey, code      string
 	password           string
-	device, loginType  string
+	device             string
 }
 
 func (s *Service) resetPassword(ctx context.Context, reset passwordReset) (resp *dto.LoginResponse, err error) {
@@ -77,5 +76,5 @@ func (s *Service) resetPassword(ctx context.Context, reset passwordReset) (resp 
 		return nil, xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
 	}
 	clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
-	return s.signIn(ctx, userInfo.Id, reset.device, reset.loginType)
+	return s.signIn(ctx, userInfo.Id, reset.device)
 }

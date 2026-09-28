@@ -7,15 +7,15 @@ type AppleLoginCallbackRequest struct {
 }
 
 type AuthMethodConfig struct {
-	Id      int64       `json:"id"`
-	Method  string      `json:"method"`
-	Config  interface{} `json:"config"`
-	Enabled bool        `json:"enabled"`
+	Id      int64  `json:"id"`
+	Method  string `json:"method"`
+	Config  any    `json:"config"`
+	Enabled bool   `json:"enabled"`
 }
 
 type BindOAuthCallbackRequest struct {
-	Method   string      `json:"method" validate:"required,oneof=google apple telegram github facebook"`
-	Callback interface{} `json:"callback" validate:"required"`
+	Method   string `json:"method" validate:"required,oneof=google apple telegram github facebook"`
+	Callback any    `json:"callback" validate:"required"`
 }
 
 type BindOAuthRequest struct {
@@ -79,10 +79,10 @@ type OAuthLoginRequest struct {
 } // @name dto.OAthLoginRequest
 
 type OAuthLoginGetTokenRequest struct {
-	Method   string      `json:"method" validate:"required"` // google, facebook, apple, telegram, github etc.
-	Callback interface{} `json:"callback" validate:"required"`
-	Invite   string      `json:"invite"`
-	CfToken  string      `json:"cf_token"`
+	Method   string `json:"method" validate:"required"` // google, facebook, apple, telegram, github etc.
+	Callback any    `json:"callback" validate:"required"`
+	Invite   string `json:"invite"`
+	CfToken  string `json:"cf_token"`
 }
 
 type OAuthLoginResponse struct {
@@ -94,7 +94,6 @@ type ResetPasswordRequest struct {
 	Email      string `json:"email" validate:"required,email"`
 	Password   string `json:"password" validate:"required,min=8,max=128"`
 	Code       string `json:"code"`
-	LoginType  string `header:"Login-Type" swaggerignore:"true"`
 	CfToken    string `json:"cf_token"`
 }
 
@@ -129,7 +128,6 @@ type TelephoneLoginRequest struct {
 	TelephoneCode     string `json:"telephone_code"`
 	TelephoneAreaCode string `json:"telephone_area_code" validate:"required"`
 	Password          string `json:"password"`
-	LoginType         string `header:"Login-Type" swaggerignore:"true"`
 	CfToken           string `json:"cf_token"`
 }
 
@@ -140,7 +138,6 @@ type TelephoneRegisterRequest struct {
 	Password          string `json:"password" validate:"required,min=8,max=128"`
 	Invite            string `json:"invite"`
 	Code              string `json:"code"`
-	LoginType         string `header:"Login-Type" swaggerignore:"true"`
 	CfToken           string `json:"cf_token"`
 }
 
@@ -150,7 +147,6 @@ type TelephoneResetPasswordRequest struct {
 	TelephoneAreaCode string `json:"telephone_area_code" validate:"required"`
 	Password          string `json:"password" validate:"required,min=8,max=128"`
 	Code              string `json:"code"`
-	LoginType         string `header:"Login-Type" swaggerignore:"true"`
 	CfToken           string `json:"cf_token"`
 }
 
@@ -168,17 +164,16 @@ type UnbindOAuthRequest struct {
 }
 
 type UpdateAuthMethodConfigRequest struct {
-	Id      int64       `json:"id"`
-	Method  string      `json:"method"`
-	Config  interface{} `json:"config"`
-	Enabled *bool       `json:"enabled"`
+	Id      int64  `json:"id"`
+	Method  string `json:"method"`
+	Config  any    `json:"config"`
+	Enabled *bool  `json:"enabled"`
 }
 
 type UserLoginRequest struct {
 	Identifier string `json:"identifier"`
 	Email      string `json:"email" validate:"required,email"`
 	Password   string `json:"password" validate:"required"`
-	LoginType  string `header:"Login-Type" swaggerignore:"true"`
 	CfToken    string `json:"cf_token"`
 }
 
@@ -188,7 +183,6 @@ type UserRegisterRequest struct {
 	Password   string `json:"password" validate:"required,min=8,max=128"`
 	Invite     string `json:"invite"`
 	Code       string `json:"code"`
-	LoginType  string `header:"Login-Type" swaggerignore:"true"`
 	CfToken    string `json:"cf_token"`
 }
 

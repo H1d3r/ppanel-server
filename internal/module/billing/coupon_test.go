@@ -30,14 +30,14 @@ func TestCreateCouponValidatesInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := validCoupon()
 			tt.mutate(req)
-			assertCode(t, f.CreateCoupon(adminContext, req), tt.code)
+			assertCode(t, f.svc.CreateCoupon(adminContext, req), tt.code)
 		})
 	}
 	var count int64
 	if err := f.h.DB.Model(&coupon.Coupon{}).Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("coupons = %d, want none stored for invalid input", count)
 	}
-	if err := f.CreateCoupon(adminContext, validCoupon()); err != nil {
+	if err := f.svc.CreateCoupon(adminContext, validCoupon()); err != nil {
 		t.Fatalf("valid coupon rejected: %v", err)
 	}
 	var created coupon.Coupon
@@ -53,7 +53,7 @@ func TestUpdateCouponForbidsReducingUsedCount(t *testing.T) {
 		Id: existing.Id, Name: "c", Code: "USED", Count: 10, Type: coupon.TypePercentage, Discount: 10,
 		StartTime: 1000, ExpireTime: 2000, UsedCount: 4,
 	}
-	assertCode(t, f.UpdateCoupon(adminContext, req), xerr.CouponUsedCountImmutable)
+	assertCode(t, f.svc.UpdateCoupon(adminContext, req), xerr.CouponUsedCountImmutable)
 	if f.h.ReloadCoupon("USED").UsedCount != 5 {
 		t.Fatal("the used count was reduced")
 	}
@@ -64,11 +64,11 @@ func TestQueryOrderDetailEnforcesOwnershipAndHidesCommission(t *testing.T) {
 	owner, stranger := f.h.User(), f.h.User()
 	f.h.Order(&order.Order{OrderNo: "o-9", UserId: owner.Id, Status: order.StatusFinished, Commission: 500})
 
-	_, err := f.QueryOrderDetail(billingtest.UserContext(stranger), &dto.QueryOrderDetailRequest{OrderNo: "o-9"})
+	_, err := f.svc.QueryOrderDetail(billingtest.UserContext(stranger), &dto.QueryOrderDetailRequest{OrderNo: "o-9"})
 	assertCode(t, err, xerr.InvalidAccess)
-	_, err = f.QueryOrderDetail(billingtest.UserContext(owner), &dto.QueryOrderDetailRequest{OrderNo: "missing"})
+	_, err = f.svc.QueryOrderDetail(billingtest.UserContext(owner), &dto.QueryOrderDetailRequest{OrderNo: "missing"})
 	assertCode(t, err, xerr.OrderNotExist)
-	got, err := f.QueryOrderDetail(billingtest.UserContext(owner), &dto.QueryOrderDetailRequest{OrderNo: "o-9"})
+	got, err := f.svc.QueryOrderDetail(billingtest.UserContext(owner), &dto.QueryOrderDetailRequest{OrderNo: "o-9"})
 	if err != nil {
 		t.Fatalf("QueryOrderDetail: %v", err)
 	}

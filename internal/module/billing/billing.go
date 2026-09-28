@@ -10,6 +10,8 @@ import (
 	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
+	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/billing/internal/activation"
 	"github.com/perfect-panel/server/internal/module/billing/internal/adminorder"
@@ -18,13 +20,13 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/internal/module/billing/internal/coupon"
 	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
+	"github.com/perfect-panel/server/internal/module/billing/internal/orderevents"
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/module/billing/internal/repo"
 	"github.com/perfect-panel/server/internal/module/billing/internal/userorder"
 	v2orch "github.com/perfect-panel/server/internal/module/billing/internal/v2"
 	"github.com/perfect-panel/server/internal/module/billing/internal/wallet"
-	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 )
@@ -32,6 +34,9 @@ import (
 // Service is the only surface other code may depend on; the implementation
 // lives under internal/ where the compiler seals it off.
 type Service interface {
+	// OrderStatistics serves the other modules' reads of order figures.
+	OrderStatistics
+
 	CreateOrder(ctx context.Context, req *dto.CreateOrderRequest) error
 	GetOrderList(ctx context.Context, req *dto.GetOrderListRequest) (*dto.GetOrderListResponse, error)
 	// UpdateOrderStatus applies the admin's Pending->Paid transition and
@@ -78,6 +83,11 @@ type Service interface {
 	// authenticated session.
 	IssuePortalSession(ctx context.Context, userID int64) (string, error)
 
+	// FindPaymentMethodByToken reads the payment method whose notify URL
+	// carries token, with the repository's error unwrapped: the notify
+	// middleware resolves a callback's method with it and answers a failed
+	// lookup with that error.
+	FindPaymentMethodByToken(ctx context.Context, token string) (*paymentEntity.Payment, error)
 	// PaymentNotify authenticates and settles a gateway callback. It reads
 	// the payment method the notify middleware resolved from the request
 	// context; every gateway goes through the same verification.
@@ -100,6 +110,16 @@ type Service interface {
 	// when the ticket holds its maximum of concurrent streams).
 	V2StreamOrderEvents(ctx context.Context, req V2EventStreamRequest, sink V2EventSink) error
 
+	// PublishOrderEvents drains the order-event outbox the streams replay:
+	// it broadcasts the oldest unpublished events, 500 at most, on their
+	// orders' Redis channels to wake the streams, marking each published.
+	// The first failure ends the run with its error, and the next run
+	// publishes what this one did not. CleanupOrderEvents deletes the
+	// published events created before cutoff and reports how many; an
+	// unpublished event is kept whatever its age.
+	PublishOrderEvents(ctx context.Context) error
+	CleanupOrderEvents(ctx context.Context, cutoff time.Time) (int64, error)
+
 	// The wallet flows resolve the current user from the request context:
 	// commission withdrawal, balance/commission statements and the affiliate
 	// earnings overview.
@@ -111,6 +131,50 @@ type Service interface {
 	ReviewWithdrawal(ctx context.Context, req *dto.ReviewWithdrawalRequest) error
 	QueryUserAffiliate(ctx context.Context) (*dto.QueryUserAffiliateCountResponse, error)
 	QueryUserAffiliateList(ctx context.Context, req *dto.QueryUserAffiliateListRequest) (*dto.QueryUserAffiliateListResponse, error)
+
+	// The wallet as other modules reach it (ADR-001 rules 2 and 4): they read
+	// the billing-owned wallet table and move money only through these
+	// methods, each movement in a billing transaction of its own that runs
+	// after the requesting module committed its part.
+	//
+	// FindWallet reads a user's wallet; a user without a wallet row reads as
+	// nil. FindWallets reads several; users without a row are absent from
+	// the map.
+	FindWallet(ctx context.Context, userID int64) (*walletEntity.Wallet, error)
+	FindWallets(ctx context.Context, userIDs []int64) (map[int64]*walletEntity.Wallet, error)
+	// OpenWallet sets the opening balance, gift amount and commission of an
+	// account an administrator created. AdjustWallet applies an
+	// administrator's wallet edit: under the wallet lock the amounts are set
+	// to the target's, each changed one with its audit log; an unchanged
+	// wallet is left alone.
+	OpenWallet(ctx context.Context, opening walletEntity.Wallet) error
+	AdjustWallet(ctx context.Context, target walletEntity.Wallet) error
+	// UnsubscribeRefundSettled reports whether the refund of a cancelled user
+	// subscription was settled. SettleUnsubscribeRefund settles it: amount,
+	// capped at what the order and its paid renewals cost, goes back to the
+	// buyer's wallet (gift amount first for a balance-paid order), the
+	// referrer loses the commission share the refund takes back, and the
+	// refund marker is recorded, all in one billing transaction. A
+	// subscription without an order (orderID 0) only gets the marker; a
+	// second settlement fails on it.
+	UnsubscribeRefundSettled(ctx context.Context, subscriptionID int64) (bool, error)
+	SettleUnsubscribeRefund(ctx context.Context, userID, subscriptionID, orderID, amount int64) error
+	// QuotaGiftCredited reports whether a quota task's gift for a
+	// subscription was credited. CreditQuotaGift credits amount to the gift
+	// balance of the subscription's owner with its gift log dated at, exactly
+	// once per (task, subscription); a zero amount only records the marker.
+	QuotaGiftCredited(ctx context.Context, taskID, subscriptionID int64) (bool, error)
+	CreditQuotaGift(ctx context.Context, taskID, subscriptionID, userID, amount int64, at time.Time) error
+
+	// The order reads of the subscription module's fulfillment and refund
+	// quote: an order by id or number, and an order with its renewals.
+	FindOrder(ctx context.Context, id int64) (*order.Order, error)
+	FindOrderByNo(ctx context.Context, orderNo string) (*order.Order, error)
+	FindOrderDetails(ctx context.Context, id int64) (*order.Details, error)
+	// OrdersByStatusAfter pages the orders in status by ascending id: at most
+	// limit (1000 when limit is outside 1..1000) of those after afterID. The
+	// pending and paid reconcilers walk their orders with it.
+	OrdersByStatusAfter(ctx context.Context, status uint8, afterID int64, limit int) ([]*order.Order, error)
 
 	// The billing-owned paid-order workflow and its idempotent stages:
 	// recharge credit, referral commission and final settlement.
@@ -194,6 +258,12 @@ type (
 	AuthMethodReader = wallet.AuthMethodReader
 )
 
+// UserCache drops the identity module's cached projection of users after a
+// wallet movement changed what it shows; the identity facade provides it.
+type UserCache interface {
+	ClearUserCache(ctx context.Context, userIDs ...int64) error
+}
+
 // Transactor is the module's window onto billing-scoped transactions; the
 // repository store satisfies it structurally.
 type Transactor interface {
@@ -213,28 +283,33 @@ type OrderQueue interface {
 	EnqueueDeferredClose(ctx context.Context, orderNo string) error
 }
 
-// OrderEventReader reads the durable order events an event stream replays.
-type OrderEventReader = v2orch.EventReader
+// OrderEventStore is the durable order-event table: the event streams replay
+// it, the outbox publisher drains it and the retention cleanup prunes it.
+type OrderEventStore interface {
+	v2orch.EventReader
+	orderevents.Outbox
+}
 
 // Deps declares everything the module needs; the composition root
 // (internal/app) provides them; each field is scoped to the use cases it serves.
 type Deps struct {
 	PaidOrders  PaidOrderDependencies
 	Orders      repository.OrderRepo
-	OrderEvents OrderEventReader
+	OrderEvents OrderEventStore
 	Payments    repository.PaymentRepo
 	Coupons     repository.CouponRepo
 	Withdrawals repository.UserWithdrawalRepo
 	Plans       PlanReader
 	UserSubs    UserSubscriptionReader
-	// Store carries the billing-scoped transactions of the order flows, the
-	// wallet view, the inbox markers and the user cache. Subscription writes
-	// are exposed only by the Inventory capability.
+	// Store carries the billing-scoped transactions of the order and wallet
+	// flows, the wallet view and the inbox markers. Subscription writes are
+	// exposed only by the Inventory capability.
 	Store     Store
 	Inventory checkout.Inventory
 	Tx        Transactor
 	Queue     OrderQueue
-	// Redis wakes the order event streams and bounds their concurrency.
+	// Redis carries the outbox's wake-ups to the order event streams and
+	// bounds the streams' concurrency.
 	Redis *redis.Client
 	// SingleModel forbids holding more than one blocking subscription;
 	// runtime-mutable, read per request.
@@ -242,19 +317,19 @@ type Deps struct {
 	// CurrencyUnit is the site currency used for gateway verification;
 	// runtime-mutable, read per request.
 	CurrencyUnit func() string
-	// Host is the site host used to derive default payment notify URLs.
-	Host string
 
 	// InvitePolicy snapshots the runtime-mutable site-wide referral
 	// fallback for the commission stage; UserProfiles resolves referral
-	// settings from the identity domain.
+	// settings, and the referrer a refund charges back, from the identity
+	// domain.
 	InvitePolicy func() (percentage uint8, onlyFirstPurchase bool)
 	UserProfiles activation.ProfileReader
 
-	// Wallet-specific dependencies: audit-log statements, user cache
-	// invalidation and the identity-domain read ports.
+	// Wallet-specific dependencies: audit-log statements and the
+	// identity-domain read ports. UserCache invalidates the identity
+	// module's user cache after a balance checkout.
 	Logs        repository.LogRepo
-	UserCache   repository.UserCacheRepo
+	UserCache   UserCache
 	Affiliates  AffiliateReader
 	AuthMethods AuthMethodReader
 
@@ -296,7 +371,7 @@ func New(deps Deps) Service {
 		UserAuths:          deps.GuestAccounts,
 		Plans:              deps.PortalPlans,
 		Tx:                 deps.Store,
-		UserCache:          storeUserCache{store: deps.Store},
+		UserCache:          deps.UserCache,
 		Inventory:          deps.Inventory,
 		Sessions:           deps.Sessions,
 		Queue:              deps.Queue,
@@ -312,18 +387,13 @@ func New(deps Deps) Service {
 	workflowDeps.Orders = deps.Orders
 	workflowDeps.Profiles = deps.UserProfiles
 	return &service{
+		statistics: statistics{orders: deps.Orders},
 		orders: adminorder.NewService(adminorder.Deps{
 			Orders: deps.Orders, Payments: deps.Payments, Tx: deps.Tx, Queue: deps.Queue, Plans: deps.Plans, Closer: checkoutSvc,
 		}),
 		payments: adminpayment.NewService(adminpayment.Deps{
 			Payments: deps.Payments, Orders: deps.Orders, Gateways: gateways,
-			NotifyHosts: func() gateway.NotifyHosts {
-				hosts := gateway.NotifyHosts{Host: deps.Host}
-				if deps.Portal.SiteHost != nil {
-					hosts.SiteHost = deps.Portal.SiteHost()
-				}
-				return hosts
-			},
+			SiteHost: deps.Portal.SiteHost,
 		}),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders, deps.Plans),
@@ -336,11 +406,15 @@ func New(deps Deps) Service {
 		wallet: wallet.NewService(wallet.Deps{
 			Logs:        deps.Logs,
 			Withdrawals: deps.Withdrawals,
-			Cache:       deps.UserCache,
 			Affiliates:  deps.Affiliates,
 			AuthMethods: deps.AuthMethods,
 			Tx:          deps.Tx,
+			Store:       deps.Store,
+			Profiles:    deps.UserProfiles,
 		}),
+		orderRows:  deps.Orders,
+		methodRows: deps.Payments,
+		outbox:     orderevents.NewService(deps.OrderEvents, orderevents.RedisBroadcaster{Client: deps.Redis}),
 		v2: v2orch.NewService(v2orch.Deps{
 			Orders:       deps.Orders,
 			Checkout:     checkoutSvc,
@@ -357,6 +431,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	statistics
 	paidOrders *activation.Workflow
 	orders     *adminorder.Service
 	payments   *adminpayment.Service
@@ -369,6 +444,9 @@ type service struct {
 	v2         *v2orch.Service
 	wallet     *wallet.Service
 	activation *activation.Service
+	outbox     *orderevents.Service
+	orderRows  repository.OrderRepo
+	methodRows repository.PaymentRepo
 }
 
 func (s *service) CreateOrder(ctx context.Context, req *dto.CreateOrderRequest) error {
@@ -483,6 +561,10 @@ func (s *service) IssuePortalSession(ctx context.Context, userID int64) (string,
 	return s.portal.IssueSession(ctx, userID)
 }
 
+func (s *service) FindPaymentMethodByToken(ctx context.Context, token string) (*paymentEntity.Payment, error) {
+	return s.methodRows.FindOneByPaymentToken(ctx, token)
+}
+
 func (s *service) PaymentNotify(ctx context.Context, notification PaymentNotification) error {
 	return s.callbacks.Notify(ctx, notification)
 }
@@ -513,6 +595,14 @@ func (s *service) V2Session(ctx context.Context, orderNo, checkoutToken string) 
 
 func (s *service) V2StreamOrderEvents(ctx context.Context, req V2EventStreamRequest, sink V2EventSink) error {
 	return s.v2.StreamEvents(ctx, req, sink)
+}
+
+func (s *service) PublishOrderEvents(ctx context.Context) error {
+	return s.outbox.Publish(ctx)
+}
+
+func (s *service) CleanupOrderEvents(ctx context.Context, cutoff time.Time) (int64, error) {
+	return s.outbox.Cleanup(ctx, cutoff)
 }
 
 func (s *service) CommissionWithdraw(ctx context.Context, req *dto.CommissionWithdrawRequest) (*dto.WithdrawalLog, error) {
@@ -547,6 +637,54 @@ func (s *service) QueryUserAffiliateList(ctx context.Context, req *dto.QueryUser
 	return s.wallet.QueryUserAffiliateList(ctx, req)
 }
 
+func (s *service) FindWallet(ctx context.Context, userID int64) (*walletEntity.Wallet, error) {
+	return s.wallet.FindWallet(ctx, userID)
+}
+
+func (s *service) FindWallets(ctx context.Context, userIDs []int64) (map[int64]*walletEntity.Wallet, error) {
+	return s.wallet.FindWallets(ctx, userIDs)
+}
+
+func (s *service) OpenWallet(ctx context.Context, opening walletEntity.Wallet) error {
+	return s.wallet.OpenWallet(ctx, opening)
+}
+
+func (s *service) AdjustWallet(ctx context.Context, target walletEntity.Wallet) error {
+	return s.wallet.AdjustWallet(ctx, target)
+}
+
+func (s *service) UnsubscribeRefundSettled(ctx context.Context, subscriptionID int64) (bool, error) {
+	return s.wallet.UnsubscribeRefundSettled(ctx, subscriptionID)
+}
+
+func (s *service) SettleUnsubscribeRefund(ctx context.Context, userID, subscriptionID, orderID, amount int64) error {
+	return s.wallet.SettleUnsubscribeRefund(ctx, userID, subscriptionID, orderID, amount)
+}
+
+func (s *service) QuotaGiftCredited(ctx context.Context, taskID, subscriptionID int64) (bool, error) {
+	return s.wallet.QuotaGiftCredited(ctx, taskID, subscriptionID)
+}
+
+func (s *service) CreditQuotaGift(ctx context.Context, taskID, subscriptionID, userID, amount int64, at time.Time) error {
+	return s.wallet.CreditQuotaGift(ctx, taskID, subscriptionID, userID, amount, at)
+}
+
+func (s *service) FindOrder(ctx context.Context, id int64) (*order.Order, error) {
+	return s.orderRows.FindOne(ctx, id)
+}
+
+func (s *service) FindOrderByNo(ctx context.Context, orderNo string) (*order.Order, error) {
+	return s.orderRows.FindOneByOrderNo(ctx, orderNo)
+}
+
+func (s *service) FindOrderDetails(ctx context.Context, id int64) (*order.Details, error) {
+	return s.orderRows.FindOneDetails(ctx, id)
+}
+
+func (s *service) OrdersByStatusAfter(ctx context.Context, status uint8, afterID int64, limit int) ([]*order.Order, error) {
+	return s.orderRows.QueryOrdersByStatusAfterID(ctx, status, afterID, limit)
+}
+
 func (s *service) ActivateRecharge(ctx context.Context, orderNo string) (int64, error) {
 	return s.activation.ActivateRecharge(ctx, orderNo)
 }
@@ -567,15 +705,14 @@ func (s *service) DailyOrderReport(ctx context.Context, date time.Time) (*DailyO
 	return s.orders.DailyReport(ctx, date)
 }
 
-// Store is the persistence capability the order flows need beyond their
-// repositories: billing-scoped transactions, the wallet view, the inbox and
-// the user cache. It excludes unrelated repositories and application-wide
+// Store is the persistence capability the order and wallet flows need beyond
+// their repositories: billing-scoped transactions, the wallet view and the
+// inbox. It excludes unrelated repositories and application-wide
 // transactions.
 type Store interface {
 	InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error
 	Inbox() repository.InboxRepo
 	Wallet() repository.WalletRepo
-	UserCache() repository.UserCacheRepo
 }
 
 // storeWallets reads wallets through the store, which may be absent in a
@@ -587,14 +724,4 @@ func (w storeWallets) FindWallet(ctx context.Context, userID int64) (*walletEnti
 		return nil, nil
 	}
 	return w.store.Wallet().FindWallet(ctx, userID)
-}
-
-// storeUserCache clears user cache entries through the store.
-type storeUserCache struct{ store Store }
-
-func (c storeUserCache) ClearUserCache(ctx context.Context, users ...*user.User) error {
-	if c.store == nil {
-		return nil
-	}
-	return c.store.UserCache().ClearUserCache(ctx, users...)
 }

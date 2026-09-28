@@ -16,7 +16,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/internal/identitytest"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -260,28 +259,31 @@ func TestSignInAuditsEveryAttemptOnAKnownAccount(t *testing.T) {
 	}
 }
 
-// enableLessStore loads accounts without their enable flag, as a cached
-// row of an older layout does.
-type enableLessStore struct{ Store }
-
-func (s enableLessStore) User() repository.UserRepo { return enableLessUsers{s.Store.User()} }
-
-type enableLessUsers struct{ repository.UserRepo }
-
-func (r enableLessUsers) FindOne(ctx context.Context, id int64) (*user.User, error) {
-	u, err := r.UserRepo.FindOne(ctx, id)
-	if u != nil {
-		u.Enable = nil
+// cacheWithoutEnableFlag caches the account under keys the way a cached row
+// of an older layout reads: without the enable flag.
+func (f *fixture) cacheWithoutEnableFlag(t *testing.T, userID int64, keys ...string) {
+	t.Helper()
+	loaded, err := f.Store.User().FindOne(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return u, err
-}
-
-func (r enableLessUsers) FindOneByEmail(ctx context.Context, email string) (*user.User, error) {
-	u, err := r.UserRepo.FindOneByEmail(ctx, email)
-	if u != nil {
-		u.Enable = nil
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return u, err
+	var row map[string]any
+	if err := json.Unmarshal(encoded, &row); err != nil {
+		t.Fatal(err)
+	}
+	delete(row, "Enable")
+	if encoded, err = json.Marshal(row); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if err := f.Mini.Set(key, string(encoded)); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // An account without an enable flag is refused as disabled rather than
@@ -289,8 +291,9 @@ func (r enableLessUsers) FindOneByEmail(ctx context.Context, email string) (*use
 func TestSignInRefusesAnAccountWithoutEnableFlag(t *testing.T) {
 	f := newFixture(t)
 	owner := f.account(t, "email", "owner@example.com", "password-1")
-	f.account(t, "mobile", "+8613800138000", "password-1")
-	f.svc = NewService(Deps{Store: enableLessStore{f.Store}, Redis: f.Redis, Config: func() Snapshot { return *f.cfg }})
+	phoneOwner := f.account(t, "mobile", "+8613800138000", "password-1")
+	f.cacheWithoutEnableFlag(t, owner.Id, "cache:user:id:"+itoa(owner.Id), "cache:user:email:v2:owner@example.com")
+	f.cacheWithoutEnableFlag(t, phoneOwner.Id, "cache:user:id:"+itoa(phoneOwner.Id))
 
 	_, err := f.svc.UserLogin(identitytest.Context(), &dto.UserLoginRequest{Email: "owner@example.com", Password: "password-1"})
 	assertCode(t, err, xerr.UserDisabled)

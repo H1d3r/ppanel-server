@@ -3,33 +3,17 @@ package systemsetting
 import (
 	"context"
 
+	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
-
-	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 )
 
-type UpdateNodeConfigLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-func newUpdateNodeConfigLogic(ctx context.Context, deps Deps) *UpdateNodeConfigLogic {
-	return &UpdateNodeConfigLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
+// UpdateNodeConfig stores the node settings, kept in the server settings
+// category, and reloads the node subsystem.
+func (s *Service) UpdateNodeConfig(ctx context.Context, req *dto.NodeConfig) error {
+	if err := updateConfigFields(ctx, s.deps, "server", convertedConfigFields(*req)); err != nil {
+		logger.WithContext(ctx).Errorw("[UpdateNodeConfig] update node config error", logger.Field("error", err.Error()))
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update server config error: %v", err)
 	}
-}
-
-func (l *UpdateNodeConfigLogic) UpdateNodeConfig(req *dto.NodeConfig) error {
-	err := updateConfigFields(l.ctx, l.deps, "server", convertedConfigFields(*req))
-	if err != nil {
-		l.Errorw("[UpdateNodeConfig] update node config error", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update server config error: %v", err)
-	}
-	l.deps.reinit("node")
-	return nil
+	return s.deps.reinit("node")
 }

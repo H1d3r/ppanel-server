@@ -14,7 +14,6 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 )
 
 // ResetTraffic creates a paid traffic-reset order for an active subscription.
@@ -30,23 +29,23 @@ func (s *Service) ResetTraffic(ctx context.Context, req *dto.ResetTrafficOrderRe
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user subscribe %d", req.UserSubscribeID)
 	}
 	if userSubscribe.UserId != u.Id {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "subscription does not belong to the current user")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "subscription does not belong to the current user")
 	}
 	if userSubscribe.EntitlementSource != "" {
 		return nil, usersub.ErrProviderManaged
 	}
 	// A reset restores an exhausted subscription, never a refunded or stopped one.
 	if usersub.OnHold(userSubscribe.Status) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "refunded or stopped subscription cannot reset traffic")
+		return nil, xerr.Errorf(xerr.SubscribeNotAvailable, "refunded or stopped subscription cannot reset traffic")
 	}
 	// NoLimit subscriptions use the Unix epoch as their expiry sentinel. A paid
 	// traffic reset must not be created for a subscription whose finite term has
 	// already elapsed, because it cannot restore access or extend that term.
 	if now := timeutil.Now(); userSubscribe.ExpireTime.Unix() > 0 && userSubscribe.ExpireTime.Before(now) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "subscription expired")
+		return nil, xerr.Errorf(xerr.SubscribeNotAvailable, "subscription expired")
 	}
 	if userSubscribe.Subscribe == nil {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.ERROR), "subscribe of user subscribe %d not found", req.UserSubscribeID)
+		return nil, xerr.Errorf(xerr.ERROR, "subscribe of user subscribe %d not found", req.UserSubscribeID)
 	}
 	method, err := gateway.LookupMethod(ctx, s.deps.Payments, req.Payment)
 	if err != nil {

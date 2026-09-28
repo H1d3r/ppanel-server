@@ -13,61 +13,38 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-type GetServerConfigLogic struct {
-	logger.Logger
-	ctx      context.Context
-	deps     Deps
-	request  RequestMeta
-	response ResponseMeta
-}
-
-// NewGetServerConfigLogic Get server config
-func newGetServerConfigLogic(ctx context.Context, deps Deps, request RequestMeta) *GetServerConfigLogic {
-	return &GetServerConfigLogic{
-		Logger:   logger.WithContext(ctx),
-		ctx:      ctx,
-		deps:     deps,
-		request:  request,
-		response: NewResponseMeta(),
-	}
-}
-
-func (l *GetServerConfigLogic) ResponseMeta() ResponseMeta {
-	return l.response
-}
-
-func (l *GetServerConfigLogic) GetServerConfig(req *dto.GetServerConfigRequest) (resp *dto.GetServerConfigResponse, err error) {
+// GetServerConfig returns a server protocol's configuration in the legacy
+// shape, from the server's response cache when it holds one. meta carries
+// the node's If-None-Match: a matching ETag returns xerr.ErrNotModified. The
+// returned response metadata holds the headers set before any error.
+func (s *Service) GetServerConfig(ctx context.Context, req *dto.GetServerConfigRequest, meta RequestMeta) (*dto.GetServerConfigResponse, ResponseMeta, error) {
+	log := logger.WithContext(ctx)
+	response := NewResponseMeta()
 	cacheKey := fmt.Sprintf("%s%d:%s", node.ServerConfigCacheKey, req.ServerId, req.Protocol)
-	cache, err := l.deps.Redis.Get(l.ctx, cacheKey).Result()
-	if err == nil {
-		if cache != "" {
-			etag := httpx.GenerateETag([]byte(cache))
-			//  Check If-None-Match header
-			match := l.request.IfNoneMatch
-			if match == etag {
-				return nil, xerr.StatusNotModified
-			}
-			l.response.SetHeader("ETag", etag)
-			resp = &dto.GetServerConfigResponse{}
-			err = json.Unmarshal([]byte(cache), resp)
-			if err != nil {
-				l.Errorw("[ServerConfigCacheKey] json unmarshal error", logger.Field("error", err.Error()))
-				return nil, err
-			}
-			return resp, nil
+	if cache, err := s.deps.Redis.Get(ctx, cacheKey).Result(); err == nil && cache != "" {
+		etag := httpx.GenerateETag([]byte(cache))
+		if meta.IfNoneMatch == etag {
+			return nil, response, xerr.ErrNotModified
 		}
+		response.SetHeader("ETag", etag)
+		resp := &dto.GetServerConfigResponse{}
+		if err := json.Unmarshal([]byte(cache), resp); err != nil {
+			log.Errorw("[ServerConfigCacheKey] json unmarshal error", logger.Field("error", err.Error()))
+			return nil, response, err
+		}
+		return resp, response, nil
 	}
-	generation, err := l.deps.Store.Node().ServerCacheGeneration(l.ctx, req.ServerId)
+	generation, err := s.deps.Caches.ServerCacheGeneration(ctx, req.ServerId)
 	if err != nil {
-		return nil, err
+		return nil, response, err
 	}
-	data, err := l.deps.Store.Node().FindOneServer(l.ctx, req.ServerId)
+	data, err := s.deps.Servers.FindOneServer(ctx, req.ServerId)
 	if err != nil {
-		l.Errorw("[GetServerConfig] FindOne error", logger.Field("error", err.Error()))
-		return nil, err
+		log.Errorw("[GetServerConfig] FindOne error", logger.Field("error", err.Error()))
+		return nil, response, err
 	}
 
-	// compatible hysteria2, remove in future versions
+	// Older nodes still ask for hysteria by its former name, hysteria2.
 	protocolRequest := req.Protocol
 	if protocolRequest == Hysteria2 {
 		protocolRequest = Hysteria
@@ -75,55 +52,54 @@ func (l *GetServerConfigLogic) GetServerConfig(req *dto.GetServerConfigRequest) 
 
 	protocols, err := data.UnmarshalProtocols()
 	if err != nil {
-		return nil, err
+		return nil, response, err
 	}
 	var cfg map[string]any
 	matched := false
 	for _, protocol := range protocols {
 		if protocol.Enable && protocol.Type == protocolRequest {
 			matched = true
-			cfg = l.compatible(protocol)
+			cfg = compatible(protocol)
 			break
 		}
 	}
 
 	if cfg == nil {
 		if matched {
-			return nil, fmt.Errorf("protocol %s is not supported by the legacy server config endpoint; use /v2/server/{server_id}", req.Protocol)
+			return nil, response, fmt.Errorf("protocol %s is not supported by the legacy server config endpoint; use /v2/server/{server_id}", req.Protocol)
 		}
-		return nil, fmt.Errorf("protocol %s not found or disabled", req.Protocol)
+		return nil, response, fmt.Errorf("protocol %s not found or disabled", req.Protocol)
 	}
 
-	resp = &dto.GetServerConfigResponse{
+	settings := s.deps.Config().Node
+	resp := &dto.GetServerConfigResponse{
 		Basic: dto.ServerBasic{
-			PullInterval: l.deps.Config().Node.NodePullInterval,
-			PushInterval: l.deps.Config().Node.NodePushInterval,
+			PullInterval: settings.NodePullInterval,
+			PushInterval: settings.NodePushInterval,
 		},
 		Protocol: req.Protocol,
 		Config:   cfg,
 	}
 	c, err := json.Marshal(resp)
 	if err != nil {
-		l.Errorw("[GetServerConfig] json marshal error", logger.Field("error", err.Error()))
-		return nil, err
+		log.Errorw("[GetServerConfig] json marshal error", logger.Field("error", err.Error()))
+		return nil, response, err
 	}
 	etag := httpx.GenerateETag(c)
-	l.response.SetHeader("ETag", etag)
-	if err = l.deps.Store.Node().SetServerCache(l.ctx, req.ServerId, cacheKey, c, generation); err != nil {
-		l.Errorw("[GetServerConfig] cache set error", logger.Field("error", err.Error()))
+	response.SetHeader("ETag", etag)
+	if err := s.deps.Caches.SetServerCache(ctx, req.ServerId, cacheKey, c, generation); err != nil {
+		log.Errorw("[GetServerConfig] cache set error", logger.Field("error", err.Error()))
 	}
-	//  Check If-None-Match header
-	match := l.request.IfNoneMatch
-	if match == etag {
-		return nil, xerr.StatusNotModified
+	if meta.IfNoneMatch == etag {
+		return nil, response, xerr.ErrNotModified
 	}
 
-	return resp, nil
+	return resp, response, nil
 }
 
 // compatible renders a protocol in the legacy server-config shape, or nil for
 // a protocol that shape cannot express.
-func (l *GetServerConfigLogic) compatible(config node.Protocol) map[string]any {
+func compatible(config node.Protocol) map[string]any {
 	var result any
 	switch config.Type {
 	case ShadowSocks:

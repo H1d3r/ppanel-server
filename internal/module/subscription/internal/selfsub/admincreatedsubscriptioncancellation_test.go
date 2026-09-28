@@ -6,15 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 )
 
 // A subscription an administrator created has no order: cancelling it runs
-// both stages but moves no money, and drops the cached subscription and
-// plan.
+// both stages, the billing one with no order and nothing to refund, and drops
+// the cached subscription and plan.
 func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -39,19 +38,12 @@ func TestUnsubscribe_AdminCreatedSubscription_SkipsRefund(t *testing.T) {
 	if got := f.Load(t, sub.Id); got.Status != usersub.SubscribeStatusDeducted {
 		t.Fatalf("subscription status = %d, want Deducted", got.Status)
 	}
-	if result, ok := f.marker(t, unsubscribeCancelConsumer, sub.Id); !ok || result != "0|0" {
+	if result, ok := f.cancelMarker(t, sub.Id); !ok || result != "0|0" {
 		t.Fatalf("cancellation marker = %q, %v; want no order and no refund", result, ok)
 	}
-	if _, ok := f.marker(t, unsubscribeRefundConsumer, sub.Id); !ok {
-		t.Fatal("the settled refund stage left no marker")
-	}
-	if f.billing.locks != 0 || len(f.billing.wallets) != 0 {
-		t.Fatalf("wallets touched: %d locks, %+v", f.billing.locks, f.billing.wallets)
-	}
-	for _, typ := range []log.Type{log.TypeBalance, log.TypeGift, log.TypeCommission} {
-		if rows := f.Logs(t, typ); len(rows) != 0 {
-			t.Fatalf("money movement logged: %+v", rows)
-		}
+	want := refund{userID: owner, subID: sub.Id}
+	if got, ok := f.refunds.settled[sub.Id]; !ok || got != want || len(f.refunds.requests) != 1 {
+		t.Fatalf("settled refund = %+v (%d requests), want %+v: the stage runs with no order and no amount", got, len(f.refunds.requests), want)
 	}
 	if f.Cached("cache:user:subscribe:token:admin-token") || f.Cached("cache:subscribe:id:300") {
 		t.Fatal("the cancelled subscription or its plan stays cached")

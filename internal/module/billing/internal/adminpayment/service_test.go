@@ -269,9 +269,7 @@ func TestCreateStripeMethodRegistersItsWebhookEndpoint(t *testing.T) {
 	repo := newMemoryPayments()
 	enable := true
 	svc := NewService(Deps{Payments: repo, Orders: &pendingOrders{}, Gateways: registry,
-		NotifyHosts: func() gateway.NotifyHosts {
-			return gateway.NotifyHosts{Host: "0.0.0.0", SiteHost: "panel.example.test"}
-		}})
+		SiteHost: func() string { return "panel.example.test" }})
 
 	resp, err := svc.Create(context.Background(), &dto.CreatePaymentMethodRequest{
 		Name: "Stripe", Platform: "Stripe", Enable: &enable,
@@ -301,7 +299,7 @@ func TestCreateStripeMethodRemovesEndpointWhenSaveFails(t *testing.T) {
 	repo.insertErr = errors.New("database unavailable")
 	enable := true
 	svc := NewService(Deps{Payments: repo, Orders: &pendingOrders{}, Gateways: registry,
-		NotifyHosts: func() gateway.NotifyHosts { return gateway.NotifyHosts{SiteHost: "panel.example.test"} }})
+		SiteHost: func() string { return "panel.example.test" }})
 
 	_, err := svc.Create(context.Background(), &dto.CreatePaymentMethodRequest{
 		Name: "Stripe", Platform: "Stripe", Enable: &enable,
@@ -318,7 +316,7 @@ func TestCreateStripeMethodRequiresANotifyURL(t *testing.T) {
 	registry, fake := stripeRegistry(t)
 	enable := true
 	svc := NewService(Deps{Payments: newMemoryPayments(), Orders: &pendingOrders{}, Gateways: registry,
-		NotifyHosts: func() gateway.NotifyHosts { return gateway.NotifyHosts{Host: "0.0.0.0"} }})
+		SiteHost: func() string { return "" }})
 	_, err := svc.Create(context.Background(), &dto.CreatePaymentMethodRequest{
 		Name: "Stripe", Platform: "Stripe", Enable: &enable,
 		Config: map[string]any{"secret_key": "sk_test_1", "payment": "card"},

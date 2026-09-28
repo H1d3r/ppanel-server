@@ -5,14 +5,19 @@ import (
 
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )
+
+// passwordRehasher stores hash as the password of the account id, provided
+// its stored hash is still currentHash, and reports whether it did.
+type passwordRehasher interface {
+	UpgradePasswordHash(ctx context.Context, id int64, currentHash, hash, algo, salt string) (bool, error)
+}
 
 // upgradePasswordAfterLogin rehashes a password stored with a legacy
 // algorithm once its owner proved it. The rehash is best-effort: a failure
 // is logged and the sign-in goes on.
-func upgradePasswordAfterLogin(ctx context.Context, users repository.UserRepo, userInfo *user.User, plainPassword string) {
+func upgradePasswordAfterLogin(ctx context.Context, users passwordRehasher, userInfo *user.User, plainPassword string) {
 	if userInfo == nil || userInfo.Id == 0 || plainPassword == "" {
 		return
 	}

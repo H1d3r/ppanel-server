@@ -1,3 +1,6 @@
+// Package exchangerate converts the site currency for gateways that collect
+// another one: the apilayer conversion API and the cache of the refreshed CNY
+// rate that checkout reads first.
 package exchangerate
 
 import (

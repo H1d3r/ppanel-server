@@ -3,7 +3,6 @@ package logger
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path"
 	"reflect"
@@ -54,7 +53,7 @@ type (
 // to the console.
 func Close() error {
 	if w := writer.Swap(nil); w != nil {
-		return w.(io.Closer).Close()
+		return w.Close()
 	}
 
 	return nil
@@ -65,13 +64,6 @@ func Debug(v ...any) {
 	if shallLog(DebugLevel) {
 		msg, fields := splitLogArgs(v)
 		writeDebug(msg, fields...)
-	}
-}
-
-// Debugf writes v with format into access log.
-func Debugf(format string, v ...any) {
-	if shallLog(DebugLevel) {
-		writeDebug(fmt.Sprintf(format, v...))
 	}
 }
 
@@ -173,24 +165,9 @@ func Infow(msg string, fields ...LogField) {
 	}
 }
 
-// Must checks if err is nil, otherwise logs the error and exits.
-func Must(err error) {
-	if err == nil {
-		return
-	}
-
-	msg := redactText(fmt.Sprintf("%+v\n\n%s", err.Error(), debug.Stack()))
-	log.Print(msg)
-	getWriter().Severe(msg)
-
-	if ExitOnFatal.Load() {
-		os.Exit(1)
-	} else {
-		panic(msg)
-	}
-}
-
-// Reset clears the writer and resets the log level.
+// Reset removes the output and returns it, so that a test can install its
+// own and restore this one with SetWriter; until an output is set, entries
+// go to a new console output.
 func Reset() Writer {
 	return writer.Swap(nil)
 }
@@ -207,14 +184,10 @@ func SetWriter(w Writer) {
 	}
 }
 
-// SetUp sets up the logx.
-// If already set up, return nil.
-// We allow SetUp to be called multiple times, because, for example,
-// we need to allow different service frameworks to initialize logx respectively.
+// SetUp configures the logger from c. Only the first call takes effect;
+// later calls change nothing and return nil, so the process keeps the
+// output it logged to first.
 func SetUp(c LogConf) (err error) {
-	// Ignore the later SetUp calls.
-	// Because multiple services in one process might call SetUp respectively.
-	// Need to wait for the first caller to complete the execution.
 	setupOnce.Do(func() {
 		setupLogLevel(c)
 
@@ -301,10 +274,10 @@ func createOutput(path string) (io.WriteCloser, error) {
 	var rule RotateRule
 	switch options.rotationRule {
 	case sizeRotationRule:
-		rule = newSizeLimitRotateRule(path, backupFileDelimiter, options.keepDays, options.maxSize,
+		rule = newSizeLimitRotateRule(path, options.keepDays, options.maxSize,
 			options.maxBackups, options.gzipEnabled)
 	default:
-		rule = defaultRotateRule(path, backupFileDelimiter, options.keepDays, options.gzipEnabled)
+		rule = defaultRotateRule(path, options.keepDays, options.gzipEnabled)
 	}
 
 	return newRotateLogger(path, rule, options.gzipEnabled)
@@ -325,7 +298,7 @@ func encodeStringer(v fmt.Stringer) (ret string) {
 func encodeWithRecover(arg any, fn func() string) (ret string) {
 	defer func() {
 		if err := recover(); err != nil {
-			if v := reflect.ValueOf(arg); v.Kind() == reflect.Ptr && v.IsNil() {
+			if v := reflect.ValueOf(arg); v.Kind() == reflect.Pointer && v.IsNil() {
 				ret = nilAngleString
 			} else {
 				ret = fmt.Sprintf("panic: %v", err)

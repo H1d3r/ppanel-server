@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	stdErrors "errors"
+	"errors"
 	"strconv"
 	"time"
 
@@ -17,7 +17,7 @@ import (
 
 // ErrTooManyStreams reports that the ticket already holds the maximum number
 // of concurrent event streams.
-var ErrTooManyStreams = stdErrors.New("too many concurrent event streams")
+var ErrTooManyStreams = errors.New("too many concurrent event streams")
 
 // maxStreamsPerTicket caps the concurrent streams one ticket may hold.
 const maxStreamsPerTicket = 3
@@ -263,7 +263,7 @@ type RedisBroker struct {
 // only counts on wake-ups Redis actually delivers.
 func (b RedisBroker) Subscribe(ctx context.Context, orderNo string) (Subscription, error) {
 	if b.Client == nil {
-		return nil, stdErrors.New("redis is not configured")
+		return nil, errors.New("redis is not configured")
 	}
 	pubsub := b.Client.Subscribe(ctx, order.EventChannel(orderNo))
 	confirmCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -324,6 +324,8 @@ func (l RedisLimiter) Acquire(ctx context.Context, ticket string, ttl time.Durat
 		return func() {}, false
 	}
 	return func() {
+		// The release runs when the stream ends, usually because the client
+		// went away and cancelled ctx; the slot must be returned anyway.
 		_, _ = l.Client.Decr(context.WithoutCancel(ctx), key).Result()
 	}, true
 }

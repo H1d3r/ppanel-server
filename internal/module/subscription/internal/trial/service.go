@@ -17,7 +17,10 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-const inboxTrialGrant = "subscription.trial_grant"
+// Consumer is the trial grant's consumer identity: the name it subscribes
+// to identity.user_registered with and its inbox markers' consumer. It is
+// persisted; renaming it would grant committed trials again.
+const Consumer = "subscription.trial_grant"
 
 // Policy is the per-call view of the runtime-mutable trial settings.
 type Policy struct {
@@ -31,10 +34,15 @@ type Policy struct {
 // them from the composition root.
 type Deps struct {
 	Plans repository.SubscribeRepo
-	Cache repository.UserCacheRepo
+	Cache CacheInvalidator
 	Store Store
 	// TrialPolicy snapshots the runtime-mutable trial settings per call.
 	TrialPolicy func() Policy
+}
+
+// CacheInvalidator drops cached subscription rows.
+type CacheInvalidator interface {
+	ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error
 }
 
 // Service is the trial-grant entry point used by the subscription facade.
@@ -55,7 +63,7 @@ func (s *Service) GrantTrial(ctx context.Context, userID int64) error {
 	policy := s.deps.TrialPolicy()
 	var granted *usersub.Subscribe
 	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
-		mark, err := store.Inbox().Find(ctx, inboxTrialGrant, fmt.Sprintf("%d", userID))
+		mark, err := store.Inbox().Find(ctx, Consumer, fmt.Sprintf("%d", userID))
 		if err != nil {
 			return err
 		}
@@ -98,7 +106,7 @@ func (s *Service) GrantTrial(ctx context.Context, userID int64) error {
 				return err
 			}
 		}
-		return store.Inbox().Insert(ctx, inboxTrialGrant, fmt.Sprintf("%d", userID), "")
+		return store.Inbox().Insert(ctx, Consumer, fmt.Sprintf("%d", userID), "")
 	})
 	if err != nil {
 		return err

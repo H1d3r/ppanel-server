@@ -7,12 +7,12 @@ import (
 
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 )
 
+// passwordUpgradeUserRepo records the rehash it is asked to store and
+// reports updated as its outcome.
 type passwordUpgradeUserRepo struct {
-	repository.UserRepo
 	calls       int
 	currentHash string
 	password    string
@@ -20,6 +20,8 @@ type passwordUpgradeUserRepo struct {
 	salt        string
 	updated     bool
 }
+
+var _ passwordRehasher = (*passwordUpgradeUserRepo)(nil)
 
 func (r *passwordUpgradeUserRepo) UpgradePasswordHash(_ context.Context, _ int64, currentHash, hash, algo, salt string) (bool, error) {
 	r.calls++

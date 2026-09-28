@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
+	"github.com/perfect-panel/server/internal/module/platform/internal/readmodel"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -64,7 +64,7 @@ func (s *Service) QueryRevenueStatistics(ctx context.Context) (*dto.RevenueStati
 	return resp, nil
 }
 
-func ordersStatistics(date string, total order.OrdersTotal) dto.OrdersStatistics {
+func ordersStatistics(date string, total readmodel.OrdersTotal) dto.OrdersStatistics {
 	return dto.OrdersStatistics{
 		Date:               date,
 		AmountTotal:        total.AmountTotal,
@@ -73,10 +73,10 @@ func ordersStatistics(date string, total order.OrdersTotal) dto.OrdersStatistics
 	}
 }
 
-func ordersBreakdown(periods []order.OrdersTotalWithDate) []dto.OrdersStatistics {
+func ordersBreakdown(periods []readmodel.OrdersTotalWithDate) []dto.OrdersStatistics {
 	list := make([]dto.OrdersStatistics, len(periods))
 	for i, period := range periods {
-		list[i] = ordersStatistics(period.Date, order.OrdersTotal{
+		list[i] = ordersStatistics(period.Date, readmodel.OrdersTotal{
 			AmountTotal:        period.AmountTotal,
 			NewOrderAmount:     period.NewOrderAmount,
 			RenewalOrderAmount: period.RenewalOrderAmount,
@@ -85,35 +85,21 @@ func ordersBreakdown(periods []order.OrdersTotalWithDate) []dto.OrdersStatistics
 	return list
 }
 
-// mockRevenueStatistics is a mock function to simulate revenue statistics data.
+// mockRevenueStatistics is the demo deployment's canned revenue statistics.
 func mockRevenueStatistics() *dto.RevenueStatisticsResponse {
 	now := timeutil.Now()
 
-	// Generate daily data for the current month (from 1st to current date)
-	monthlyList := make([]dto.OrdersStatistics, 7)
-	for i := 0; i < 7; i++ {
-		dayDate := now.AddDate(0, 0, -(6 - i))
-		baseAmount := int64(25000 + ((6 - i) * 3000) + ((6-i)%3)*8000)
-		monthlyList[i] = dto.OrdersStatistics{
-			Date:               dayDate.Format("2006-01-02"),
-			AmountTotal:        baseAmount,
-			NewOrderAmount:     int64(float64(baseAmount) * 0.68),
-			RenewalOrderAmount: int64(float64(baseAmount) * 0.32),
-		}
-	}
-
-	// Generate monthly data for the past 6 months (oldest first)
-	allList := make([]dto.OrdersStatistics, 6)
-	for i := 0; i < 6; i++ {
-		monthDate := now.AddDate(0, -(5 - i), 0)
-		baseAmount := int64(1800000 + ((5 - i) * 200000) + ((5-i)%2)*500000)
-		allList[i] = dto.OrdersStatistics{
-			Date:               monthDate.Format("2006-01"),
-			AmountTotal:        baseAmount,
-			NewOrderAmount:     int64(float64(baseAmount) * 0.68),
-			RenewalOrderAmount: int64(float64(baseAmount) * 0.32),
-		}
-	}
+	monthlyList, allList := demoSeries(now,
+		func(ago int) int64 { return int64(25000 + ago*3000 + (ago%3)*8000) },
+		func(ago int) int64 { return int64(1800000 + ago*200000 + (ago%2)*500000) },
+		func(date string, amount int64) dto.OrdersStatistics {
+			return dto.OrdersStatistics{
+				Date:               date,
+				AmountTotal:        amount,
+				NewOrderAmount:     int64(float64(amount) * 0.68),
+				RenewalOrderAmount: int64(float64(amount) * 0.32),
+			}
+		})
 
 	return &dto.RevenueStatisticsResponse{
 		Today: dto.OrdersStatistics{

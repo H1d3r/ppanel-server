@@ -34,7 +34,7 @@ func TestDeviceSecurityRejectsUnsignedAndReplayedRequests(t *testing.T) {
 		return appconfig.DeviceConfig{Enable: true, EnableSecurity: true, OnlyRealDevice: true, SecuritySecret: secret}
 	}, client), func(_ context.Context, c *app.RequestContext) {
 		calls++
-		c.JSON(200, map[string]interface{}{"data": map[string]string{"ok": "true"}})
+		c.JSON(200, map[string]any{"data": map[string]string{"ok": "true"}})
 	})
 	data, timestamp, err := deviceauth.Encrypt([]byte(`{"identifier":"device"}`), secret)
 	if err != nil {
@@ -107,7 +107,7 @@ func TestDeviceSecurityRequiresReplayStoreAndValidQueryEnvelope(t *testing.T) {
 	}
 	rdb := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: rdb.Addr(), MaxRetries: -1})
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 	rdb.SetError("unavailable")
 	if err := DecryptDeviceRequest(context.Background(), makeRequest(), secret, client); err == nil {
 		t.Fatal("Redis error accepted")

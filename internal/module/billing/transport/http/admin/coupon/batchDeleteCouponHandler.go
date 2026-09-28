@@ -1,3 +1,5 @@
+// Package coupon holds the HTTP handlers of the admin coupon API; they adapt
+// requests to the billing facade.
 package coupon
 
 import (

@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -13,13 +12,14 @@ import (
 )
 
 // signIn ends a successful sign-in: it binds the requested device, if any,
-// and issues the session.
-func (s *Service) signIn(ctx context.Context, userID int64, deviceIdentifier, loginType string) (*dto.LoginResponse, error) {
+// and issues the session. The session's login type comes from the request
+// context, where the device transport marks device sign-ins.
+func (s *Service) signIn(ctx context.Context, userID int64, deviceIdentifier string) (*dto.LoginResponse, error) {
 	device, err := s.bindLoginDevice(ctx, deviceIdentifier, userID)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.InvalidAccess, "bind device")
 	}
-	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().sessions(), userID, loginType, device)
+	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().sessions(), userID, "", device)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (s *Service) bindLoginDevice(ctx context.Context, identifier string, userID
 		return nil, err
 	}
 	if device == nil || device.Id <= 0 || device.UserId != userID || !device.Enabled {
-		return nil, fmt.Errorf("invalid device binding: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "invalid device binding")
 	}
 	return device, nil
 }
@@ -47,14 +47,14 @@ func (s *Service) findAccount(ctx context.Context, authType, identifier string) 
 	method, err := s.deps.Store.UserAuth().FindUserAuthMethodByOpenID(ctx, authType, identifier)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("no account has this %s identity: %w", authType, xerr.NewErrCode(xerr.UserNotExist))
+			return nil, xerr.Errorf(xerr.UserNotExist, "no account has this %s identity", authType)
 		}
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find %s identity", authType)
 	}
 	userInfo, err := s.deps.Store.User().FindOne(ctx, method.UserId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("user %d of the %s identity does not exist: %w", method.UserId, authType, xerr.NewErrCode(xerr.UserNotExist))
+			return nil, xerr.Errorf(xerr.UserNotExist, "user %d of the %s identity does not exist", method.UserId, authType)
 		}
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user %d", method.UserId)
 	}

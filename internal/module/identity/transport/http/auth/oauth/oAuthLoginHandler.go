@@ -1,3 +1,5 @@
+// Package oauth holds the identity module's handlers of OAuth sign-in: the
+// authorization URL, the token exchange and Apple's form-post callback.
 package oauth
 
 import (
@@ -10,6 +12,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// OAuthLoginService is the part of the identity facade OAuthLoginHandler
+// calls.
+type OAuthLoginService interface {
+	OAuthLogin(ctx context.Context, req *dto.OAuthLoginRequest) (*dto.OAuthLoginResponse, error)
+}
+
+var _ OAuthLoginService = identity.Service(nil)
+
 // OAuthLoginHandler documents OAuth login.
 //
 // @Summary OAuth login
@@ -19,7 +29,7 @@ import (
 // @Param request body dto.OAuthLoginRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.OAuthLoginResponse}
 // @Router /v1/auth/oauth/login [post]
-func OAuthLoginHandler(service identity.Service) app.HandlerFunc {
+func OAuthLoginHandler(service OAuthLoginService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.OAuthLoginRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

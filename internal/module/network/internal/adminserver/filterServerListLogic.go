@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	"github.com/perfect-panel/server/internal/module/network/internal/protocolmap"
@@ -22,9 +21,10 @@ type serverListReader interface {
 	OnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) (node.OnlineUserSubscribe, error)
 }
 
-// onlineSubscriptionReader reads the subscriptions behind the online users.
-type onlineSubscriptionReader interface {
-	FindSubscribeDetailsByIds(ctx context.Context, ids []int64) ([]*usersub.SubscribeDetails, error)
+// OnlineSubscriptionReader reads the subscriptions behind the online users,
+// with their plans.
+type OnlineSubscriptionReader interface {
+	SubscriptionDetailsByIDs(ctx context.Context, ids []int64) ([]*usersub.SubscribeDetails, error)
 }
 
 // listedServer is a server of the page with the online IPs its nodes
@@ -38,10 +38,10 @@ type listedServer struct {
 // online users. The subscriptions behind every online user of the page are
 // read in one query, not one per user.
 func (s *Service) FilterServerList(ctx context.Context, req *dto.FilterServerListRequest) (*dto.FilterServerListResponse, error) {
-	return listServers(ctx, s.deps.Store.Node(), s.deps.Store.UserSubscription(), req)
+	return listServers(ctx, s.deps.Store.Node(), s.deps.Subscriptions, req)
 }
 
-func listServers(ctx context.Context, servers serverListReader, subscriptions onlineSubscriptionReader, req *dto.FilterServerListRequest) (*dto.FilterServerListResponse, error) {
+func listServers(ctx context.Context, servers serverListReader, subscriptions OnlineSubscriptionReader, req *dto.FilterServerListRequest) (*dto.FilterServerListResponse, error) {
 	log := logger.WithContext(ctx)
 	total, data, err := servers.FilterServerList(ctx, &node.FilterParams{
 		Page:   req.Page,
@@ -56,8 +56,7 @@ func listServers(ctx context.Context, servers serverListReader, subscriptions on
 	page := make([]listedServer, 0, len(data))
 	var subscriptionIDs []int64
 	for _, datum := range data {
-		var server dto.Server
-		mapping.DeepCopy(&server, datum)
+		server := serverDTO(datum)
 		stored, err := datum.UnmarshalProtocols()
 		if err != nil {
 			log.Errorw("[FilterServerList] Unmarshal protocols failed", logger.Field("error", err.Error()), logger.Field("server_id", datum.Id))
@@ -94,6 +93,26 @@ func listServers(ctx context.Context, servers serverListReader, subscriptions on
 	return &dto.FilterServerListResponse{List: list, Total: total}, nil
 }
 
+// serverDTO is the listed form of a stored server, before the list adds its
+// protocols and status. Its times are Unix milliseconds; a server that never
+// reported has a zero report time.
+func serverDTO(datum *node.Server) dto.Server {
+	server := dto.Server{
+		Id:        datum.Id,
+		Name:      datum.Name,
+		Country:   datum.Country,
+		City:      datum.City,
+		Address:   datum.Address,
+		Sort:      datum.Sort,
+		CreatedAt: datum.CreatedAt.UnixMilli(),
+		UpdatedAt: datum.UpdatedAt.UnixMilli(),
+	}
+	if datum.LastReportedAt != nil {
+		server.LastReportedAt = datum.LastReportedAt.UnixMilli()
+	}
+	return server
+}
+
 // onlineIPs gathers the IPs the server's protocols report online, merged by
 // subscription.
 func onlineIPs(ctx context.Context, servers serverListReader, serverID int64, protocols []dto.Protocol) map[int64][]dto.ServerOnlineIP {
@@ -116,12 +135,12 @@ func onlineIPs(ctx context.Context, servers serverListReader, serverID int64, pr
 // onlineSubscriptions reads the online users' subscriptions with their plans
 // in one query. Without them the users are left out, as a missing
 // subscription always was.
-func onlineSubscriptions(ctx context.Context, subscriptions onlineSubscriptionReader, ids []int64) map[int64]dto.ServerOnlineUser {
+func onlineSubscriptions(ctx context.Context, subscriptions OnlineSubscriptionReader, ids []int64) map[int64]dto.ServerOnlineUser {
 	users := make(map[int64]dto.ServerOnlineUser, len(ids))
 	if len(ids) == 0 {
 		return users
 	}
-	details, err := subscriptions.FindSubscribeDetailsByIds(ctx, ids)
+	details, err := subscriptions.SubscriptionDetailsByIDs(ctx, ids)
 	if err != nil {
 		logger.WithContext(ctx).Errorw("[FilterServerList] Read online subscriptions failed", logger.Field("error", err.Error()), logger.Field("count", len(ids)))
 		return users

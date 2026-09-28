@@ -6,66 +6,27 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/requestmeta"
-	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type FilterSubscribeLogLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewFilterSubscribeLogLogic Filter subscribe log
-func newFilterSubscribeLogLogic(ctx context.Context, deps Deps) *FilterSubscribeLogLogic {
-	return &FilterSubscribeLogLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *FilterSubscribeLogLogic) FilterSubscribeLog(req *dto.FilterSubscribeLogRequest) (resp *dto.FilterSubscribeLogResponse, err error) {
-	params := &log.FilterParams{
-		Page:      req.Page,
-		Size:      req.Size,
-		Type:      log.TypeSubscribe.Uint8(),
-		Data:      req.Date,
-		StartDate: req.StartDate,
-		EndDate:   req.EndDate,
-		ObjectID:  req.UserId,
-	}
-
+// FilterSubscribeLog pages a user's subscription fetches, optionally those of
+// one subscription.
+func (s *Service) FilterSubscribeLog(ctx context.Context, req *dto.FilterSubscribeLogRequest) (*dto.FilterSubscribeLogResponse, error) {
+	params := filterParams(log.TypeSubscribe, req.UserId, req.FilterLogParams)
+	// The subscription log is searched by subscription only.
+	params.Search = ""
 	if req.UserSubscribeId != 0 {
 		params.Search = `"user_subscribe_id":` + strconv.FormatInt(req.UserSubscribeId, 10)
 	}
-
-	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, params)
-	if err != nil {
-		l.Errorf("[FilterSubscribeLog] failed to filter system log: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "failed to filter system log")
-	}
-
-	var list []dto.SubscribeLog
-	for _, datum := range data {
-		var content log.Subscribe
-		err = content.Unmarshal([]byte(datum.Content))
-		if err != nil {
-			l.Errorf("[FilterSubscribeLog] failed to unmarshal content: %v", err.Error())
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt subscription log %d: %v", datum.Id, err)
-		}
-		list = append(list, withRequestMetadata(&dto.SubscribeLog{
-			UserId:          datum.ObjectID,
+	total, list, err := logPage(ctx, s.deps.Logs, "subscription", params, func(row *log.SystemLog, content *log.Subscribe) dto.SubscribeLog {
+		return withRequestMetadata(&dto.SubscribeLog{
+			UserId:          row.ObjectID,
 			Token:           content.Token,
 			UserSubscribeId: content.UserSubscribeId,
-			Timestamp:       datum.CreatedAt.UnixMilli(),
-		}, requestmeta.Metadata{ClientIP: content.ClientIP, UserAgent: content.UserAgent, ActorID: content.ActorID, IPMetadata: content.IPMetadata}))
+			Timestamp:       row.CreatedAt.UnixMilli(),
+		}, content.Request())
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return &dto.FilterSubscribeLogResponse{
-		Total: total,
-		List:  list,
-	}, nil
+	return &dto.FilterSubscribeLogResponse{Total: total, List: list}, nil
 }

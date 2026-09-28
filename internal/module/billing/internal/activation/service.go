@@ -1,12 +1,14 @@
-// Package activation implements the billing-domain stages of the paid-order
-// activation saga: the recharge wallet credit, the referral commission and
-// the final settlement. Each stage is idempotent (inbox marker or status
-// CAS); Workflow sequences the stages. Only the module facade may
-// reach it.
+// Package activation owns the paid-order activation workflow and implements
+// its billing-domain stages: the recharge wallet credit, the referral
+// commission and the final settlement. Each stage is idempotent (inbox marker
+// or status CAS); Workflow sequences them with the stages other modules run.
+// The task adapter only decodes a message and invokes the billing facade,
+// and only the facade may reach this package.
 package activation
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -15,7 +17,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/timeutil"
-	"github.com/pkg/errors"
 )
 
 // The consumer names are historical (the stages once lived under the

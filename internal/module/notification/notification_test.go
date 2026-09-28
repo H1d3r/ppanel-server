@@ -3,9 +3,11 @@ package notification_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/module/notification/entity/telegramtopic"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
 	"github.com/perfect-panel/server/internal/repository"
@@ -90,12 +93,27 @@ func (a *telegramAPI) count() int {
 	return len(a.calls)
 }
 
+// errNotInFacadeTests answers the writes no facade test makes.
+var errNotInFacadeTests = errors.New("not used by the facade tests")
+
+var (
+	_ notification.Accounts      = fakeAccounts{}
+	_ notification.Subscriptions = fakeSubscriptions{}
+	_ notification.Tickets       = noTickets{}
+	_ notification.Billing       = noBilling{}
+	_ notification.AuditLogs     = noLogs{}
+)
+
+// fakeAccounts knows the bindings it is given and no account.
 type fakeAccounts struct {
-	notification.Accounts
 	// byUser is keyed by authType:userID, byIdentifier by
 	// authType:identifier.
 	byUser       map[string]*user.AuthMethods
 	byIdentifier map[string]*user.AuthMethods
+}
+
+func (f fakeAccounts) FindUser(context.Context, int64) (*user.User, error) {
+	return nil, gorm.ErrRecordNotFound
 }
 
 func (f fakeAccounts) FindUserBinding(_ context.Context, userID int64, authType string) (*user.AuthMethods, error) {
@@ -112,18 +130,80 @@ func (f fakeAccounts) FindBinding(_ context.Context, authType, identifier string
 	return &user.AuthMethods{}, gorm.ErrRecordNotFound
 }
 
+func (f fakeAccounts) ListBindings(_ context.Context, userID int64) ([]*user.AuthMethods, error) {
+	var list []*user.AuthMethods
+	for _, m := range f.byUser {
+		if m.UserId == userID {
+			list = append(list, m)
+		}
+	}
+	slices.SortFunc(list, func(a, b *user.AuthMethods) int { return int(a.Id - b.Id) })
+	return list, nil
+}
+
+func (f fakeAccounts) BindTelegram(context.Context, int64, string) error { return errNotInFacadeTests }
+
+func (f fakeAccounts) SetEnabled(context.Context, int64, bool) error { return errNotInFacadeTests }
+
+func (f fakeAccounts) CountRegistrations(context.Context, time.Time) (int64, error) { return 0, nil }
+
+// fakeSubscriptions lists the subscriptions it is given for every user.
 type fakeSubscriptions struct {
-	notification.Subscriptions
 	subs []*usersub.SubscribeDetails
+}
+
+func (f fakeSubscriptions) Find(context.Context, int64) (*usersub.Subscribe, error) {
+	return nil, gorm.ErrRecordNotFound
 }
 
 func (f fakeSubscriptions) ListByUser(context.Context, int64) ([]*usersub.SubscribeDetails, error) {
 	return f.subs, nil
 }
 
-type noTickets struct{ notification.Tickets }
-type noBilling struct{ notification.Billing }
-type noLogs struct{ notification.AuditLogs }
+func (f fakeSubscriptions) ResetTraffic(context.Context, *usersub.Subscribe) error {
+	return errNotInFacadeTests
+}
+
+func (f fakeSubscriptions) SetStatus(context.Context, *usersub.Subscribe, uint8) error {
+	return errNotInFacadeTests
+}
+
+// noTickets is a support desk without tickets.
+type noTickets struct{}
+
+func (noTickets) CountAwaitingReply(context.Context) (int64, error) { return 0, nil }
+
+func (noTickets) List(context.Context, int, int, *uint8) (int64, []*ticket.Ticket, error) {
+	return 0, nil, nil
+}
+
+func (noTickets) Find(context.Context, int64) (*ticket.Ticket, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (noTickets) Detail(context.Context, int64) (*ticket.Details, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (noTickets) Reply(context.Context, int64, string, string, bool) (uint8, error) {
+	return 0, gorm.ErrRecordNotFound
+}
+
+func (noTickets) SetStatus(context.Context, int64, uint8, bool) error {
+	return gorm.ErrRecordNotFound
+}
+
+// noBilling has no revenue and empty wallets.
+type noBilling struct{}
+
+func (noBilling) Revenue(context.Context, time.Time) (int64, error) { return 0, nil }
+
+func (noBilling) Balance(context.Context, int64) (int64, error) { return 0, nil }
+
+// noLogs has no login recorded.
+type noLogs struct{}
+
+func (noLogs) RecentLogins(context.Context, int64, int) ([]*log.SystemLog, error) { return nil, nil }
 
 const groupID int64 = -1001234
 
@@ -321,7 +401,7 @@ func TestHandleTelegramUpdateWithoutBotDoesNothing(t *testing.T) {
 
 func TestPublishTelegramCommandsPublishesTheUserMenu(t *testing.T) {
 	h := newFacade(t)
-	if err := h.service.PublishTelegramCommands(); err != nil {
+	if err := h.service.PublishTelegramCommands(context.Background()); err != nil {
 		t.Fatalf("PublishTelegramCommands: %v", err)
 	}
 	published := h.api.called("setMyCommands")
@@ -340,7 +420,7 @@ func TestPublishTelegramCommandsPublishesTheUserMenu(t *testing.T) {
 		t.Fatalf("menu = %v (scope %q), want the default-scope user menu", names, published[0]["scope"])
 	}
 	h.bot = nil
-	if err := h.service.PublishTelegramCommands(); err == nil {
+	if err := h.service.PublishTelegramCommands(context.Background()); err == nil {
 		t.Fatal("publishing without a bot reported success")
 	}
 }

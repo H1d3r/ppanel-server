@@ -11,6 +11,14 @@ import (
 
 var _ dto.BindTelegramResponse
 
+// BindTelegramService is the part of the identity facade BindTelegramHandler
+// calls.
+type BindTelegramService interface {
+	BindTelegram(ctx context.Context) (*dto.BindTelegramResponse, error)
+}
+
+var _ BindTelegramService = identity.Service(nil)
+
 // BindTelegramHandler documents Bind Telegram.
 //
 // @Summary Bind Telegram
@@ -19,7 +27,7 @@ var _ dto.BindTelegramResponse
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.BindTelegramResponse}
 // @Router /v1/public/user/bind_telegram [get]
-func BindTelegramHandler(service identity.Service) app.HandlerFunc {
+func BindTelegramHandler(service BindTelegramService) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 
 		resp, err := service.BindTelegram(c)

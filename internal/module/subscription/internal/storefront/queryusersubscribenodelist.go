@@ -101,9 +101,8 @@ func (s *Service) subscriptionNodes(ctx context.Context, userSub *usersub.Subscr
 			return nil, xerr.Wrapf(err, xerr.ERROR, "plan nodes: %v", err)
 		}
 		if len(nodeIDs) > 0 || len(tags) > 0 {
-			enabled := true
 			var err error
-			nodes, err = s.deps.Nodes.ListNodesByScope(ctx, nodeIDs, tags, &enabled, true)
+			nodes, err = s.deps.Nodes.ListEnabledNodesByScope(ctx, nodeIDs, tags)
 			if err != nil {
 				logger.WithContext(ctx).Errorw("[QueryUserSubscribeNodeList] List plan nodes failed", logger.Field("error", err.Error()), logger.Field("subscribe_id", plan.Id))
 				return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list nodes of plan %d", plan.Id)

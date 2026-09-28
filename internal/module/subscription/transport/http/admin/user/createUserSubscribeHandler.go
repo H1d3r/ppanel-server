@@ -1,3 +1,4 @@
+// Package user holds the admin HTTP handlers for the users' subscriptions.
 package user
 
 import (

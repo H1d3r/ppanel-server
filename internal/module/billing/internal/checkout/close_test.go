@@ -47,7 +47,7 @@ func (f *checkoutFixture) markReserved(orderNo string) {
 // coupon use and the gift credit, each exactly once.
 func TestCloseReturnsWhatThePurchaseHeld(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 400)
+	u, ctx := f.buyer(400)
 	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 3 })
 	method := f.epay()
 	f.h.Coupon("SAVE", func(c *coupon.Coupon) { c.Count = 5 })
@@ -91,7 +91,7 @@ func TestCloseReturnsWhatThePurchaseHeld(t *testing.T) {
 // closed again, returning its coupon use and gift credit.
 func TestPurchaseOfASoldOutPlanReleasesTheOrder(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 300)
+	u, ctx := f.buyer(300)
 	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 1 })
 	method := f.epay()
 	f.h.Coupon("SAVE", func(c *coupon.Coupon) { c.Count = 5 })
@@ -119,14 +119,14 @@ func (soldOut) Restore(context.Context, string, int64) error { return nil }
 // closed one or release what the paid order holds.
 func TestCloseDoesNotOverwriteConcurrentPayment(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 400)
+	u, ctx := f.buyer(400)
 	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 3 })
 	method := f.epay()
 	resp, err := f.svc.Purchase(ctx, &dto.PurchaseOrderRequest{SubscribeId: plan.Id, Quantity: 1, Payment: method.Id})
 	if err != nil {
 		t.Fatalf("Purchase: %v", err)
 	}
-	f.svc.deps.Tx = raceTransactor{Transactor: f.h.Store, compete: func() {
+	f.svc.deps.Tx = raceTransactor{tx: f.h.Store, compete: func() {
 		if _, err := f.h.Store.Order().MarkOrderPaid(context.Background(), resp.OrderNo, "trade-1"); err != nil {
 			t.Fatal(err)
 		}
@@ -211,21 +211,38 @@ func TestCloseOfAMissingOrderSucceeds(t *testing.T) {
 	}
 }
 
-type unavailableOrders struct{ Orders }
+// unavailableOrders is an order store whose database connection is gone.
+type unavailableOrders struct{}
+
+var _ Orders = unavailableOrders{}
+
+var errConnectionReset = errors.New("connection reset")
 
 func (unavailableOrders) FindOneByOrderNo(context.Context, string) (*order.Order, error) {
-	return nil, errors.New("connection reset")
+	return nil, errConnectionReset
+}
+
+func (unavailableOrders) MarkOrderPaid(context.Context, string, string) (bool, error) {
+	return false, errConnectionReset
+}
+
+func (unavailableOrders) CountUserCouponUsage(context.Context, int64, string) (int64, error) {
+	return 0, errConnectionReset
+}
+
+func (unavailableOrders) IsUserEligibleForNewOrder(context.Context, int64) (bool, error) {
+	return false, errConnectionReset
 }
 
 // Only a missing order counts as closed; a failed lookup is an error.
 func TestCloseReportsOrderLookupFailures(t *testing.T) {
-	f := newCheckoutFixture(t, func(d *Deps) { d.Orders = unavailableOrders{d.Orders} })
+	f := newCheckoutFixture(t, func(d *Deps) { d.Orders = unavailableOrders{} })
 	assertCode(t, closeAs(system, f.svc, "order-1"), xerr.DatabaseQueryError)
 }
 
 func TestCloseRejectsAnotherUsersOrder(t *testing.T) {
 	f := newCheckoutFixture(t)
-	owner, _ := f.buyer(0, 0)
+	owner, _ := f.buyer(0)
 	f.h.Order(&order.Order{OrderNo: "order-1", UserId: owner.Id, Status: order.StatusPending})
 	other := user.NewContext(context.Background(), &user.User{Id: owner.Id + 1})
 
@@ -264,7 +281,7 @@ const (
 // expects ¥10.00, against the gateway at gatewayURL.
 func (f *checkoutFixture) epayOrder(gatewayURL string, age time.Duration) (*user.User, *order.Order) {
 	f.t.Helper()
-	u, _ := f.buyer(0, 0)
+	u, _ := f.buyer(0)
 	method := f.h.Payment("EPay", fmt.Sprintf(`{"pid":"1001","url":%q,"key":"secret","type":"alipay"}`, gatewayURL))
 	o := f.h.Order(&order.Order{
 		OrderNo: "epay-order", UserId: u.Id, Status: order.StatusPending, Amount: 1000,
@@ -403,7 +420,7 @@ var (
 // was issued, against the gateway at gatewayURL.
 func (f *checkoutFixture) alipayOrder(gatewayURL string) (*user.User, *order.Order) {
 	f.t.Helper()
-	u, _ := f.buyer(0, 0)
+	u, _ := f.buyer(0)
 	method := f.h.Payment("AlipayF2F", billingtest.AlipayConfig(f.t, "2021000000000000", gatewayURL))
 	o := f.h.Order(&order.Order{
 		OrderNo: "alipay-order", UserId: u.Id, Status: order.StatusPending, Amount: 1000,
@@ -536,7 +553,7 @@ func TestCloseAlipayOrderWithoutGatewayConfirmation(t *testing.T) {
 // amount in the site currency.
 func (f *checkoutFixture) stripeOrder(fake *billingtest.FakeStripe, intentAmount int64, intentCurrency, status string, adjust ...func(*order.Order)) *order.Order {
 	f.t.Helper()
-	u, _ := f.buyer(0, 0)
+	u, _ := f.buyer(0)
 	method := f.h.Payment("Stripe", `{"public_key":"pk_test","secret_key":"sk_test","webhook_secret":"whsec_test","payment":"card"}`)
 	fake.Seed("pi_1", intentAmount, intentCurrency, status, "stripe-order", "card")
 	o := &order.Order{

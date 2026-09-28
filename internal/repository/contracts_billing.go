@@ -9,7 +9,8 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
 )
 
-// OrderRepo order 数据访问接口
+// OrderRepo manages the order table: an order from its creation through
+// payment to settlement, and the order statistics of the dashboards.
 type OrderRepo interface {
 	Insert(ctx context.Context, data *order.Order) error
 	FindOne(ctx context.Context, id int64) (*order.Order, error)
@@ -63,7 +64,8 @@ type OrderEventRepo interface {
 	DeletePublishedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// PaymentRepo payment 数据访问接口
+// PaymentRepo manages the payment methods administrators configure; a gateway
+// callback finds its method by the token in its notify URL.
 type PaymentRepo interface {
 	Insert(ctx context.Context, data *payment.Payment) error
 	FindOne(ctx context.Context, id int64) (*payment.Payment, error)
@@ -75,7 +77,7 @@ type PaymentRepo interface {
 	FindAvailableMethods(ctx context.Context) ([]*payment.Payment, error)
 }
 
-// CouponRepo coupon 数据访问接口
+// CouponRepo manages the coupons and the count of their uses.
 type CouponRepo interface {
 	Insert(ctx context.Context, data *coupon.Coupon) error
 	FindOne(ctx context.Context, id int64) (*coupon.Coupon, error)

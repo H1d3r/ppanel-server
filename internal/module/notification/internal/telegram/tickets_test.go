@@ -22,9 +22,9 @@ func TestTicketRepliedLabelsAuthorsCorrectly(t *testing.T) {
 			t.Fatal(err)
 		}
 		messenger := &recordingMessenger{}
-		svc := NewTopicService(context.Background(), &fakeTopicClient{}, repo, testGroupID)
+		svc := NewTopicService(&fakeTopicClient{}, repo, testGroupID)
 
-		if err := svc.TicketReplied(messenger, 321, from, "hi"); err != nil {
+		if err := svc.TicketReplied(context.Background(), messenger, 321, from, "hi"); err != nil {
 			t.Fatalf("from %q: TicketReplied: %v", from, err)
 		}
 		want := "💻 网站回复（管理员）"

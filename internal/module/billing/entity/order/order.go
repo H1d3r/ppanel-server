@@ -1,3 +1,7 @@
+// Package order holds the billing domain's order entities and the rules that
+// travel with them: the order and its details, the status state machine,
+// order numbers, the durable order events and their wake-up channels, and
+// the guest checkout data an order carries until the guest's account exists.
 package order
 
 import (

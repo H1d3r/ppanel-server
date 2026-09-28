@@ -72,7 +72,11 @@ func TestAdminGroupRefusesNonAdministrators(t *testing.T) {
 	}
 
 	h := server.New()
-	deps := Dependencies{Config: config.Config{JwtAuth: config.JwtAuth{AccessSecret: adminGuardJWTKey, AccessExpire: 3600}}, Redis: rds, Store: store}
+	accounts := identity.New(identity.Deps{
+		Store: store, Redis: rds, Users: store.User(), UserAuths: store.UserAuth(), Devices: store.UserDevice(),
+		Cache: store.UserCache(), Logs: store.Log(), Auths: store.Auth(),
+	})
+	deps := Dependencies{Config: config.Config{Boot: config.Boot{JwtAuth: config.JwtAuth{AccessSecret: adminGuardJWTKey, AccessExpire: 3600}}}, Redis: rds, Identity: accounts}
 	deps.adminGroup(h, "/v1/admin/probe").GET("/", func(_ context.Context, c *app.RequestContext) {
 		c.String(200, "served")
 	})

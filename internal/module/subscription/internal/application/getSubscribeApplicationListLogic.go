@@ -5,57 +5,49 @@ import (
 	"encoding/json"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/client"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type GetSubscribeApplicationListLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewGetSubscribeApplicationListLogic Get subscribe application list
-func newGetSubscribeApplicationListLogic(ctx context.Context, deps Deps) *GetSubscribeApplicationListLogic {
-	return &GetSubscribeApplicationListLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *GetSubscribeApplicationListLogic) GetSubscribeApplicationList(req *dto.GetSubscribeApplicationListRequest) (resp *dto.GetSubscribeApplicationListResponse, err error) {
-	data, err := l.deps.Clients.List(l.ctx)
+// GetSubscribeApplicationList lists every client application in its stored
+// order; the request's paging is not applied.
+func (s *Service) GetSubscribeApplicationList(ctx context.Context, _ *dto.GetSubscribeApplicationListRequest) (*dto.GetSubscribeApplicationListResponse, error) {
+	data, err := s.deps.Clients.List(ctx)
 	if err != nil {
-		l.Errorf("Failed to get subscribe application list: %v", err)
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "Failed to get subscribe application list")
+		logger.WithContext(ctx).Errorf("Failed to get subscribe application list: %v", err)
+		return nil, xerr.Errorf(xerr.DatabaseQueryError, "Failed to get subscribe application list")
 	}
 	var list []dto.SubscribeApplication
 	for _, item := range data {
-		var temp dto.DownloadLink
+		var link dto.DownloadLink
 		if item.DownloadLink != "" {
-			_ = json.Unmarshal([]byte(item.DownloadLink), &temp)
+			_ = json.Unmarshal([]byte(item.DownloadLink), &link)
 		}
-		list = append(list, dto.SubscribeApplication{
-			Id:                item.Id,
-			Name:              item.Name,
-			Description:       item.Description,
-			Icon:              item.Icon,
-			Scheme:            item.Scheme,
-			UserAgent:         item.UserAgent,
-			IsDefault:         item.IsDefault,
-			SubscribeTemplate: item.SubscribeTemplate,
-			OutputFormat:      item.OutputFormat,
-			DefaultParams:     item.DefaultParams,
-			DownloadLink:      temp,
-			CreatedAt:         item.CreatedAt.UnixMilli(),
-			UpdatedAt:         item.UpdatedAt.UnixMilli(),
-		})
+		list = append(list, applicationView(item, link))
 	}
-	resp = &dto.GetSubscribeApplicationListResponse{
+	return &dto.GetSubscribeApplicationListResponse{
 		Total: int64(len(list)),
 		List:  list,
+	}, nil
+}
+
+// applicationView is the admin view of a stored client application; link is
+// its download links, which the row stores encoded.
+func applicationView(app *client.SubscribeApplication, link dto.DownloadLink) dto.SubscribeApplication {
+	return dto.SubscribeApplication{
+		Id:                app.Id,
+		Name:              app.Name,
+		Description:       app.Description,
+		Icon:              app.Icon,
+		Scheme:            app.Scheme,
+		UserAgent:         app.UserAgent,
+		IsDefault:         app.IsDefault,
+		SubscribeTemplate: app.SubscribeTemplate,
+		OutputFormat:      app.OutputFormat,
+		DefaultParams:     app.DefaultParams,
+		DownloadLink:      link,
+		CreatedAt:         app.CreatedAt.UnixMilli(),
+		UpdatedAt:         app.UpdatedAt.UnixMilli(),
 	}
-	return
 }

@@ -1,3 +1,5 @@
+// Package server holds the admin HTTP handlers of the server and node
+// management.
 package server
 
 import (

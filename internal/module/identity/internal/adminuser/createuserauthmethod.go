@@ -2,7 +2,6 @@ package adminuser
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -16,7 +15,7 @@ import (
 // normalized, and one that cannot be is refused.
 func (s *Service) CreateUserAuthMethod(ctx context.Context, req *dto.CreateUserAuthMethodRequest) error {
 	if strings.EqualFold(strings.TrimSpace(req.AuthType), "device") {
-		return fmt.Errorf("use device management for device identities: %w", xerr.NewErrCode(xerr.InvalidParams))
+		return xerr.Errorf(xerr.InvalidParams, "use device management for device identities")
 	}
 	err := s.deps.Store.InIdentityTx(ctx, func(store repository.IdentityStore) error {
 		// An administrator's binding vouches for the identity, so it signs

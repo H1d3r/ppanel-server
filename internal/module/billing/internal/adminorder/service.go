@@ -18,7 +18,6 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -73,7 +72,7 @@ func NewService(deps Deps) *Service {
 
 func (s *Service) Create(ctx context.Context, req *dto.CreateOrderRequest) error {
 	if req.Status != 0 && req.Status != order.StatusPending {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidInitialOrderStatus), "admin-created orders must start pending")
+		return xerr.Errorf(xerr.InvalidInitialOrderStatus, "admin-created orders must start pending")
 	}
 	paymentMethod, err := findPaymentMethod(ctx, s.deps.Payments, req.PaymentId)
 	if err != nil {
@@ -112,10 +111,10 @@ func (s *Service) List(ctx context.Context, req *dto.GetOrderListRequest) (*dto.
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "query order list")
 	}
-	resp := &dto.GetOrderListResponse{}
-	resp.List = make([]dto.Order, 0)
-	mapping.DeepCopy(&resp.List, list)
-	resp.Total = total
+	resp := &dto.GetOrderListResponse{Total: total, List: make([]dto.Order, 0)}
+	if err := mapping.Copy(&resp.List, list); err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "map order list")
+	}
 	return resp, nil
 }
 
@@ -124,7 +123,7 @@ func (s *Service) List(ctx context.Context, req *dto.GetOrderListRequest) (*dto.
 func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRequest) error {
 	info, err := s.deps.Orders.FindOne(ctx, req.Id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order %d not found", req.Id)
+		return xerr.Errorf(xerr.OrderNotExist, "order %d not found", req.Id)
 	}
 	if err != nil {
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %d", req.Id)
@@ -132,13 +131,13 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 	// Orders have a deliberately narrow state machine. Arbitrary status writes
 	// could resurrect terminal orders or skip the activation workflow.
 	if req.Status != order.StatusPaid && req.Status != order.StatusClosed {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidOrderTransition), "only pending orders may be marked paid or closed")
+		return xerr.Errorf(xerr.InvalidOrderTransition, "only pending orders may be marked paid or closed")
 	}
 	if req.Status == order.StatusPaid && req.TradeNo == "" {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.TradeNoRequired), "trade_no is required when marking an order paid")
+		return xerr.Errorf(xerr.TradeNoRequired, "trade_no is required when marking an order paid")
 	}
 	if req.Status == order.StatusClosed && (req.PaymentId != 0 || req.TradeNo != "") {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidOrderCloseRequest), "payment_id and trade_no are not allowed when closing an order")
+		return xerr.Errorf(xerr.InvalidOrderCloseRequest, "payment_id and trade_no are not allowed when closing an order")
 	}
 	if req.Status == order.StatusClosed {
 		return s.close(ctx, info)
@@ -151,7 +150,7 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "lock order %s", info.OrderNo)
 		}
 		if current.Status != order.StatusPending {
-			return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+			return xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 		}
 		if req.PaymentId != 0 {
 			paymentMethod, err := findPaymentMethod(ctx, txStore.Payment(), req.PaymentId)
@@ -169,7 +168,7 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateOrderStatusRe
 			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "mark order %s paid", info.OrderNo)
 		}
 		if !transitioned {
-			return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+			return xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 		}
 		return nil
 	})
@@ -203,7 +202,7 @@ func (s *Service) close(ctx context.Context, info *order.Order) error {
 		return xerr.Wrapf(err, xerr.ERROR, "close order %s", info.OrderNo)
 	}
 	if !closed {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+		return xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 	}
 	return nil
 }
@@ -213,7 +212,7 @@ func (s *Service) close(ctx context.Context, info *order.Order) error {
 func findPaymentMethod(ctx context.Context, methods gateway.MethodFinder, id int64) (*paymentEntity.Payment, error) {
 	method, err := methods.FindOne(ctx, id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method %d not found", id)
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "payment method %d not found", id)
 	}
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find payment method %d", id)

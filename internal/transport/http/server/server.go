@@ -1,3 +1,7 @@
+// Package httpserver builds the Hertz server of the HTTP API: the middleware
+// every request passes (tracing, request logging, CORS), the routes of
+// package routes, and the Telegram webhook and payment notify handlers that
+// their modules register.
 package httpserver
 
 import (
@@ -44,7 +48,7 @@ func newServer(deps Dependencies, opts []config.Option) *Server {
 
 	routes.RegisterHandlers(engine, deps.Routes)
 	notificationHTTP.RegisterTelegramHandlers(engine, deps.Notification, deps.TelegramBotToken)
-	billingHTTP.RegisterNotifyHandlers(engine, deps.Routes.Store, deps.Routes.Billing)
+	billingHTTP.RegisterNotifyHandlers(engine, deps.Routes.Billing)
 
 	return &Server{h: engine}
 }

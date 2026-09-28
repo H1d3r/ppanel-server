@@ -1,3 +1,8 @@
+// Package log holds the system log row (the system_logs table) and the typed
+// content of each kind of entry: the message and subscription logs, the
+// login, registration, balance, commission, gift and order logs, and the
+// traffic logs, rankings and daily statistics. Every domain may append to
+// the audit log inside its own transaction.
 package log
 
 import (
@@ -83,7 +88,7 @@ func ExpirableTypes() []int {
 	}
 }
 
-// FilterParams log 列表查询过滤条件
+// FilterParams selects a page of the system log.
 type FilterParams struct {
 	Page      int
 	Size      int
@@ -159,12 +164,12 @@ func sanitizeIPMetadata(metadata requestmeta.IPMetadata) requestmeta.IPMetadata 
 // Message represents a message log entry.
 type Message struct {
 	requestmeta.Metadata
-	To       string                 `json:"to"`
-	Subject  string                 `json:"subject,omitempty"`
-	Content  map[string]interface{} `json:"content"`
-	Platform string                 `json:"platform"`
-	Template string                 `json:"template"`
-	Status   uint8                  `json:"status"` // 0: Attempt started, 1: Sent, 2: Failed
+	To       string         `json:"to"`
+	Subject  string         `json:"subject,omitempty"`
+	Content  map[string]any `json:"content"`
+	Platform string         `json:"platform"`
+	Template string         `json:"template"`
+	Status   uint8          `json:"status"` // 0: Attempt started, 1: Sent, 2: Failed
 }
 
 // Marshal encodes the entry as stored, redacted.
@@ -178,7 +183,7 @@ func (m *Message) clean() { *m = sanitizeMessage(*m) }
 func sanitizeMessage(message Message) Message {
 	message.Metadata = sanitizeRequestMetadata(message.Metadata)
 	message.To = logger.RedactedValue
-	safeContent := map[string]interface{}{"redacted": true}
+	safeContent := map[string]any{"redacted": true}
 	if emailType, ok := message.Content["email_type"].(string); ok && safeMessageCategory(emailType) {
 		safeContent["email_type"] = emailType
 	}
@@ -239,6 +244,11 @@ func (l *Login) Marshal() ([]byte, error) { return marshalEntry(l) }
 // Unmarshal decodes a stored entry, its request bounded.
 func (l *Login) Unmarshal(data []byte) error { return unmarshalEntry(data, l) }
 
+// Request returns the request the login came from; its address is LoginIP.
+func (l *Login) Request() requestmeta.Metadata {
+	return requestmeta.Metadata{ClientIP: l.LoginIP, UserAgent: l.UserAgent, ActorID: l.ActorID, IPMetadata: l.IPMetadata}
+}
+
 func (l *Login) clean() {
 	l.LoginIP = boundedRiskValue(l.LoginIP, requestmeta.MaxClientIPBytes)
 	l.UserAgent = boundedRiskValue(l.UserAgent, requestmeta.MaxUserAgentBytes)
@@ -264,6 +274,12 @@ func (r *Register) Marshal() ([]byte, error) { return marshalEntry(r) }
 // bounded.
 func (r *Register) Unmarshal(data []byte) error { return unmarshalEntry(data, r) }
 
+// Request returns the request the registration came from; its address is
+// RegisterIP.
+func (r *Register) Request() requestmeta.Metadata {
+	return requestmeta.Metadata{ClientIP: r.RegisterIP, UserAgent: r.UserAgent, ActorID: r.ActorID, IPMetadata: r.IPMetadata}
+}
+
 func (r *Register) clean() {
 	r.Identifier = logger.RedactedValue
 	r.RegisterIP = boundedRiskValue(r.RegisterIP, requestmeta.MaxClientIPBytes)
@@ -287,6 +303,11 @@ func (s *Subscribe) Marshal() ([]byte, error) { return marshalEntry(s) }
 
 // Unmarshal decodes a stored entry: the token redacted, the request bounded.
 func (s *Subscribe) Unmarshal(data []byte) error { return unmarshalEntry(data, s) }
+
+// Request returns the request that fetched the subscription.
+func (s *Subscribe) Request() requestmeta.Metadata {
+	return requestmeta.Metadata{ClientIP: s.ClientIP, UserAgent: s.UserAgent, ActorID: s.ActorID, IPMetadata: s.IPMetadata}
+}
 
 func (s *Subscribe) clean() {
 	s.Token = logger.RedactedValue

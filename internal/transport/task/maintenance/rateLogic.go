@@ -9,22 +9,26 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-type RateLogic struct {
+// RateHandler refreshes billing's cached exchange rate from the site
+// currency to CNY. Without an exchange-rate API key there is nothing to
+// refresh, and the cache keeps its current rate.
+type RateHandler struct {
 	deps RateDependencies
 }
 
-func NewRateLogic(deps RateDependencies) *RateLogic {
-	return &RateLogic{deps: deps}
+// NewRateHandler builds the refresh over the currency settings and billing's
+// rate cache.
+func NewRateHandler(deps RateDependencies) *RateHandler {
+	return &RateHandler{deps: deps}
 }
 
-func (l *RateLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
-	// Retrieve system currency configuration
-	currency, err := l.deps.Store.System().GetCurrencyConfig(ctx)
+func (h *RateHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+	log := logger.WithContext(ctx)
+	currency, err := h.deps.System.GetCurrencyConfig(ctx)
 	if err != nil {
-		logger.Errorw("[PurchaseCheckout] GetCurrencyConfig error", logger.Field("error", err.Error()))
+		log.Errorw("[ExchangeRate] GetCurrencyConfig error", logger.Field("error", err.Error()))
 		return err
 	}
-	// Parse currency configuration
 	configs := struct {
 		CurrencyUnit   string
 		CurrencySymbol string
@@ -32,18 +36,16 @@ func (l *RateLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	}{}
 	config.SystemConfigSliceReflectToStruct(currency, &configs)
 
-	// Skip conversion if no exchange rate API key configured
 	if configs.AccessKey == "" {
-		logger.Debugf("[RateLogic] skip exchange rate, no access key configured")
+		log.Debugf("[ExchangeRate] skip exchange rate, no access key configured")
 		return nil
 	}
-	// Update exchange rates
 	result, err := billing.ConvertCurrency(configs.CurrencyUnit, "CNY", configs.AccessKey, 1)
 	if err != nil {
-		logger.Errorw("[RateLogic] GetExchangeRete error", logger.Field("error", err.Error()))
+		log.Errorw("[ExchangeRate] ConvertCurrency error", logger.Field("error", err.Error()))
 		return err
 	}
-	l.deps.ExchangeRate.Set(result)
-	logger.WithContext(ctx).Infof("[RateLogic] GetExchangeRete success, result: %+v", result)
+	h.deps.ExchangeRate.Set(result)
+	log.Infof("[ExchangeRate] ConvertCurrency success, result: %+v", result)
 	return nil
 }

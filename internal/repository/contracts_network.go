@@ -8,7 +8,8 @@ import (
 	"github.com/perfect-panel/server/internal/module/network/entity/traffic"
 )
 
-// NodeRepo node/server 数据访问接口
+// NodeRepo manages the servers, their nodes and per-server configuration
+// overrides, together with the cached node status and online users.
 type NodeRepo interface {
 	// server
 	InsertServer(ctx context.Context, data *node.Server) error
@@ -49,10 +50,11 @@ type NodeRepo interface {
 	QueryEnabledNodeProtocols(ctx context.Context) ([]string, error)
 	ClearServerCache(ctx context.Context, serverId int64) error
 	ServerCacheGeneration(ctx context.Context, serverId int64) (int64, error)
-	SetServerCache(ctx context.Context, serverId int64, key string, value interface{}, generation int64) error
+	SetServerCache(ctx context.Context, serverId int64, key string, value any, generation int64) error
 }
 
-// TrafficRepo traffic 数据访问接口
+// TrafficRepo manages the traffic_log table: the traffic users consumed on
+// each server, and the summaries and rankings computed from it.
 type TrafficRepo interface {
 	InsertBatch(ctx context.Context, data []*traffic.TrafficLog, batchSize int) error
 	QueryTrafficSummary(ctx context.Context, start, end time.Time) (*traffic.TotalTraffic, error)

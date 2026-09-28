@@ -42,7 +42,8 @@ type Env struct {
 
 var databases atomic.Int64
 
-// New creates the identity tables, the audit log and the event outbox.
+// New creates the identity tables, the device online records, the audit log
+// and the event outbox.
 func New(t testing.TB) *Env {
 	t.Helper()
 	name := fmt.Sprintf("file:identitytest-%d?mode=memory&cache=shared", databases.Add(1))
@@ -67,7 +68,7 @@ func New(t testing.TB) *Env {
 	if err := db.Migrator().RenameIndex(&user.AuthMethods{}, "idx_user_id", "idx_auth_methods_user_id"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&user.Device{}, &auth.Auth{}, &log.SystemLog{}, &outbox.Event{}, &inbox.Record{}); err != nil {
+	if err := db.AutoMigrate(&user.Device{}, &user.DeviceOnlineRecord{}, &auth.Auth{}, &log.SystemLog{}, &outbox.Event{}, &inbox.Record{}); err != nil {
 		t.Fatal(err)
 	}
 

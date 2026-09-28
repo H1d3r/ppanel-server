@@ -1,3 +1,6 @@
+// Package user holds the identity module's account entities: the user row,
+// its sign-in identities, devices and their online records, the filters of
+// the account queries, and the account's cache keys and request context.
 package user
 
 import (
@@ -6,6 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// User is an account row.
 type User struct {
 	Id                    int64          `gorm:"primaryKey"`
 	Password              string         `gorm:"type:varchar(255);not null;comment:User Password"`
@@ -59,6 +63,8 @@ func (*AuthMethods) TableName() string {
 	return "user_auth_methods"
 }
 
+// Device is a device bound to an account, which signs in with its
+// identifier.
 type Device struct {
 	Id         int64     `gorm:"primaryKey"`
 	Ip         string    `gorm:"type:varchar(255);not null;comment:Device IP"`
@@ -75,6 +81,7 @@ func (*Device) TableName() string {
 	return "user_device"
 }
 
+// DeviceOnlineRecord is the online time of one device connection.
 type DeviceOnlineRecord struct {
 	Id            int64     `gorm:"primaryKey"`
 	UserId        int64     `gorm:"type:bigint;not null;comment:User ID"`

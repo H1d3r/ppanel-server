@@ -25,7 +25,7 @@ func signBody(body []byte, apiKey string) string {
 // signedNotification builds a webhook payload the way the gateway does: the
 // signature covers the JSON without the sign member, which is then appended
 // as the last top-level field.
-func signedNotification(t *testing.T, apiKey string, fields map[string]interface{}) []byte {
+func signedNotification(t *testing.T, apiKey string, fields map[string]any) []byte {
 	t.Helper()
 	unsigned, err := json.Marshal(fields)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestSignPayloadMatchesDocumentedAlgorithm(t *testing.T) {
 
 func TestVerifyNotificationSign(t *testing.T) {
 	client := NewClient(Config{MerchantID: "merchant-1", APIKey: "api-key"})
-	body := signedNotification(t, "api-key", map[string]interface{}{
+	body := signedNotification(t, "api-key", map[string]any{
 		"type": "payment", "uuid": "uuid-1", "order_id": "order-1",
 		"amount": "10.00", "currency": "USD", "status": "paid", "is_final": true,
 	})
@@ -97,7 +97,7 @@ func TestVerifyNotificationSignPreservesPHPEscaping(t *testing.T) {
 	// The same payload naively decoded and re-encoded by encoding/json loses
 	// the "\/" escaping, which is exactly the mismatch the raw-byte approach
 	// avoids; the fixture must actually exercise that difference.
-	var decoded map[string]interface{}
+	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("decode PHP-escaped payload: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestCreateInvoiceSendsSignedRequest(t *testing.T) {
 		if r.Header.Get("sign") != signBody(body, apiKey) {
 			t.Errorf("request signature mismatch")
 		}
-		var request map[string]interface{}
+		var request map[string]any
 		if err := json.Unmarshal(body, &request); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
@@ -148,7 +148,7 @@ func TestCreateInvoiceSendsSignedRequest(t *testing.T) {
 		if request["url_callback"] != "https://merchant.example/v1/notify/Cryptomus/token" {
 			t.Errorf("unexpected callback: %v", request["url_callback"])
 		}
-		fmt.Fprint(w, `{"state":0,"result":{"uuid":"uuid-1","order_id":"order-1","amount":"10.50","currency":"USD","url":"https://pay.cryptomus.com/pay/uuid-1","status":"check"}}`)
+		_, _ = fmt.Fprint(w, `{"state":0,"result":{"uuid":"uuid-1","order_id":"order-1","amount":"10.50","currency":"USD","url":"https://pay.cryptomus.com/pay/uuid-1","status":"check"}}`)
 	}))
 	defer server.Close()
 
@@ -189,7 +189,7 @@ func TestGetInvoiceLooksUpByUUIDOrOrderNo(t *testing.T) {
 		if request["uuid"] == "" && request["order_id"] == "" {
 			t.Error("lookup request has no identifier")
 		}
-		fmt.Fprint(w, `{"state":0,"result":{"uuid":"uuid-1","order_id":"order-1","amount":"10.50","currency":"USD","payment_status":"paid","is_final":true}}`)
+		_, _ = fmt.Fprint(w, `{"state":0,"result":{"uuid":"uuid-1","order_id":"order-1","amount":"10.50","currency":"USD","payment_status":"paid","is_final":true}}`)
 	}))
 	defer server.Close()
 
@@ -212,7 +212,7 @@ func TestGetInvoiceLooksUpByUUIDOrOrderNo(t *testing.T) {
 func TestGatewayErrorsMapToAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"state":1,"message":"Payment not found"}`)
+		_, _ = fmt.Fprint(w, `{"state":1,"message":"Payment not found"}`)
 	}))
 	defer server.Close()
 

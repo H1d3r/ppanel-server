@@ -1,3 +1,8 @@
+// Package telegram implements the notification module's Telegram bot: the
+// routing of updates, account binding and the traffic report in private
+// chats, the administrator commands and the support and ticket topics of
+// the administrators' group, and the MarkdownV2 message templates. Only the
+// module facade may reach it.
 package telegram
 
 import (
@@ -23,6 +28,8 @@ type Bot struct {
 	deps BotDependencies
 }
 
+// NewBot builds the update router; the group dependencies may be left zero,
+// which turns every group feature off.
 func NewBot(deps BotDependencies) *Bot {
 	return &Bot{deps: deps}
 }

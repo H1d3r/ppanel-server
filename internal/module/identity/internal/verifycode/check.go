@@ -3,7 +3,6 @@ package verifycode
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -21,15 +20,14 @@ func (s *Service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerif
 	var cacheKey string
 	switch req.Method {
 	case identifier.Email:
-		cfg := s.deps.Config()
-		email, err := identifier.ValidateEmail(req.Account, cfg.DomainSuffixList, purpose == auth.Register && cfg.EnableDomainSuffix)
-		if err != nil {
+		key, ok := s.emailCodeKey(purpose, req.Account)
+		if !ok {
 			return resp, nil
 		}
-		cacheKey = verification.EmailCodeKey(purpose, email)
+		cacheKey = key
 	case identifier.Mobile:
 		if !identifier.CheckPhone(req.Account) {
-			return nil, fmt.Errorf("invalid phone number: %w", xerr.NewErrCode(xerr.TelephoneError))
+			return nil, xerr.Errorf(xerr.TelephoneError, "invalid phone number")
 		}
 		phoneNumber, err := identifier.FormatToE164("", req.Account)
 		if err != nil {
@@ -47,4 +45,15 @@ func (s *Service) CheckVerificationCode(ctx context.Context, req *dto.CheckVerif
 	}
 	resp.Status = true
 	return resp, nil
+}
+
+// emailCodeKey is the key of the code sent to account for purpose. An
+// address the sender would refuse has no code, so it reports false.
+func (s *Service) emailCodeKey(purpose auth.VerifyType, account string) (string, bool) {
+	cfg := s.deps.Config()
+	email, err := identifier.ValidateEmail(account, cfg.DomainSuffixList, purpose == auth.Register && cfg.EnableDomainSuffix)
+	if err != nil {
+		return "", false
+	}
+	return verification.EmailCodeKey(purpose, email), true
 }

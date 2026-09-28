@@ -77,8 +77,8 @@ func (s *Service) cachedStat(ctx context.Context) *dto.GetStatResponse {
 }
 
 func (s *Service) refreshStat(ctx context.Context) (*dto.GetStatResponse, error) {
-	nodes := s.deps.Store.Node()
-	users, err := s.deps.Store.User().CountEnabledUsers(ctx)
+	nodes := s.deps.Nodes
+	users, err := s.deps.Accounts.CountEnabledUsers(ctx)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "count enabled users: %v", err)
 	}

@@ -20,7 +20,7 @@ type edgeManifestUserSubs struct {
 
 var _ TokenResolver = edgeManifestUserSubs{}
 
-func (r edgeManifestUserSubs) FindOneSubscribeByToken(context.Context, string) (*usersub.Subscribe, error) {
+func (r edgeManifestUserSubs) SubscriptionByToken(context.Context, string) (*usersub.Subscribe, error) {
 	if r.sub == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
@@ -47,7 +47,7 @@ type edgeManifestPlans struct {
 
 var _ PlanReader = edgeManifestPlans{}
 
-func (r edgeManifestPlans) FindOne(context.Context, int64) (*subscribe.Subscribe, error) {
+func (r edgeManifestPlans) PlanByID(context.Context, int64) (*subscribe.Subscribe, error) {
 	return r.plan, nil
 }
 
@@ -145,18 +145,18 @@ func TestSubscriptionState(t *testing.T) {
 
 func TestManifestHidesDeletedAccount(t *testing.T) {
 	enabled := true
-	logic := newManifestLogic(context.Background(), Deps{
+	service := NewService(Deps{
 		Subscriptions: edgeManifestUserSubs{sub: &usersub.Subscribe{UserId: 9}},
 		Accounts: edgeManifestUsers{user: &userEntity.User{
 			Id: 9, Enable: &enabled, DeletedAt: gorm.DeletedAt{Valid: true},
 		}},
 	})
 
-	if _, err := logic.Manifest("deleted-user-token"); !errors.Is(err, ErrManifestNotFound) {
+	if _, err := service.Manifest(context.Background(), "deleted-user-token"); !errors.Is(err, ErrManifestNotFound) {
 		t.Fatalf("Manifest error = %v, want ErrManifestNotFound", err)
 	}
-	logic.deps.Subscriptions = edgeManifestUserSubs{}
-	if _, err := logic.Manifest("unknown-token"); !errors.Is(err, ErrManifestNotFound) {
+	service.deps.Subscriptions = edgeManifestUserSubs{}
+	if _, err := service.Manifest(context.Background(), "unknown-token"); !errors.Is(err, ErrManifestNotFound) {
 		t.Fatalf("Manifest error = %v, want ErrManifestNotFound", err)
 	}
 }
@@ -181,14 +181,14 @@ func TestManifestListsProxiesOnlyForServableSubscriptions(t *testing.T) {
 	manifest := func(sub usersub.Subscribe) manifestResult {
 		t.Helper()
 		sub.UserId, sub.SubscribeId, sub.UUID = 9, 3, "00000000-0000-4000-8000-000000000009"
-		logic := newManifestLogic(context.Background(), Deps{
+		service := NewService(Deps{
 			Subscriptions: edgeManifestUserSubs{sub: &sub},
 			Accounts:      edgeManifestUsers{user: &userEntity.User{Id: 9, Enable: &enabled}},
 			Plans:         edgeManifestPlans{plan: &subscribe.Subscribe{Id: 3, Name: "gold", Nodes: "1,2"}},
 			Nodes:         nodes,
 			Config:        func() Snapshot { return Snapshot{} },
 		})
-		resp, err := logic.Manifest("token")
+		resp, err := service.Manifest(context.Background(), "token")
 		if err != nil {
 			t.Fatal(err)
 		}

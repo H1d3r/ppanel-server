@@ -14,18 +14,21 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
-type SmsSendCount struct {
-	Count    int   `json:"count"`
-	CreateAt int64 `json:"create_at"`
-}
-
-type SendSmsLogic struct {
+// SendSmsHandler sends the verification code a task carries through the
+// configured provider. The attempt is written to the message log before the
+// provider call and finalized after it; once the provider was called the task
+// is not retried, even on an error, because a failed call may still have
+// delivered the code.
+type SendSmsHandler struct {
 	deps Dependencies
 	// senders keeps the provider client between messages; it is rebuilt
 	// when the mobile configuration changes.
 	senders sms.Senders
 }
 
+// newSMSMessageLog is the message-log record of one send. The recipient and
+// the code stay out of it; the request metadata of the producing request is
+// kept for risk review.
 func newSMSMessageLog(platform string, messageType uint8, metadata ...requestmeta.Metadata) *log.Message {
 	var requestMetadata requestmeta.Metadata
 	if len(metadata) > 0 {
@@ -36,19 +39,22 @@ func newSMSMessageLog(platform string, messageType uint8, metadata ...requestmet
 		Platform: platform,
 		To:       logger.RedactedValue,
 		Subject:  auth.ParseVerifyType(messageType).String(),
-		Content:  map[string]interface{}{"redacted": true},
+		Content:  map[string]any{"redacted": true},
 	}
 }
 
-func NewSendSmsLogic(deps Dependencies) *SendSmsLogic {
-	return &SendSmsLogic{
+// NewSendSmsHandler builds the handler over the message log and the runtime
+// mobile settings.
+func NewSendSmsHandler(deps Dependencies) *SendSmsHandler {
+	return &SendSmsHandler{
 		deps: deps,
 	}
 }
-func (l *SendSmsLogic) ProcessTask(ctx context.Context, task *asynq.Task) error {
+
+func (h *SendSmsHandler) ProcessTask(ctx context.Context, task *asynq.Task) error {
 	var payload taskqueue.SendSmsPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
-		logger.WithContext(ctx).Error("[SendSmsLogic] Unmarshal payload failed",
+		logger.WithContext(ctx).Error("[SendSms] Unmarshal payload failed",
 			logger.Field("error", err.Error()),
 			logger.Field("payload", task.Payload()),
 		)
@@ -56,12 +62,12 @@ func (l *SendSmsLogic) ProcessTask(ctx context.Context, task *asynq.Task) error 
 	}
 	ctx = requestmeta.With(ctx, payload.Metadata)
 	ctx = logger.ContextWithRequestMetadata(ctx, payload.Metadata)
-	client, err := l.senders.Get(l.deps.Mobile().Platform, l.deps.Mobile().PlatformConfig)
+	client, err := h.senders.Get(h.deps.Mobile().Platform, h.deps.Mobile().PlatformConfig)
 	if err != nil {
-		logger.WithContext(ctx).Error("[SendSmsLogic] New send sms client failed", logger.Field("error", err.Error()), logger.Field("payload", payload))
+		logger.WithContext(ctx).Error("[SendSms] New send sms client failed", logger.Field("error", err.Error()), logger.Field("payload", payload))
 		return err
 	}
-	createSms := newSMSMessageLog(l.deps.Mobile().Platform, payload.Type, payload.Metadata)
+	createSms := newSMSMessageLog(h.deps.Mobile().Platform, payload.Type, payload.Metadata)
 	content, marshalErr := createSms.Marshal()
 	if marshalErr != nil {
 		return marshalErr
@@ -74,27 +80,30 @@ func (l *SendSmsLogic) ProcessTask(ctx context.Context, task *asynq.Task) error 
 	}
 	// Record the attempt before contacting the provider so a storage failure
 	// cannot produce a successful but unaudited SMS delivery.
-	if err = l.deps.Store.Log().Insert(ctx, audit); err != nil {
-		logger.WithContext(ctx).Error("[SendSmsLogic] Insert sms log failed", logger.Field("error", err.Error()))
+	if err = h.deps.Logs.Insert(ctx, audit); err != nil {
+		logger.WithContext(ctx).Error("[SendSms] Insert sms log failed", logger.Field("error", err.Error()))
 		return err
 	}
 	err = client.Send(ctx, sms.CodeMessage(payload.TelephoneArea, payload.Telephone, payload.Content))
 
 	if err != nil {
-		logger.WithContext(ctx).Error("[SendSmsLogic] Send sms failed", logger.Field("error", err.Error()), logger.Field("payload", payload))
+		logger.WithContext(ctx).Error("[SendSms] Send sms failed", logger.Field("error", err.Error()), logger.Field("payload", payload))
 		createSms.Status = 2
 	} else {
 		createSms.Status = 1
 	}
-	logger.WithContext(ctx).Info("[SendSmsLogic] Send sms", logger.Field("telephone", payload.Telephone), logger.Field("content", createSms.Content))
+	logger.WithContext(ctx).Info("[SendSms] Send sms", logger.Field("telephone", payload.Telephone), logger.Field("content", createSms.Content))
 
 	content, marshalErr = createSms.Marshal()
 	if marshalErr != nil {
+		// The message went out: retrying the task would send it again, so the
+		// audit row keeps the attempt's content.
+		logger.WithContext(ctx).Error("[SendSms] Encode sms log failed", logger.Field("error", marshalErr.Error()), logger.Field("log_id", audit.Id))
 		return nil
 	}
 	audit.Content = string(content)
-	if updateErr := l.deps.Store.Log().Update(ctx, audit); updateErr != nil {
-		logger.WithContext(ctx).Error("[SendSmsLogic] Finalize sms log failed", logger.Field("error", updateErr.Error()), logger.Field("log_id", audit.Id))
+	if updateErr := h.deps.Logs.Update(ctx, audit); updateErr != nil {
+		logger.WithContext(ctx).Error("[SendSms] Finalize sms log failed", logger.Field("error", updateErr.Error()), logger.Field("log_id", audit.Id))
 	}
 	return nil
 }

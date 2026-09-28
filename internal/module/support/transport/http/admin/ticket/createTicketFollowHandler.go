@@ -1,3 +1,4 @@
+// Package ticket holds the Hertz handlers of the admin ticket desk.
 package ticket
 
 import (

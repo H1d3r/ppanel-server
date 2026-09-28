@@ -6,11 +6,12 @@ package settle
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/pkg/errors"
 )
 
 // Orders is the order persistence settlement needs.
@@ -74,11 +75,11 @@ func VerifiedPayment(ctx context.Context, orders Orders, queue Queue, orderInfo 
 				return nil
 			}
 			if latest.Status != order.StatusPaid {
-				return errors.Errorf("invalid order status transition: %d", latest.Status)
+				return fmt.Errorf("invalid order status transition: %d", latest.Status)
 			}
 		}
 	default:
-		return errors.Errorf("invalid order status transition: %d", orderInfo.Status)
+		return fmt.Errorf("invalid order status transition: %d", orderInfo.Status)
 	}
 
 	return queue.EnqueueActivation(ctx, orderInfo.OrderNo)

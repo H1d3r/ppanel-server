@@ -10,60 +10,63 @@ import (
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	usermodel "github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 )
 
+// passwordUsers records the columns the flow writes.
 type passwordUsers struct {
-	repository.UserRepo
-	written map[string]interface{}
+	written map[string]any
 }
 
-func (r *passwordUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]interface{}) error {
+var _ Users = (*passwordUsers)(nil)
+
+func (r *passwordUsers) UpdateColumns(_ context.Context, _ int64, columns map[string]any) error {
 	r.written = columns
 	return nil
 }
 
-func newPasswordLogic(t *testing.T, current *usermodel.User) (*UpdateUserPasswordLogic, *passwordUsers, *redis.Client) {
+// newPasswordService returns the service, its account rows and Redis, and
+// the context of the signed-in account current.
+func newPasswordService(t *testing.T, current *usermodel.User) (*Service, *passwordUsers, *redis.Client, context.Context) {
 	t.Helper()
 	rds := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
 	t.Cleanup(func() { _ = rds.Close() })
 	users := &passwordUsers{}
 	ctx := usermodel.NewContext(context.Background(), current)
-	return newUpdateUserPasswordLogic(ctx, Deps{Users: users, Redis: rds}), users, rds
+	return NewService(Deps{Users: users, Redis: rds}), users, rds, ctx
 }
 
 // A session alone must not be enough to change the password: that would turn
 // a stolen session into the account for good.
 func TestUpdateUserPasswordRequiresCurrentPasswordAndEndsSessions(t *testing.T) {
 	current := &usermodel.User{Id: 7, Password: password.EncodePassWord("old-password"), Algo: password.PasswordAlgoArgon2id}
-	logic, users, rds := newPasswordLogic(t, current)
+	svc, users, rds, ctx := newPasswordService(t, current)
 	before, err := usersession.AcquireEpoch(context.Background(), rds, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := logic.UpdateUserPassword(&dto.UpdateUserPasswordRequest{OldPassword: "guessed", Password: "new-password-1"}); err == nil || users.written != nil {
+	if err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{OldPassword: "guessed", Password: "new-password-1"}); err == nil || users.written != nil {
 		t.Fatalf("wrong current password: error = %v, written = %v", err, users.written)
 	}
 
-	if err := logic.UpdateUserPassword(&dto.UpdateUserPasswordRequest{OldPassword: "old-password", Password: "new-password-1"}); err != nil {
+	if err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{OldPassword: "old-password", Password: "new-password-1"}); err != nil {
 		t.Fatalf("UpdateUserPassword() error = %v", err)
 	}
 	if hash, _ := users.written["password"].(string); !password.VerifyPassWord("new-password-1", hash) {
 		t.Fatal("new password was not written")
 	}
 	after, _ := rds.Get(context.Background(), usersession.Key(7)).Result()
-	if usersession.Check(map[string]interface{}{usersession.EpochClaim: before}, after) == nil {
+	if usersession.Check(map[string]any{usersession.EpochClaim: before}, after) == nil {
 		t.Fatal("sessions from before the change still work")
 	}
 }
 
 // Accounts created through OAuth or device sign-in have no password to prove.
 func TestUpdateUserPasswordSetsFirstPasswordWithoutCurrentOne(t *testing.T) {
-	logic, users, _ := newPasswordLogic(t, &usermodel.User{Id: 7})
+	svc, users, _, ctx := newPasswordService(t, &usermodel.User{Id: 7})
 
-	if err := logic.UpdateUserPassword(&dto.UpdateUserPasswordRequest{Password: "first-password"}); err != nil {
+	if err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{Password: "first-password"}); err != nil {
 		t.Fatalf("UpdateUserPassword() error = %v", err)
 	}
 	if users.written["password"] == nil {
@@ -81,7 +84,7 @@ func TestLogoutEndsOnlyTheCallingSession(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), requestctx.CtxKeySessionID, "current")
 
-	if err := newLogoutLogic(ctx, Deps{Redis: rds}).Logout(); err != nil {
+	if err := NewService(Deps{Redis: rds}).Logout(ctx); err != nil {
 		t.Fatalf("Logout() error = %v", err)
 	}
 

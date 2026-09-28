@@ -1,3 +1,9 @@
+// Package orm opens the application's database, MySQL or PostgreSQL, from
+// the database configuration, and holds the dialect-aware query helpers
+// (CSV-column filters, escaped LIKE searches, date buckets, batched deletes)
+// that repositories need to run the same queries on both drivers. The
+// default connection parameters pin the session time zone, which stored
+// times and per-day statistics are in.
 package orm
 
 import (
@@ -16,6 +22,9 @@ import (
 )
 
 const (
+	// DriverMySQL and DriverPostgres are the drivers NormalizeDriver
+	// returns; DriverPostgres2 is the other spelling it accepts for
+	// PostgreSQL, the scheme of postgresql:// DSNs.
 	DriverMySQL     = "mysql"
 	DriverPostgres  = "postgres"
 	DriverPostgres2 = "postgresql"
@@ -23,23 +32,65 @@ const (
 	// DefaultLocation is the time zone the default connection parameters
 	// use when the caller names none.
 	DefaultLocation = "Asia/Shanghai"
-	// DefaultMySQLConfig and DefaultPostgresConfig are the default
-	// connection parameters for DefaultLocation, the values
-	// DefaultMySQLQuery and DefaultPostgresQuery return for it.
-	DefaultMySQLConfig             = "charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true"
-	legacyDefaultMySQLConfig       = "charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai"
-	DefaultPostgresConfig          = "sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel"
+	// DefaultMySQLConfig is the default MySQL connection parameters for
+	// DefaultLocation, the value DefaultMySQLQuery returns for it.
+	DefaultMySQLConfig       = "charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true"
+	legacyDefaultMySQLConfig = "charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai"
+	// DefaultSlowThresholdMs, DefaultConnMaxLifetimeSeconds and
+	// DefaultConnMaxIdleTimeSeconds are the slow-query and pool settings of
+	// a configuration built in code, the same as Config's default tags.
 	DefaultSlowThresholdMs         = 1000
 	DefaultConnMaxLifetimeSeconds  = 1800
 	DefaultConnMaxIdleTimeSeconds  = 300
 	defaultPostgresApplicationName = "perfect-panel"
 )
 
+// locationOrDefault returns location when both drivers can use it: an IANA
+// zone name. Empty, "Local" (which PostgreSQL does not know) and names the
+// time package cannot load fall back to DefaultLocation.
 func locationOrDefault(location string) string {
-	if location == "" {
+	if location == "" || location == "Local" {
+		return DefaultLocation
+	}
+	if _, err := time.LoadLocation(location); err != nil {
 		return DefaultLocation
 	}
 	return location
+}
+
+// SessionLocation reports the time zone the connection stores and reads
+// timestamps in: the loc parameter for MySQL (the driver's UTC when custom
+// parameters name none), the TimeZone parameter for PostgreSQL ("" when
+// custom parameters leave it to the server), and the default parameters'
+// zone otherwise. Stored times and per-day statistics are in this zone.
+func (m Mysql) SessionLocation() string {
+	params := m.Config.Config
+	if m.Driver() == DriverPostgres {
+		if params == "" || isDefaultMySQLQuery(params, m.Location) {
+			return locationOrDefault(m.Location)
+		}
+		values, err := url.ParseQuery(params)
+		if err != nil {
+			return ""
+		}
+		for _, key := range []string{"TimeZone", "timezone", "time_zone"} {
+			if zone := values.Get(key); zone != "" {
+				return zone
+			}
+		}
+		return ""
+	}
+	if params == "" {
+		return locationOrDefault(m.Location)
+	}
+	values, err := url.ParseQuery(params)
+	if err != nil {
+		return ""
+	}
+	if zone := values.Get("loc"); zone != "" {
+		return zone
+	}
+	return "UTC"
 }
 
 // DefaultMySQLQuery returns the default MySQL connection parameters, reading
@@ -73,6 +124,7 @@ func isDefaultMySQLQuery(query, location string) bool {
 	return false
 }
 
+// Config is the database configuration (the Database section).
 type Config struct {
 	Driver          string `yaml:"Driver" default:"mysql"`
 	Addr            string `yaml:"Addr"`
@@ -87,6 +139,8 @@ type Config struct {
 	SlowThreshold   int64  `yaml:"SlowThreshold" default:"1000"`
 }
 
+// Mysql is a database connection to open, of either driver despite its
+// name.
 type Mysql struct {
 	Config Config
 	// Location is the IANA time zone of the default connection parameters,
@@ -95,6 +149,9 @@ type Mysql struct {
 	Location string
 }
 
+// NormalizeDriver maps the driver names a configuration or DSN may use onto
+// DriverMySQL (the default, for an empty name) or DriverPostgres; an unknown
+// name is returned lowercased, for the caller to reject.
 func NormalizeDriver(driver string) string {
 	switch strings.ToLower(strings.TrimSpace(driver)) {
 	case "", DriverMySQL:
@@ -106,10 +163,13 @@ func NormalizeDriver(driver string) string {
 	}
 }
 
+// Driver returns the connection's normalized driver.
 func (m Mysql) Driver() string {
 	return NormalizeDriver(m.Config.Driver)
 }
 
+// Dsn returns the DSN the driver connects with, with the default
+// parameters filled in.
 func (m Mysql) Dsn() string {
 	switch m.Driver() {
 	case DriverPostgres:
@@ -119,6 +179,7 @@ func (m Mysql) Dsn() string {
 	}
 }
 
+// MigrationDsn returns the DSN the schema migrations connect with.
 func (m Mysql) MigrationDsn() string {
 	return m.Dsn()
 }
@@ -224,17 +285,19 @@ func (m *Mysql) gormConfig() *gorm.Config {
 	}
 }
 
+// GetSlowThreshold returns the duration from which a query is logged as
+// slow.
 func (m *Mysql) GetSlowThreshold() time.Duration {
 	return time.Duration(m.Config.SlowThreshold) * time.Millisecond
 }
-func (m *Mysql) GetColorful() bool {
-	return true
-}
 
+// ConnectMysql is ConnectDatabase.
 func ConnectMysql(m Mysql) (*gorm.DB, error) {
 	return ConnectDatabase(m)
 }
 
+// ConnectDatabase opens the connection pool m describes, with the
+// application's GORM configuration.
 func ConnectDatabase(m Mysql) (*gorm.DB, error) {
 	if m.Config.Dbname == "" {
 		return nil, errors.New("database name is empty")

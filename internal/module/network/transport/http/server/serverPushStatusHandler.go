@@ -9,6 +9,14 @@ import (
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 )
 
+// ServerStatusReporter is the part of the network facade
+// ServerPushStatusHandler calls.
+type ServerStatusReporter interface {
+	ServerPushStatus(ctx context.Context, req *dto.ServerPushStatusRequest) error
+}
+
+var _ ServerStatusReporter = network.Service(nil)
+
 // ServerPushStatusHandler documents Push server status.
 //
 // @Summary Push server status
@@ -19,7 +27,7 @@ import (
 // @Param request body dto.ServerPushStatusRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/server/status [post]
-func ServerPushStatusHandler(service network.Service) app.HandlerFunc {
+func ServerPushStatusHandler(service ServerStatusReporter) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.ServerPushStatusRequest{}
 		if err := bindServerStatusRequest(ctx, &req); err != nil {

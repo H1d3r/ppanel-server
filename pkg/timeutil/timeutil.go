@@ -1,7 +1,8 @@
 // Package timeutil provides centralized timezone handling for the application.
-// Call LoadLocation once during initialization to set the canonical timezone,
-// then use Now() and Location() throughout business logic instead of time.Now()
-// and time.Local.
+// Call LoadProcessLocation once during initialization to set the canonical
+// timezone, then use Now() and Location() for business times and database
+// values instead of time.Now() and time.Local. time.Now stays right for what
+// no zone affects: durations, deadlines and Unix timestamps.
 package timeutil
 
 import (
@@ -28,6 +29,20 @@ func LoadLocation(tzName string) error {
 	}
 	loc = l
 	name = tzName
+	return nil
+}
+
+// LoadProcessLocation loads the timezone like LoadLocation and makes it the
+// process's local timezone as well, so time.Now, time.Unix and every library
+// reading time.Local (GORM's automatic timestamps among them) keep a single
+// clock with Now. It matters for PostgreSQL: a zone-less timestamp column
+// stores the written value's wall clock, so values written in two zones stop
+// comparing. Call it once at startup, before other goroutines read the time.
+func LoadProcessLocation(tzName string) error {
+	if err := LoadLocation(tzName); err != nil {
+		return err
+	}
+	time.Local = Location()
 	return nil
 }
 

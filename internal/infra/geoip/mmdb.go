@@ -1,7 +1,11 @@
+// Package geoip reads the local MaxMind GeoLite2 databases: it downloads
+// them on first start, verifying a download before it replaces the active
+// file, and derives the country, region, city and network of a client IP
+// for the request metadata the logs and audit records carry. The lookups
+// are local, so no client address leaves the server.
 package geoip
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +20,8 @@ import (
 )
 
 const (
+	// GeoIPDBURL and GeoIPASNDBURL are the mirror the City and ASN
+	// databases are downloaded from when they are missing.
 	GeoIPDBURL    = "https://raw.githubusercontent.com/adysec/IP_database/main/geolite/GeoLite2-City.mmdb"
 	GeoIPASNDBURL = "https://raw.githubusercontent.com/adysec/IP_database/main/geolite/GeoLite2-ASN.mmdb"
 
@@ -26,6 +32,9 @@ const (
 	GeoIPASNDBType = "GeoLite2-ASN"
 )
 
+// IPLocation holds the open City database and, when it could be opened,
+// the ASN database. The readers are shared by every request and stay open
+// for the life of the process.
 type IPLocation struct {
 	Path    string
 	DB      *geoip2.Reader
@@ -33,12 +42,12 @@ type IPLocation struct {
 	ASNDB   *geoip2.Reader
 }
 
+// NewIPLocation opens the City database at path and the ASN database next
+// to it, downloading either when it is missing. The City database is
+// required; without the ASN database the network organization is omitted.
 func NewIPLocation(path string) (*IPLocation, error) {
-
-	// 检查文件是否存在
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		logger.Infof("[GeoIP] Database not found, downloading from %s", GeoIPDBURL)
-		// 文件不存在，下载数据库
 		err := DownloadGeoIPDatabase(GeoIPDBURL, path, GeoIPDBType)
 		if err != nil {
 			logger.Errorf("[GeoIP] Failed to download database: %v", err.Error())
@@ -71,20 +80,6 @@ func NewIPLocation(path string) (*IPLocation, error) {
 		ipLoc.ASNDB = asnDB
 	}
 	return ipLoc, nil
-}
-
-func (ipLoc *IPLocation) Close() error {
-	if ipLoc == nil {
-		return nil
-	}
-	var errs []error
-	if ipLoc.DB != nil {
-		errs = append(errs, ipLoc.DB.Close())
-	}
-	if ipLoc.ASNDB != nil {
-		errs = append(errs, ipLoc.ASNDB.Close())
-	}
-	return errors.Join(errs...)
 }
 
 // Enrich performs at most one City and one ASN lookup for a public client IP.
@@ -126,8 +121,6 @@ func preferredGeoName(names map[string]string) string {
 // DownloadGeoIPDatabase fetches a database to path. The file only replaces
 // path once it has been verified as a complete database of databaseType.
 func DownloadGeoIPDatabase(url, path, databaseType string) error {
-
-	// 创建路径, 确保目录存在
 	err := os.MkdirAll(filepath.Dir(path), 0755)
 	if err != nil {
 		logger.Errorf("[GeoIP] Failed to create directory: %v", err.Error())
@@ -149,18 +142,17 @@ func DownloadGeoIPDatabase(url, path, databaseType string) error {
 		}
 	}()
 
-	// 请求远程文件
 	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	// The body is only read; closing it cannot lose data.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("download GeoIP database: HTTP %d", resp.StatusCode)
 	}
 
-	// 保存文件
 	const maxGeoIPDatabaseSize = int64(256 << 20)
 	written, err := io.Copy(out, io.LimitReader(resp.Body, maxGeoIPDatabaseSize+1))
 	if err != nil {

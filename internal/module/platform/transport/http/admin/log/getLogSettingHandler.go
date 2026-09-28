@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/httpx"
 )
@@ -19,7 +18,7 @@ var _ dto.LogSetting
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LogSetting}
 // @Router /v1/admin/log/setting [get]
-func GetLogSettingHandler(service platform.Service) app.HandlerFunc {
+func GetLogSettingHandler(service Logs) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 
 		resp, err := service.GetLogSetting(ctx)

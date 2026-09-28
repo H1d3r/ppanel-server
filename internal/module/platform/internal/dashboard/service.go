@@ -1,7 +1,7 @@
 // Package dashboard implements the admin console subdomain of the platform
 // module: cross-domain reporting aggregates. Every foreign-domain access is a
-// read through a port; the owning modules' repositories satisfy them
-// structurally.
+// read through a port typed with the platform's own read models; the
+// composition root adapts the owning modules' facades to them.
 package dashboard
 
 import (
@@ -11,12 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/module/network/entity/node"
-	"github.com/perfect-panel/server/internal/module/network/entity/traffic"
-	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
+	"github.com/perfect-panel/server/internal/module/platform/internal/readmodel"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -26,11 +22,11 @@ import (
 
 // OrderStatsReader reads the order and revenue totals.
 type OrderStatsReader interface {
-	QueryDateOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error)
-	QueryMonthlyOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error)
-	QueryTotalOrders(ctx context.Context) (order.OrdersTotal, error)
-	QueryDailyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
-	QueryMonthlyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error)
+	QueryDateOrders(ctx context.Context, date time.Time) (readmodel.OrdersTotal, error)
+	QueryMonthlyOrders(ctx context.Context, date time.Time) (readmodel.OrdersTotal, error)
+	QueryTotalOrders(ctx context.Context) (readmodel.OrdersTotal, error)
+	QueryDailyOrdersList(ctx context.Context, date time.Time) ([]readmodel.OrdersTotalWithDate, error)
+	QueryMonthlyOrdersList(ctx context.Context, date time.Time) ([]readmodel.OrdersTotalWithDate, error)
 	QueryDateUserCounts(ctx context.Context, date time.Time) (int64, int64, error)
 	QueryMonthlyUserCounts(ctx context.Context, date time.Time) (int64, int64, error)
 	QueryTotalUserCounts(ctx context.Context) (int64, int64, error)
@@ -41,8 +37,8 @@ type UserStatsReader interface {
 	QueryRegisterUserTotal(ctx context.Context) (int64, error)
 	QueryRegisterUserTotalByDate(ctx context.Context, date time.Time) (int64, error)
 	QueryRegisterUserTotalByMonthly(ctx context.Context, date time.Time) (int64, error)
-	QueryDailyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error)
-	QueryMonthlyUserStatisticsList(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error)
+	QueryDailyUserStatisticsList(ctx context.Context, date time.Time) ([]readmodel.UserStatisticsWithDate, error)
+	QueryMonthlyUserStatisticsList(ctx context.Context, date time.Time) ([]readmodel.UserStatisticsWithDate, error)
 }
 
 // TicketStatsReader reads the number of tickets waiting for a reply.
@@ -54,14 +50,14 @@ type TicketStatsReader interface {
 type NodeStatsReader interface {
 	CountServersByReportStatus(ctx context.Context, cutoff time.Time) (int64, int64, error)
 	OnlineUserSubscribeGlobal(ctx context.Context) (int64, error)
-	QueryServerList(ctx context.Context, ids []int64) ([]*node.Server, error)
+	QueryServerList(ctx context.Context, ids []int64) ([]*readmodel.Server, error)
 }
 
 // TrafficStatsReader reads the traffic totals and rankings.
 type TrafficStatsReader interface {
-	QueryTrafficSummary(ctx context.Context, start, end time.Time) (*traffic.TotalTraffic, error)
-	TopServersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]traffic.ServerTrafficRanking, error)
-	TopUsersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]traffic.UserTrafficRanking, error)
+	QueryTrafficSummary(ctx context.Context, start, end time.Time) (*readmodel.TotalTraffic, error)
+	TopServersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]readmodel.ServerTrafficRanking, error)
+	TopUsersTrafficByDay(ctx context.Context, date time.Time, limit int) ([]readmodel.UserTrafficRanking, error)
 }
 
 // LogReader reads the archived daily statistics.
@@ -74,9 +70,11 @@ type LogReader interface {
 // structurally.
 type Cache interface {
 	Get(ctx context.Context, key string) *redis.StringCmd
-	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	Set(ctx context.Context, key string, value any, expiration time.Duration) *redis.StatusCmd
 }
 
+// Deps declares the subdomain's dependencies; the module facade forwards
+// them from the composition root.
 type Deps struct {
 	Orders  OrderStatsReader
 	Users   UserStatsReader
@@ -87,16 +85,14 @@ type Deps struct {
 	Cache   Cache
 }
 
+// Service computes the admin console figures for the platform facade.
 type Service struct {
 	deps Deps
 }
 
+// NewService builds the dashboard service.
 func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
-}
-
-func (s *Service) QueryTicketWaitReply(ctx context.Context) (*dto.TicketWaitRelpyResponse, error) {
-	return newQueryTicketWaitReplyLogic(ctx, s.deps).QueryTicketWaitReply()
 }
 
 // demoMode reports whether this is the demo deployment, which shows canned

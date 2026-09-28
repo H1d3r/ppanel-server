@@ -1,3 +1,9 @@
+// Package trace sets up OpenTelemetry tracing for the process. StartAgent
+// installs the global tracer provider with the exporter the configuration
+// names, and importing the package installs the W3C trace-context and
+// baggage propagators, so traces continue across HTTP calls and queued
+// tasks. The helpers read the trace of a request context; its trace ID is
+// also the request ID the HTTP responses carry (RequestIdKey).
 package trace
 
 import (
@@ -9,17 +15,19 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/perfect-panel/server/pkg/logger"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"go.opentelemetry.io/otel/exporters/zipkin"
 	"go.opentelemetry.io/otel/sdk/resource"
-
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-
-	"github.com/perfect-panel/server/pkg/logger"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+
+	// The Zipkin exporter is deprecated upstream; it stays until it is
+	// removed so existing zipkin configurations keep working, and
+	// createExporter warns whoever still uses it.
+	"go.opentelemetry.io/otel/exporters/zipkin" //nolint:staticcheck // SA1019, see above.
 )
 
 const (
@@ -72,6 +80,9 @@ func StopAgent() {
 	defer lock.Unlock()
 
 	if tp != nil {
+		// StopAgent runs at process exit, after the servers have stopped, so
+		// there is no caller context to inherit; the batch processor still
+		// bounds each final export with its export timeout.
 		_ = tp.Shutdown(context.Background())
 		tp = nil
 	}
@@ -134,6 +145,9 @@ func jaegerOptions(c Config) []otlptracehttp.Option {
 	return opts
 }
 
+// createExporter builds the exporter c names. The exporter lives as long as
+// the process, beyond any caller, so the OTLP exporters are built with a root
+// context, which New only uses to start the client.
 func createExporter(c Config) (sdktrace.SpanExporter, error) {
 	switch c.Batcher {
 	case kindJaeger:
@@ -141,6 +155,7 @@ func createExporter(c Config) (sdktrace.SpanExporter, error) {
 		// gone, so this batcher exports OTLP over HTTP to Jaeger.
 		return otlptracehttp.New(context.Background(), jaegerOptions(c)...)
 	case kindZipkin:
+		logger.Errorf("[trace] the zipkin batcher is deprecated and will be removed with the upstream exporter; export with otlphttp or otlpgrpc (an OpenTelemetry Collector can forward to Zipkin)")
 		return zipkin.New(c.Endpoint)
 	case kindOtlpGrpc:
 		// Always treat trace exporter as optional component, so we use nonblock here,
@@ -175,11 +190,11 @@ func createExporter(c Config) (sdktrace.SpanExporter, error) {
 	case kindFile:
 		f, err := os.OpenFile(c.Endpoint, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 		if err != nil {
-			return nil, fmt.Errorf("file exporter endpoint error: %s", err.Error())
+			return nil, fmt.Errorf("file exporter endpoint: %w", err)
 		}
 		if err := os.Chmod(c.Endpoint, 0o600); err != nil {
 			_ = f.Close()
-			return nil, fmt.Errorf("secure file exporter endpoint: %s", err.Error())
+			return nil, fmt.Errorf("secure file exporter endpoint: %w", err)
 		}
 		return stdouttrace.New(stdouttrace.WithWriter(f))
 	default:

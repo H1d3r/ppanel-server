@@ -9,6 +9,14 @@ import (
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 )
 
+// UserTrafficReporter is the part of the network facade
+// ServerPushUserTrafficHandler calls.
+type UserTrafficReporter interface {
+	ServerPushUserTraffic(ctx context.Context, req *dto.ServerPushUserTrafficRequest) error
+}
+
+var _ UserTrafficReporter = network.Service(nil)
+
 // ServerPushUserTrafficHandler documents Push user Traffic.
 //
 // @Summary Push user Traffic
@@ -19,7 +27,7 @@ import (
 // @Param request body dto.ServerPushUserTrafficRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/server/push [post]
-func ServerPushUserTrafficHandler(service network.Service) app.HandlerFunc {
+func ServerPushUserTrafficHandler(service UserTrafficReporter) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.ServerPushUserTrafficRequest{}
 		if err := bindUserTrafficRequest(ctx, &req); err != nil {

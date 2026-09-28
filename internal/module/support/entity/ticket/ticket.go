@@ -1,3 +1,5 @@
+// Package ticket holds the support ticket rows (the ticket and ticket_follow
+// tables), the ticket statuses and the follow types.
 package ticket
 
 import (
@@ -56,7 +58,8 @@ func (Follow) TableName() string {
 	return "ticket_follow"
 }
 
-// Details 是工单详情视图（含 Follows 预加载），仅做数据类型保留在 model 层。
+// Details is a ticket with its follows preloaded, the view of the ticket
+// detail pages; it is a query result, not a table of its own.
 type Details struct {
 	Id          int64     `gorm:"primaryKey"`
 	Title       string    `gorm:"type:varchar(255);not null;default:'';comment:Title"`

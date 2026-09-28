@@ -1,3 +1,7 @@
+// Package dto is the billing module's contract: the commands, queries and
+// results of its facade and HTTP handlers, and the billing-owned read-only
+// snapshots of other domains' data it returns. The package keeps the name dto
+// so the Swagger schema names (dto.*) stay as they were.
 package dto
 
 type CheckoutOrderRequest struct {

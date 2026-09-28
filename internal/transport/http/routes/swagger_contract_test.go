@@ -48,7 +48,7 @@ func TestSwaggerCoversHertzRoutes(t *testing.T) {
 	engine := server.New()
 	routes.RegisterHandlers(engine, deps)
 	notificationHTTP.RegisterTelegramHandlers(engine, nil, func() string { return "" })
-	billingHTTP.RegisterNotifyHandlers(engine, deps.Store, deps.Billing)
+	billingHTTP.RegisterNotifyHandlers(engine, deps.Billing)
 
 	document := readSwaggerDocument(t)
 	want := make(map[string]bool)

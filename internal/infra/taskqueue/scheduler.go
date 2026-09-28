@@ -1,5 +1,6 @@
 package taskqueue
 
+// The task types of the scheduled jobs.
 const (
 	SchedulerCheckSubscription = "scheduler:check:subscription"
 	// SchedulerRemindExpiringSubscriptions warns owners whose subscription

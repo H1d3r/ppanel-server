@@ -99,17 +99,6 @@ type QueryQuotaTaskPreCountResponse struct {
 	Count int64 `json:"count"`
 }
 
-type QueryQuotaTaskStatusRequest struct {
-	Id int64 `json:"id" validate:"required,gt=0"`
-}
-
-type QueryQuotaTaskStatusResponse struct {
-	Status  uint8  `json:"status"`
-	Current int64  `json:"current"`
-	Total   int64  `json:"total"`
-	Errors  string `json:"errors"`
-}
-
 type QuotaTask struct {
 	Id           int64   `json:"id"`
 	Subscribers  []int64 `json:"subscribers"`

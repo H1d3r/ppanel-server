@@ -2,56 +2,43 @@ package serverapi
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/internal/trafficagg"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/pkg/errors"
 )
 
-//goland:noinspection GoNameStartsWithPackageName
-type ServerPushUserTrafficLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewServerPushUserTrafficLogic Push user Traffic
-func newServerPushUserTrafficLogic(ctx context.Context, deps Deps) *ServerPushUserTrafficLogic {
-	return &ServerPushUserTrafficLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *ServerPushUserTrafficLogic) ServerPushUserTraffic(req *dto.ServerPushUserTrafficRequest) error {
-	// Find server info
-	serverInfo, err := l.deps.Store.Node().FindOneServer(l.ctx, req.ServerId)
+// ServerPushUserTraffic adds a server's traffic report to the aggregation
+// pipeline, which bills it to the subscriptions in batches.
+func (s *Service) ServerPushUserTraffic(ctx context.Context, req *dto.ServerPushUserTrafficRequest) error {
+	log := logger.WithContext(ctx)
+	serverInfo, err := s.deps.Servers.FindOneServer(ctx, req.ServerId)
 	if err != nil {
-		l.Errorw("[PushOnlineUsers] FindOne error", logger.Field("error", err))
+		log.Errorw("[ServerPushUserTraffic] FindOne error", logger.Field("error", err))
 		return errors.New("server not found")
 	}
 
-	if err = trafficagg.New(trafficagg.Deps{
-		Store: l.deps.Store,
-		Usage: l.deps.TrafficUsage,
-		Redis: l.deps.Redis,
+	aggregator := trafficagg.New(trafficagg.Deps{
+		Usage: s.deps.TrafficUsage,
+		Redis: s.deps.Redis,
 		TrafficReportThreshold: func() int64 {
-			return l.deps.Config().Node.TrafficReportThreshold
+			return s.deps.Config().Node.TrafficReportThreshold
 		},
-		Multiplier: l.deps.Multiplier,
+		Multiplier: s.deps.Multiplier,
 		// A node may only bill the subscriptions its user list hands it.
-		ServedSubscriptions: func(ctx context.Context, serverID int64, protocol string) (map[int64]struct{}, error) {
-			return newGetServerUserListLogic(ctx, l.deps, RequestMeta{}).servedSubscriptionIDs(serverID, protocol)
-		},
-	}).AddReport(l.ctx, serverInfo, req.Protocol, dtoTrafficToAggregator(req.Traffic)); err != nil {
-		l.Errorw("[ServerPushUserTraffic] Aggregate traffic error", logger.Field("error", err.Error()))
-		return errors.Wrap(err, "aggregate traffic")
+		ServedSubscriptions: s.servedSubscriptionIDs,
+	})
+	if err := aggregator.AddReport(ctx, serverInfo, req.Protocol, dtoTrafficToAggregator(req.Traffic)); err != nil {
+		log.Errorw("[ServerPushUserTraffic] Aggregate traffic error", logger.Field("error", err.Error()))
+		return fmt.Errorf("aggregate traffic: %w", err)
 	}
 	return nil
 }
 
+// dtoTrafficToAggregator converts the reported entries into the pipeline's
+// form.
 func dtoTrafficToAggregator(items []dto.UserTraffic) []trafficagg.UserTraffic {
 	if len(items) == 0 {
 		return nil

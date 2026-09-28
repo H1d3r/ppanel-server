@@ -2,35 +2,22 @@ package plan
 
 import (
 	"context"
+	"errors"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type DeleteSubscribeLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// Delete subscribe
-func newDeleteSubscribeLogic(ctx context.Context, deps Deps) *DeleteSubscribeLogic {
-	return &DeleteSubscribeLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *DeleteSubscribeLogic) DeleteSubscribe(req *dto.DeleteSubscribeRequest) error {
-	// Check if the subscribe exists
+// DeleteSubscribe deletes a plan no active user subscription holds. The
+// check and the delete share one transaction.
+func (s *Service) DeleteSubscribe(ctx context.Context, req *dto.DeleteSubscribeRequest) error {
+	// phase tells a failed check from a failed delete for the error code.
 	phase := "check"
-	err := l.deps.Store.InSubscriptionTx(l.ctx, func(store repository.SubscriptionStore) error {
-		total, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(l.ctx, req.Id, int64(usersub.SubscribeStatusActive))
+	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
+		total, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(ctx, req.Id, int64(usersub.SubscribeStatusActive))
 		if err != nil {
 			return err
 		}
@@ -38,18 +25,19 @@ func (l *DeleteSubscribeLogic) DeleteSubscribe(req *dto.DeleteSubscribeRequest) 
 			return errorIsExistActiveUser
 		}
 		phase = "delete"
-		return store.Subscribe().Delete(l.ctx, req.Id)
+		return store.Subscribe().Delete(ctx, req.Id)
 	})
 	if err != nil {
 		if errors.Is(err, errorIsExistActiveUser) {
-			return errors.Wrapf(xerr.NewErrCode(xerr.SubscribeIsUsedError), "subscribe is used")
+			return xerr.Errorf(xerr.SubscribeIsUsedError, "subscribe is used")
 		}
+		log := logger.WithContext(ctx)
 		if phase == "delete" {
-			l.Logger.Error("[DeleteSubscribeLogic] delete subscribe failed: ", logger.Field("error", err.Error()))
-			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseDeletedError), "delete subscribe failed: %v", err.Error())
+			log.Error("[DeleteSubscribeLogic] delete subscribe failed: ", logger.Field("error", err.Error()))
+			return xerr.Wrapf(err, xerr.DatabaseDeletedError, "delete subscribe failed: %v", err.Error())
 		}
-		l.Logger.Error("[DeleteSubscribeLogic] check subscribe failed: ", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "check subscribe failed: %v", err.Error())
+		log.Error("[DeleteSubscribeLogic] check subscribe failed: ", logger.Field("error", err.Error()))
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "check subscribe failed: %v", err.Error())
 	}
 	return nil
 }

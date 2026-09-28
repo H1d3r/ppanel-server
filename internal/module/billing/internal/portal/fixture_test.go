@@ -57,15 +57,13 @@ func newPortalFixture(t *testing.T, adjust ...func(*Deps)) *portalFixture {
 		UserAuths:          h.Store.UserAuth(),
 		Plans:              h.Store.Subscribe(),
 		Tx:                 h.Store,
-		UserCache:          h.Store.UserCache(),
+		UserCache:          &billingtest.UserCache{},
 		Inventory:          subscription.NewInventory(h.Store),
 		Sessions:           h.Redis,
 		Queue:              f.queue,
 		GuestCheckoutCache: h.Redis,
 		ExchangeRate:       f.rates,
 		Config: Config{
-			// A bind address is no public host: notify URLs use the site host.
-			Host:         "0.0.0.0",
 			SiteName:     func() string { return "Panel" },
 			CurrencyUnit: func() string { return f.currency },
 			SiteHost:     func() string { return f.siteHost },
@@ -140,11 +138,13 @@ func assertCode(t *testing.T, err error, want uint32) {
 // raceTransactor runs compete just before each billing transaction,
 // standing in for a concurrent request that committed first.
 type raceTransactor struct {
-	Transactor
+	tx      Transactor
 	compete func()
 }
 
+var _ Transactor = raceTransactor{}
+
 func (r raceTransactor) InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error {
 	r.compete()
-	return r.Transactor.InBillingTx(ctx, fn)
+	return r.tx.InBillingTx(ctx, fn)
 }

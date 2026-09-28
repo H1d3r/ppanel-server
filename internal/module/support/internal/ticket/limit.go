@@ -36,7 +36,7 @@ type periodCreationLimiter struct {
 }
 
 func (l periodCreationLimiter) Allow(ctx context.Context, userID int64) (bool, error) {
-	state, err := l.limit.TakeCtx(ctx, strconv.FormatInt(userID, 10))
+	state, err := l.limit.Take(ctx, strconv.FormatInt(userID, 10))
 	if err != nil {
 		return false, err
 	}

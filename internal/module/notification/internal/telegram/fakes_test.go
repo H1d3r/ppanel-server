@@ -13,8 +13,26 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
+	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+)
+
+// Every fake implements its whole port, so a port that grows fails to
+// compile here instead of panicking in a test.
+var (
+	_ TelegramMessenger            = (*recordingMessenger)(nil)
+	_ TelegramAdminHandler         = (*fakeAdminHandler)(nil)
+	_ TelegramSessionStore         = (*fakeRedisStore)(nil)
+	_ TelegramAdminActionStore     = (*fakeRedisStore)(nil)
+	_ TelegramRelayLimiter         = stubLimiter{}
+	_ Accounts                     = (*fakeAccounts)(nil)
+	_ Tickets                      = (*fakeTickets)(nil)
+	_ Subscriptions                = (*fakeSubscriptions)(nil)
+	_ Billing                      = fakeBilling{}
+	_ AuditLogs                    = fakeAuditLogs{}
+	_ repository.TelegramTopicRepo = (*fakeTopicRepo)(nil)
+	_ TelegramTopicClient          = (*fakeTopicClient)(nil)
 )
 
 // ───────────────────────── messaging ─────────────────────────

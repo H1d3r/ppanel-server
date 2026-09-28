@@ -1,3 +1,5 @@
+// Package marketing holds the Hertz handlers of the admin marketing tasks:
+// batch email campaigns and quota gifts.
 package marketing
 
 import (

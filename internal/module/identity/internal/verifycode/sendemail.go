@@ -53,33 +53,33 @@ func (s *Service) SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (
 		interval = IntervalTime
 	}
 	limiter := ratelimit.NewPeriodLimit(int(interval), 1, s.deps.Redis, fmt.Sprintf("%semail:%s:", config.SendIntervalKeyPrefix, verifyType))
-	permit, err := limiter.Take(email)
+	permit, err := limiter.Take(ctx, email)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "take the send interval permit")
 	}
 	if !limiter.ParsePermitState(permit) {
-		return nil, fmt.Errorf("send email too many requests: %w", xerr.NewErrCode(xerr.TooManyRequests))
+		return nil, xerr.Errorf(xerr.TooManyRequests, "send email too many requests")
 	}
 	dailyLimit := cfg.VerifyCodeLimit
 	if dailyLimit <= 0 {
 		dailyLimit = 15
 	}
 	dailyLimiter := ratelimit.NewPeriodLimit(86400, int(dailyLimit), s.deps.Redis, config.SendCountLimitKeyPrefix, ratelimit.Align())
-	permit, err = dailyLimiter.Take(fmt.Sprintf("%s:%s:%s", "email", verifyType, email))
+	permit, err = dailyLimiter.Take(ctx, fmt.Sprintf("%s:%s:%s", "email", verifyType, email))
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "take the daily send permit")
 	}
 	if !dailyLimiter.ParsePermitState(permit) {
-		return nil, fmt.Errorf("send email too many requests today: %w", xerr.NewErrCode(xerr.TodaySendCountExceedsLimit))
+		return nil, xerr.Errorf(xerr.TodaySendCountExceedsLimit, "send email too many requests today")
 	}
 	m, err := s.deps.Store.UserAuth().FindUserAuthMethodByOpenID(ctx, identifier.Email, email)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find email identity")
 	}
 	if verifyType == auth.Register && m.Id > 0 {
-		return nil, fmt.Errorf("email already bound: %w", xerr.NewErrCode(xerr.UserExist))
+		return nil, xerr.Errorf(xerr.UserExist, "email already bound")
 	} else if verifyType == auth.Security && m.Id == 0 {
-		return nil, fmt.Errorf("email not bound: %w", xerr.NewErrCode(xerr.UserNotExist))
+		return nil, xerr.Errorf(xerr.UserNotExist, "email not bound")
 	}
 
 	var taskPayload taskqueue.SendEmailPayload

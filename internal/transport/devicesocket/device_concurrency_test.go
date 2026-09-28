@@ -23,10 +23,17 @@ func deviceTestServer(t *testing.T, dm *DeviceManager, userID int64, maxDevices 
 	return srv
 }
 
-func dialDevice(t *testing.T, srv *httptest.Server, deviceID string) *websocket.Conn {
+// testDeviceID is the device every test connection dials as; dialing it
+// twice replaces the first connection.
+const testDeviceID = "dev1"
+
+func dialDevice(t *testing.T, srv *httptest.Server) *websocket.Conn {
 	t.Helper()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "?device=" + deviceID
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "?device=" + testDeviceID
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("websocket dial: %v", err)
 	}
@@ -43,7 +50,7 @@ func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
 
 	const userID = int64(7)
 	srv := deviceTestServer(t, dm, userID, 5)
-	conn := dialDevice(t, srv, "dev1")
+	conn := dialDevice(t, srv)
 
 	var received atomic.Int64
 	closed := make(chan struct{})
@@ -66,7 +73,7 @@ func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < pushesPerWorker; j++ {
-				if err := dm.SendToDevice(userID, "dev1", "push"); err != nil {
+				if err := dm.SendToDevice(userID, testDeviceID, "push"); err != nil {
 					t.Errorf("SendToDevice: %v", err)
 					return
 				}
@@ -82,7 +89,7 @@ func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					dm.UpdateHeartbeat(userID, "dev1")
+					dm.UpdateHeartbeat(userID, testDeviceID)
 					time.Sleep(time.Millisecond)
 				}
 			}
@@ -122,9 +129,9 @@ func TestKickDeliversNotificationThenCloses(t *testing.T) {
 	}
 
 	srv := deviceTestServer(t, dm, userID, 5)
-	conn := dialDevice(t, srv, "dev1")
+	conn := dialDevice(t, srv)
 
-	dm.KickDevice(userID, "dev1")
+	dm.KickDevice(userID, testDeviceID)
 
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
@@ -157,8 +164,8 @@ func TestReconnectReplacesPreviousSocket(t *testing.T) {
 
 	const userID = int64(11)
 	srv := deviceTestServer(t, dm, userID, 5)
-	oldConn := dialDevice(t, srv, "dev1")
-	newConn := dialDevice(t, srv, "dev1")
+	oldConn := dialDevice(t, srv)
+	newConn := dialDevice(t, srv)
 
 	if err := oldConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
@@ -167,7 +174,7 @@ func TestReconnectReplacesPreviousSocket(t *testing.T) {
 		t.Error("previous socket should be closed after reconnect")
 	}
 
-	if err := dm.SendToDevice(userID, "dev1", "hello"); err != nil {
+	if err := dm.SendToDevice(userID, testDeviceID, "hello"); err != nil {
 		t.Fatalf("SendToDevice after reconnect: %v", err)
 	}
 	if err := newConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {

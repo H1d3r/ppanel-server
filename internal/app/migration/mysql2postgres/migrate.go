@@ -1,8 +1,14 @@
+// Package mysql2postgres copies the data of a MySQL or MariaDB installation
+// into a PostgreSQL database whose schema the migrations created: the rows of
+// the tables and columns both databases have, in foreign-key order, for the
+// migrate mysql2postgres command.
 package mysql2postgres
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,14 +18,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 const schemaMigrationsTable = "schema_migrations"
 
+// Config is a migration run, as the command's flags set it.
 type Config struct {
 	MySQLDSN    string
 	PostgresDSN string
@@ -54,10 +62,13 @@ type foreignKey struct {
 	ParentTable string
 }
 
+// DefaultConfig is the configuration before the flags apply: the public
+// schema and a progress line every 1000 rows.
 func DefaultConfig() Config {
 	return Config{Schema: "public", BatchSize: 1000}
 }
 
+// Run parses the command-line arguments and migrates.
 func Run(ctx context.Context, args []string) error {
 	cfg, err := ParseFlags(args)
 	if err != nil {
@@ -66,6 +77,9 @@ func Run(ctx context.Context, args []string) error {
 	return Migrate(ctx, cfg)
 }
 
+// Migrate copies the rows of every table and column the MySQL source and the
+// PostgreSQL target share, then advances the target's sequences past the
+// copied ids. A dry run only prints the plan.
 func Migrate(ctx context.Context, cfg Config) error {
 	if cfg.MySQLDSN == "" || cfg.PostgresDSN == "" {
 		return errors.New("both --mysql and --postgres are required")
@@ -86,7 +100,7 @@ func Migrate(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("ping mysql: %w", err)
 	}
 
-	postgresDB, err := sql.Open("postgres", cfg.PostgresDSN)
+	postgresDB, err := sql.Open("pgx", cfg.PostgresDSN)
 	if err != nil {
 		return fmt.Errorf("open postgres: %w", err)
 	}
@@ -148,6 +162,8 @@ func closeRows(rows io.Closer, err *error) {
 	}
 }
 
+// ParseFlags reads the migration's configuration from command-line
+// arguments.
 func ParseFlags(args []string) (Config, error) {
 	cfg := DefaultConfig()
 	fs := flag.NewFlagSet("mysql2postgres", flag.ContinueOnError)
@@ -514,49 +530,101 @@ func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, 
 	}
 	defer closeRows(rows, &err)
 
-	tx, err := postgresDB.BeginTx(ctx, nil)
+	conn, err := postgresDB.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("begin postgres transaction for %s: %w", plan.Name, err)
+		return fmt.Errorf("acquire postgres connection for %s: %w", plan.Name, err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = conn.Close() }()
 
-	stmt, err := tx.PrepareContext(ctx, pq.CopyInSchema(schema, plan.Name, cols...))
+	var copied int64
+	err = conn.Raw(func(driverConn any) error {
+		pgxConn, ok := driverConn.(*stdlib.Conn)
+		if !ok {
+			return fmt.Errorf("postgres connection is %T, not pgx", driverConn)
+		}
+		tx, err := pgxConn.Conn().Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin postgres transaction for %s: %w", plan.Name, err)
+		}
+		// A no-op once the transaction committed.
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		// The rows stream through COPY's text format, the format lib/pq's
+		// COPY used, so every value keeps the text rendering it had.
+		reader, writer := io.Pipe()
+		var written sync.WaitGroup
+		var writeErr error
+		written.Add(1)
+		go func() {
+			defer written.Done()
+			copied, writeErr = writeCopyRows(writer, rows, plan, batchSize)
+			_ = writer.CloseWithError(writeErr)
+		}()
+		_, copyErr := tx.Conn().PgConn().CopyFrom(ctx, reader, copyStatement(schema, plan.Name, cols))
+		// Unblock the writer if COPY stopped reading early, then wait: the
+		// rows must not be touched after this function returns.
+		_ = reader.CloseWithError(errCopyStopped)
+		written.Wait()
+		if writeErr != nil {
+			return writeErr
+		}
+		if copyErr != nil {
+			return fmt.Errorf("copy rows into %s: %w", plan.Name, copyErr)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit postgres copy for %s: %w", plan.Name, err)
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("prepare postgres copy for %s: %w", plan.Name, err)
+		return err
 	}
-	stmtClosed := false
-	defer func() {
-		if !stmtClosed {
-			_ = stmt.Close()
-		}
-	}()
+	log.Printf("copy %s: done, %d row(s)", plan.Name, copied)
+	return nil
+}
 
-	raw := make([]any, len(cols))
-	dest := make([]any, len(cols))
+// errCopyStopped tells the row writer that COPY stopped reading.
+var errCopyStopped = errors.New("postgres copy stopped")
+
+// copyStatement is the COPY FROM STDIN statement for the columns of table.
+func copyStatement(schema, table string, cols []string) string {
+	quoted := make([]string, len(cols))
+	for i, col := range cols {
+		quoted[i] = quotePGIdent(col)
+	}
+	return "COPY " + quotePGIdent(schema) + "." + quotePGIdent(table) + " (" + strings.Join(quoted, ", ") + ") FROM STDIN"
+}
+
+// writeCopyRows converts every MySQL row of plan and writes it in COPY's
+// text format, logging progress every batchSize rows.
+func writeCopyRows(w io.Writer, rows *sql.Rows, plan tablePlan, batchSize int) (int64, error) {
+	buffered := bufio.NewWriter(w)
+	raw := make([]any, len(plan.Columns))
+	dest := make([]any, len(plan.Columns))
 	for i := range raw {
 		dest[i] = &raw[i]
 	}
-
 	var copied int64
 	for rows.Next() {
 		if err := rows.Scan(dest...); err != nil {
-			return fmt.Errorf("scan mysql row from %s: %w", plan.Name, err)
+			return copied, fmt.Errorf("scan mysql row from %s: %w", plan.Name, err)
 		}
-		values := make([]any, len(raw))
 		for i, value := range raw {
 			converted, err := convertValue(value, plan.Columns[i])
 			if err != nil {
-				return fmt.Errorf("convert %s.%s: %w", plan.Name, plan.Columns[i].Name, err)
+				return copied, fmt.Errorf("convert %s.%s: %w", plan.Name, plan.Columns[i].Name, err)
 			}
-			values[i] = converted
+			if i > 0 {
+				if err := buffered.WriteByte('\t'); err != nil {
+					return copied, err
+				}
+			}
+			if _, err := buffered.WriteString(copyText(converted)); err != nil {
+				return copied, err
+			}
 		}
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("copy row into %s: %w", plan.Name, err)
+		if err := buffered.WriteByte('\n'); err != nil {
+			return copied, err
 		}
 		copied++
 		if copied%int64(batchSize) == 0 {
@@ -564,21 +632,38 @@ func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate mysql rows from %s: %w", plan.Name, err)
+		return copied, fmt.Errorf("iterate mysql rows from %s: %w", plan.Name, err)
 	}
-	if _, err := stmt.ExecContext(ctx); err != nil {
-		return fmt.Errorf("flush postgres copy for %s: %w", plan.Name, err)
+	return copied, buffered.Flush()
+}
+
+// copyReplacer escapes the characters COPY's text format uses as delimiters.
+var copyReplacer = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+
+// copyText renders a converted value in COPY's text format: \N for NULL,
+// PostgreSQL's literal forms otherwise, delimiters escaped.
+func copyText(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return `\N`
+	case string:
+		return copyReplacer.Replace(v)
+	case []byte:
+		return `\\x` + hex.EncodeToString(v)
+	case bool:
+		if v {
+			return "t"
+		}
+		return "f"
+	case time.Time:
+		return v.Format("2006-01-02 15:04:05.999999999Z07:00")
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(v), 'g', -1, 32)
+	default:
+		return copyReplacer.Replace(fmt.Sprint(v))
 	}
-	if err := stmt.Close(); err != nil {
-		return fmt.Errorf("close postgres copy for %s: %w", plan.Name, err)
-	}
-	stmtClosed = true
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit postgres copy for %s: %w", plan.Name, err)
-	}
-	committed = true
-	log.Printf("copy %s: done, %d row(s)", plan.Name, copied)
-	return nil
 }
 
 func convertValue(value any, col postgresColumn) (any, error) {
@@ -637,11 +722,11 @@ func convertString(value string, col postgresColumn) (any, error) {
 		if value == "" {
 			return nil, nil
 		}
-		t, err := parseTimestamp(value)
-		if err != nil {
-			return value, nil
+		// A value none of the known layouts parses is copied as text, for
+		// PostgreSQL to interpret.
+		if t, err := parseTimestamp(value); err == nil {
+			return t, nil
 		}
-		return t, nil
 	}
 	return value, nil
 }

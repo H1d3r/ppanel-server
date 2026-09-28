@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -20,7 +19,7 @@ import (
 // @Param request query dto.FilterServerTrafficLogRequest false "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.FilterServerTrafficLogResponse}
 // @Router /v1/admin/log/server/traffic/list [get]
-func FilterServerTrafficLogHandler(service platform.Service) app.HandlerFunc {
+func FilterServerTrafficLogHandler(service Logs) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterServerTrafficLogRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

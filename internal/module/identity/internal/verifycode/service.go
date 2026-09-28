@@ -1,6 +1,6 @@
-// Service assembly for the verification-code subdomain: issuing and
-// pre-checking the email/SMS codes that gate registration and account
-// mutations. Only the module facade may reach it.
+// Package verifycode implements the verification-code subdomain of the
+// identity module: issuing and pre-checking the email and SMS codes that gate
+// registration and account mutations. Only the module facade may reach it.
 package verifycode
 
 import (
@@ -57,6 +57,7 @@ type Service struct {
 	deps Deps
 }
 
+// NewService builds the subdomain over the dependencies the facade forwards.
 func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
 }

@@ -1,3 +1,5 @@
+// Package withdrawal holds the HTTP handlers of the admin commission
+// withdrawal review API; they adapt requests to the billing facade.
 package withdrawal
 
 import (

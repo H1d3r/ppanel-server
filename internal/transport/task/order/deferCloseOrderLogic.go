@@ -12,34 +12,38 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-type DeferCloseOrderLogic struct {
+// DeferCloseOrderHandler closes a pending order once its payment window has
+// passed. A failed close is retried for the first three attempts only; the
+// pending-order reconciler closes whatever is left afterwards.
+type DeferCloseOrderHandler struct {
 	deps Dependencies
 }
 
-func NewDeferCloseOrderLogic(deps Dependencies) *DeferCloseOrderLogic {
-	return &DeferCloseOrderLogic{
+// NewDeferCloseOrderHandler builds the handler over the billing facade.
+func NewDeferCloseOrderHandler(deps Dependencies) *DeferCloseOrderHandler {
+	return &DeferCloseOrderHandler{
 		deps: deps,
 	}
 }
 
-func (l *DeferCloseOrderLogic) ProcessTask(ctx context.Context, task *asynq.Task) error {
+func (h *DeferCloseOrderHandler) ProcessTask(ctx context.Context, task *asynq.Task) error {
 	payload := taskqueue.DeferCloseOrderPayload{}
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
-		logger.WithContext(ctx).Error("[DeferCloseOrderLogic] Unmarshal payload failed",
+		logger.WithContext(ctx).Error("[DeferCloseOrder] Unmarshal payload failed",
 			logger.Field("error", err.Error()),
 			logger.Field("payload", string(task.Payload())),
 		)
 		return nil
 	}
 
-	err := l.deps.Billing.CloseOrder(ctx, &dto.CloseOrderRequest{
+	err := h.deps.Billing.CloseOrder(ctx, &dto.CloseOrderRequest{
 		OrderNo: payload.OrderNo,
 	})
-	if err != nil && errors.Is(err, billing.ErrGatewayUnconfirmed) {
+	if errors.Is(err, billing.ErrGatewayUnconfirmed) {
 		// Expected for EPay orders the gateway cannot confirm as paid: the
 		// order stays pending and the reconciler keeps watching it, so
 		// retrying this task would only repeat the same refusal.
-		logger.WithContext(ctx).Infow("[DeferCloseOrderLogic] order stays pending until the gateway confirms payment",
+		logger.WithContext(ctx).Infow("[DeferCloseOrder] order stays pending until the gateway confirms payment",
 			logger.Field("orderNo", payload.OrderNo),
 		)
 		return nil

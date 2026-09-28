@@ -6,7 +6,6 @@ package account
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -107,10 +106,10 @@ func Register(ctx context.Context, store repository.IdentityTransactor, a New, m
 // disabled.
 func EnsureActive(u *user.User) error {
 	if u.DeletedAt.Valid {
-		return fmt.Errorf("user %d is deleted: %w", u.Id, xerr.NewErrCode(xerr.UserNotExist))
+		return xerr.Errorf(xerr.UserNotExist, "user %d is deleted", u.Id)
 	}
 	if u.Enable == nil || !*u.Enable {
-		return fmt.Errorf("user %d is disabled: %w", u.Id, xerr.NewErrCode(xerr.UserDisabled))
+		return xerr.Errorf(xerr.UserDisabled, "user %d is disabled", u.Id)
 	}
 	return nil
 }
@@ -194,12 +193,12 @@ func IssueSession(ctx context.Context, store usersession.Store, cfg SessionConfi
 		loginType = value
 	}
 	if loginType == "device" && device == nil {
-		return "", fmt.Errorf("device session requires a binding: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return "", xerr.Errorf(xerr.InvalidAccess, "device session requires a binding")
 	}
 	grant := usersession.Grant{UserID: userID, LoginType: loginType}
 	if device != nil {
 		if device.Id <= 0 || device.UserId != userID || !device.Enabled {
-			return "", fmt.Errorf("device session binding invalid: %w", xerr.NewErrCode(xerr.InvalidAccess))
+			return "", xerr.Errorf(xerr.InvalidAccess, "device session binding invalid")
 		}
 		grant.DeviceID = device.Id
 	}

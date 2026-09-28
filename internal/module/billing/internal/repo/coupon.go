@@ -35,16 +35,6 @@ func NewCouponRepo(conn cache.CachedConn) repository.CouponRepo {
 	}
 }
 
-//nolint:unused
-func (m *couponRepo) batchGetCacheKeys(Coupons ...*coupon.Coupon) []string {
-	var keys []string
-	for _, coupon := range Coupons {
-		keys = append(keys, m.getCacheKeys(coupon)...)
-	}
-	return keys
-
-}
-
 func (m *couponRepo) getCacheKeys(data *coupon.Coupon) []string {
 	if data == nil {
 		return []string{}
@@ -67,28 +57,24 @@ func (m *couponRepo) Insert(ctx context.Context, data *coupon.Coupon) error {
 
 func (m *couponRepo) FindOne(ctx context.Context, id int64) (*coupon.Coupon, error) {
 	var resp coupon.Coupon
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&coupon.Coupon{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *couponRepo) FindOneByCode(ctx context.Context, code string) (*coupon.Coupon, error) {
 	var resp coupon.Coupon
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&coupon.Coupon{}).Where("code = ?", code).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *couponRepo) Update(ctx context.Context, data *coupon.Coupon) error {
@@ -118,10 +104,11 @@ func (m *couponRepo) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
-// QueryCouponListByPage query coupon list by page
+// QueryCouponListByPage pages the coupons, optionally only those limited to
+// the subscribe plan or whose name or code starts with search.
 func (m *couponRepo) QueryCouponListByPage(ctx context.Context, page, size int, subscribe int64, search string) (total int64, list []*coupon.Coupon, err error) {
 	page, size = repository.NormalizePage(page, size)
-	err = m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err = m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		db := conn.Model(&coupon.Coupon{})
 		if subscribe != 0 {
 			db = db.Scopes(orm.CommaSeparatedContains("subscribe", []string{strconv.FormatInt(subscribe, 10)}))

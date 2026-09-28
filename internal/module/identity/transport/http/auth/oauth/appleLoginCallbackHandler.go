@@ -10,6 +10,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// AppleLoginCallbackService is the part of the identity facade
+// AppleLoginCallbackHandler calls.
+type AppleLoginCallbackService interface {
+	AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCallbackRequest) (*identity.AppleLoginRedirect, error)
+}
+
+var _ AppleLoginCallbackService = identity.Service(nil)
+
 // AppleLoginCallbackHandler documents Apple Login Callback.
 //
 // @Summary Apple Login Callback
@@ -21,7 +29,7 @@ import (
 // @Param state formData string false "OAuth state"
 // @Success 302 {string} string "Redirect to the configured frontend"
 // @Router /v1/auth/oauth/callback/apple [post]
-func AppleLoginCallbackHandler(service identity.Service) app.HandlerFunc {
+func AppleLoginCallbackHandler(service AppleLoginCallbackService) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.AppleLoginCallbackRequest
 		if err := httpx.ShouldBind(ctx, &req); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,7 +16,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
-	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
@@ -186,10 +186,31 @@ type periodFixture struct {
 	cache   *periodTestCache
 }
 
+// testPostgresDSN is the isolated PostgreSQL test database, if one is
+// configured: ENTITLEMENT_TEST_POSTGRES_DSN, else the suite's
+// PPANEL_TEST_POSTGRES_DSN.
+func testPostgresDSN() string {
+	if dsn := os.Getenv("ENTITLEMENT_TEST_POSTGRES_DSN"); dsn != "" {
+		return dsn
+	}
+	return os.Getenv("PPANEL_TEST_POSTGRES_DSN")
+}
+
+// withSearchPath points dsn, a URL or keyword/value DSN, at schema.
+func withSearchPath(dsn, schema string) string {
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" {
+		q := u.Query()
+		q.Set("search_path", schema)
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	return dsn + " search_path=" + schema
+}
+
 func newPeriodFixture(t *testing.T) *periodFixture {
 	t.Helper()
-	var dialect gorm.Dialector = sqlite.Open(filepath.Join(t.TempDir(), "periods.db"))
-	if dsn := os.Getenv("ENTITLEMENT_TEST_POSTGRES_DSN"); dsn != "" {
+	dialect := sqlite.Open(filepath.Join(t.TempDir(), "periods.db"))
+	if dsn := testPostgresDSN(); dsn != "" {
 		// The caller supplies an isolated test database, never production.
 		admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err != nil {
@@ -204,7 +225,7 @@ func newPeriodFixture(t *testing.T) *periodFixture {
 			conn, _ := admin.DB()
 			_ = conn.Close()
 		})
-		dialect = postgres.Open(dsn + " search_path=" + schema)
+		dialect = postgres.Open(withSearchPath(dsn, schema))
 	}
 	db, err := gorm.Open(dialect, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -226,7 +247,13 @@ func newPeriodFixture(t *testing.T) *periodFixture {
  note TEXT, entitlement_source VARCHAR(32) NOT NULL DEFAULT '', created_at TIMESTAMP, updated_at TIMESTAMP)`, idType)).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, model := range []any{&entitlement.State{}, &entitlement.Period{}, &entitlement.Revision{}, &inbox.Record{}, &log.SystemLog{}} {
+	// So does the system log model.
+	if err := db.Exec(fmt.Sprintf(`CREATE TABLE system_logs (
+ id %s, type INTEGER NOT NULL DEFAULT 0, date VARCHAR(20), object_id BIGINT NOT NULL DEFAULT 0,
+ content TEXT NOT NULL, created_at TIMESTAMP)`, idType)).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []any{&entitlement.State{}, &entitlement.Period{}, &entitlement.Revision{}, &inbox.Record{}} {
 		if err := db.AutoMigrate(model); err != nil {
 			t.Fatal(err)
 		}
@@ -526,7 +553,7 @@ func TestLocalOrdersPersistPeriodsAndReplayWithoutExtending(t *testing.T) {
 }
 
 func TestPostgresConcurrentEntitlementRevisions(t *testing.T) {
-	if os.Getenv("ENTITLEMENT_TEST_POSTGRES_DSN") == "" {
+	if testPostgresDSN() == "" {
 		t.Skip("requires isolated PostgreSQL")
 	}
 	f := newPeriodFixture(t)
@@ -570,7 +597,7 @@ func TestPostgresConcurrentEntitlementRevisions(t *testing.T) {
 }
 
 func TestPostgresSameTransactionCannotCreateTwoSubscriptions(t *testing.T) {
-	if os.Getenv("ENTITLEMENT_TEST_POSTGRES_DSN") == "" {
+	if testPostgresDSN() == "" {
 		t.Skip("requires isolated PostgreSQL")
 	}
 	f := newPeriodFixture(t)

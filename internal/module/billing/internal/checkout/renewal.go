@@ -12,7 +12,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 )
 
 // Renewal creates a pending order that extends one of the buyer's
@@ -31,13 +30,13 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user subscribe %d", req.UserSubscribeID)
 	}
 	if userSubscribe.UserId != u.Id {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "subscription does not belong to the current user")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "subscription does not belong to the current user")
 	}
 	if userSubscribe.EntitlementSource != "" {
 		return nil, usersub.ErrProviderManaged
 	}
 	if usersub.OnHold(userSubscribe.Status) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.SubscribeNotAvailable), "refunded or stopped subscription cannot be renewed")
+		return nil, xerr.Errorf(xerr.SubscribeNotAvailable, "refunded or stopped subscription cannot be renewed")
 	}
 	plan, err := s.deps.Plans.FindOne(ctx, userSubscribe.SubscribeId)
 	if err != nil {
@@ -51,7 +50,7 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 		return nil, err
 	}
 	if terms.Method == nil {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method is required")
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "payment method is required")
 	}
 	if err := ensureCouponUserLimit(ctx, s.deps.Orders, u.Id, terms.Coupon); err != nil {
 		return nil, err

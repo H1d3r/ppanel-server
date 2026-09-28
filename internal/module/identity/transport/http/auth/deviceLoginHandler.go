@@ -10,6 +10,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// DeviceLoginService is the part of the identity facade DeviceLoginHandler
+// calls.
+type DeviceLoginService interface {
+	DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) (*dto.LoginResponse, error)
+}
+
+var _ DeviceLoginService = identity.Service(nil)
+
 // DeviceLoginHandler documents Device Login.
 //
 // @Summary Device Login
@@ -20,7 +28,7 @@ import (
 // @Param request body dto.DeviceLoginRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/login/device [post]
-func DeviceLoginHandler(service identity.Service) app.HandlerFunc {
+func DeviceLoginHandler(service DeviceLoginService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.DeviceLoginRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

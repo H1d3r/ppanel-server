@@ -4,8 +4,10 @@ import (
 	"github.com/perfect-panel/server/internal/infra/integration"
 )
 
+// Platform is an SMS provider, stored in the configuration by its name.
 type Platform int
 
+// The supported providers.
 const (
 	AlibabaCloud Platform = iota
 	Smsbao
@@ -21,6 +23,7 @@ var platforms = integration.NewPlatforms(unsupported, map[string]Platform{
 	"twilio":       Twilio,
 })
 
+// String returns the name the configuration stores p under.
 func (p Platform) String() string {
 	return platforms.Name(p)
 }
@@ -29,6 +32,8 @@ func parsePlatform(s string) Platform {
 	return platforms.Parse(s)
 }
 
+// GetSupportedPlatforms describes the providers and their configuration
+// fields for the administrators' settings page.
 func GetSupportedPlatforms() []integration.Info {
 	return []integration.Info{
 		{

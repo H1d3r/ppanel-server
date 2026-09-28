@@ -1,3 +1,4 @@
+// Package ads holds the Hertz handlers of the admin ads management.
 package ads
 
 import (

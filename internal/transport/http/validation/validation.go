@@ -6,11 +6,12 @@ package validation
 import (
 	"reflect"
 
+	"errors"
+
 	"github.com/go-playground/locales/en"
 	ut "github.com/go-playground/universal-translator"
 	"github.com/go-playground/validator/v10"
 	enTranslations "github.com/go-playground/validator/v10/translations/en"
-	"github.com/pkg/errors"
 )
 
 var engine, translator = newEngine()

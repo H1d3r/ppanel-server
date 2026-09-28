@@ -3,10 +3,10 @@ package adminuser
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
+	"github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/identity/internal/account"
@@ -22,7 +22,7 @@ import (
 func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) error {
 	referCode := req.ReferCode
 	if referCode == "" {
-		// timestamp replaces user id
+		// The account has no id yet, so the code is derived from the time.
 		referCode = user.GenerateInviteCode(timeutil.Now().UnixMicro())
 	}
 	plain := req.Password
@@ -60,7 +60,7 @@ func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) er
 		referer, err := s.deps.Users.FindOneByEmail(ctx, req.RefererUser)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("referer user not found: %w", xerr.NewErrCode(xerr.UserNotExist))
+				return xerr.Errorf(xerr.UserNotExist, "referer user not found")
 			}
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find referer user")
 		}
@@ -68,10 +68,10 @@ func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) er
 	}
 
 	// Two sequential domain transactions replace the old cross-domain one:
-	// the identity transaction creates the account (and its zero wallet
-	// row); the billing transaction credits the initial money. A failure
-	// between them leaves an uncredited account the admin can adjust — the
-	// same partial-failure surface the flows will have as services.
+	// the identity transaction creates the account; the billing module's
+	// own transaction credits the initial money. A failure between them
+	// leaves an uncredited account the admin can adjust — the same
+	// partial-failure surface the flows will have as services.
 	if err := s.deps.Store.InIdentityTx(ctx, func(tx repository.IdentityStore) error {
 		return account.Create(ctx, tx, account.New{User: newUser, Identities: identities})
 	}); err != nil {
@@ -80,21 +80,11 @@ func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) er
 	if req.Balance == 0 && req.Commission == 0 && req.GiftAmount == 0 {
 		return nil
 	}
-	return s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
-		w, err := store.Wallet().FindOneForUpdate(ctx, newUser.Id)
-		if err != nil {
-			return xerr.Wrapf(err, xerr.DatabaseQueryError, "load new user wallet")
-		}
-		w.Balance = req.Balance
-		w.GiftAmount = req.GiftAmount
-		w.Commission = req.Commission
-		if err := store.Wallet().UpdateBalanceFields(ctx, w); err != nil {
-			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "credit new user wallet")
-		}
-		if err := store.Wallet().UpdateCommission(ctx, w); err != nil {
-			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "credit new user commission")
-		}
-		return nil
+	return s.deps.Wallet.OpenWallet(ctx, wallet.Wallet{
+		UserId:     newUser.Id,
+		Balance:    req.Balance,
+		GiftAmount: req.GiftAmount,
+		Commission: req.Commission,
 	})
 }
 
@@ -104,7 +94,7 @@ func (s *Service) ensureIdentityFree(ctx context.Context, authType, authIdentifi
 	_, err := s.deps.UserAuths.FindUserAuthMethodByOpenID(ctx, authType, authIdentifier)
 	switch {
 	case err == nil:
-		return fmt.Errorf("the %s identifier is bound to an account: %w", authType, xerr.NewErrCode(taken))
+		return xerr.Errorf(taken, "the %s identifier is bound to an account", authType)
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return nil
 	default:

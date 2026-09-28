@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	pkgerrors "github.com/pkg/errors"
 )
 
 var errStore = errors.New("store unavailable")
@@ -15,7 +13,7 @@ var errStore = errors.New("store unavailable")
 // an exhausted coupon inside a transaction reaches the client as such, not as
 // an internal error.
 func TestWrapfKeepsInnerCodeUnderGenericCode(t *testing.T) {
-	inner := pkgerrors.Wrapf(NewErrCode(CouponInsufficientUsage), "coupon used or expired")
+	inner := Errorf(CouponInsufficientUsage, "coupon used or expired")
 	for _, code := range []uint32{ERROR, DatabaseQueryError, DatabaseUpdateError, DatabaseInsertError, DatabaseDeletedError} {
 		err := Wrapf(inner, code, "transaction error: %v", inner.Error())
 		if got := CodeOf(err); got != CouponInsufficientUsage {
@@ -47,12 +45,12 @@ func TestWrapfAttachesCodeAndKeepsCause(t *testing.T) {
 	}
 	want := fmt.Sprintf("find user 7: %s: %s", errStore, NewErrCode(DatabaseQueryError))
 	if err.Error() != want {
-		t.Fatalf("message = %q, want %q (the shape errors.Wrapf produced)", err.Error(), want)
+		t.Fatalf("message = %q, want %q (the context, the cause, then the code)", err.Error(), want)
 	}
-	// The response layer still finds the code through pkg/errors' Cause walk.
+	// The response layer finds the code by walking the chain.
 	var coded *CodeError
-	if !errors.As(pkgerrors.Cause(err), &coded) || coded.GetErrCode() != DatabaseQueryError {
-		t.Fatalf("code not found through errors.Cause: %v", pkgerrors.Cause(err))
+	if !errors.As(err, &coded) || coded.GetErrCode() != DatabaseQueryError {
+		t.Fatalf("code not found in the chain of %v", err)
 	}
 }
 
@@ -66,8 +64,8 @@ func TestCodeOf(t *testing.T) {
 	if got := CodeOf(errStore); got != ERROR {
 		t.Fatalf("CodeOf(uncoded) = %d, want ERROR", got)
 	}
-	if got := CodeOf(pkgerrors.Wrap(NewErrCode(UserExist), "register")); got != UserExist {
-		t.Fatalf("CodeOf through pkg/errors = %d, want %d", got, UserExist)
+	if got := CodeOf(fmt.Errorf("register: %w", NewErrCode(UserExist))); got != UserExist {
+		t.Fatalf("CodeOf through a wrap = %d, want %d", got, UserExist)
 	}
 }
 
@@ -90,8 +88,8 @@ func TestErrorfCarriesCode(t *testing.T) {
 	if got := CodeOf(err); got != InvalidParams {
 		t.Fatalf("code = %d, want %d", got, InvalidParams)
 	}
-	want := pkgerrors.Wrapf(NewErrCode(InvalidParams), "invalid email: %s", "x").Error()
+	want := "invalid email: x: " + NewErrCode(InvalidParams).Error()
 	if err.Error() != want {
-		t.Fatalf("message = %q, want %q (the shape errors.Wrapf produced)", err.Error(), want)
+		t.Fatalf("message = %q, want %q (the context, then the code)", err.Error(), want)
 	}
 }

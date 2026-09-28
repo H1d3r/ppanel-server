@@ -14,48 +14,53 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
-type BatchEmailLogic struct {
+// BatchEmailHandler runs a marketing email campaign, the batch task an
+// administrator created. The task row in the platform kernel's bookkeeping
+// carries the campaign and its progress, so a campaign that reaches the
+// daily sending limit continues from a follow-up task the next day, and a
+// retried delivery resumes where the last run stopped.
+type BatchEmailHandler struct {
 	deps Dependencies
 	// senders keeps the provider client between campaigns; it is rebuilt
 	// when the email configuration changes.
 	senders mail.Senders
 }
 
-func NewBatchEmailLogic(deps Dependencies) *BatchEmailLogic {
-	return &BatchEmailLogic{
+// NewBatchEmailHandler builds the handler over the task bookkeeping, the
+// message log, the queue and the runtime email settings.
+func NewBatchEmailHandler(deps Dependencies) *BatchEmailHandler {
+	return &BatchEmailHandler{
 		deps: deps,
 	}
 }
 
-func (l *BatchEmailLogic) ProcessTask(ctx context.Context, task *asynq.Task) error {
-	// 解析任务负载
+func (h *BatchEmailHandler) ProcessTask(ctx context.Context, task *asynq.Task) error {
 	payload := task.Payload()
 	if len(payload) == 0 {
-		logger.Error("[BatchEmailLogic] ProcessTask failed: empty payload")
+		logger.WithContext(ctx).Error("[BatchEmail] ProcessTask failed: empty payload")
 		return asynq.SkipRetry
 	}
-	// 转换获取任务id
 	taskID, err := strconv.ParseInt(string(payload), 10, 64)
 	if err != nil {
-		logger.WithContext(ctx).Error("[BatchEmailLogic] ProcessTask failed: invalid task ID",
+		logger.WithContext(ctx).Error("[BatchEmail] ProcessTask failed: invalid task ID",
 			logger.Field("error", err.Error()),
 			logger.Field("payload", string(payload)),
 		)
 		return asynq.SkipRetry
 	}
-	if l.deps.Store == nil {
+	if h.deps.Tasks == nil {
 		return errors.New("batch email task store is nil")
 	}
-	taskInfo, err := l.deps.Store.Task().FindOneByType(ctx, taskID, taskEntity.TypeEmail)
+	taskInfo, err := h.deps.Tasks.FindOneByType(ctx, taskID, taskEntity.TypeEmail)
 	if err != nil {
-		return l.handleFailure(ctx, taskID, err)
+		return h.handleFailure(ctx, taskID, err)
 	}
 	if taskInfo.Status == taskEntity.StatusCompleted || taskInfo.Status == taskEntity.StatusCancelled || taskInfo.Status == taskEntity.StatusEnqueueFailed ||
 		(taskInfo.Status == taskEntity.StatusFailed && taskInfo.Current >= taskInfo.Total) {
 		return nil
 	}
 	if taskInfo.Status == taskEntity.StatusFailed {
-		updated, err := l.deps.Store.Task().UpdateStatusFrom(ctx, taskID, taskEntity.TypeEmail, []int8{taskEntity.StatusFailed}, taskEntity.StatusPending)
+		updated, err := h.deps.Tasks.UpdateStatusFrom(ctx, taskID, taskEntity.TypeEmail, []int8{taskEntity.StatusFailed}, taskEntity.StatusPending)
 		if err != nil {
 			return err
 		}
@@ -63,42 +68,45 @@ func (l *BatchEmailLogic) ProcessTask(ctx context.Context, task *asynq.Task) err
 			return nil
 		}
 	}
-	if l.deps.Email == nil || l.deps.SiteName == nil {
-		return l.handleFailure(ctx, taskID, errors.New("batch email runtime configuration is unavailable"))
+	if h.deps.Email == nil || h.deps.SiteName == nil {
+		return h.handleFailure(ctx, taskID, errors.New("batch email runtime configuration is unavailable"))
 	}
-	sender, err := l.senders.Get(l.deps.Email().Platform, l.deps.Email().PlatformConfig, l.deps.SiteName())
+	sender, err := h.senders.Get(h.deps.Email().Platform, h.deps.Email().PlatformConfig, h.deps.SiteName())
 	if err != nil {
-		logger.WithContext(ctx).Error("[BatchEmailLogic] NewSender failed", logger.Field("error", err.Error()))
-		return l.handleFailure(ctx, taskID, err)
+		logger.WithContext(ctx).Error("[BatchEmail] NewSender failed", logger.Field("error", err.Error()))
+		return h.handleFailure(ctx, taskID, err)
 	}
 	manager := NewWorkerManager()
 	if manager == nil {
-		logger.WithContext(ctx).Error("[BatchEmailLogic] ProcessTask failed: worker manager is nil")
+		logger.WithContext(ctx).Error("[BatchEmail] ProcessTask failed: worker manager is nil")
 		return asynq.SkipRetry
 	}
 
-	err = manager.RunWorker(ctx, taskID, l.deps.Store.Task(), sender,
-		WithMessageLogs(l.deps.Store.Log(), l.deps.Email().Platform))
+	err = manager.RunWorker(ctx, taskID, h.deps.Tasks, sender,
+		WithMessageLogs(h.deps.Logs, h.deps.Email().Platform))
 	if errors.Is(err, ErrTaskNotActive) {
 		return nil
 	}
 	var dailyLimit *DailyLimitReached
 	if !errors.As(err, &dailyLimit) {
-		return l.handleFailure(ctx, taskID, err)
+		return h.handleFailure(ctx, taskID, err)
 	}
-	if l.deps.Queue == nil {
+	if h.deps.Queue == nil {
 		return errors.New("batch email continuation queue is nil")
 	}
 	continuation := asynq.NewTask(task.Type(), task.Payload())
 	continuationID := fmt.Sprintf("marketing-email-%d-%s", taskID, dailyLimit.NextAt.Format("20060102"))
-	_, enqueueErr := l.deps.Queue.EnqueueContext(ctx, continuation, asynq.ProcessAt(dailyLimit.NextAt), asynq.TaskID(continuationID))
+	_, enqueueErr := h.deps.Queue.EnqueueContext(ctx, continuation, asynq.ProcessAt(dailyLimit.NextAt), asynq.TaskID(continuationID))
 	if errors.Is(enqueueErr, asynq.ErrTaskIDConflict) {
 		return nil
 	}
-	return l.handleFailure(ctx, taskID, enqueueErr)
+	return h.handleFailure(ctx, taskID, enqueueErr)
 }
 
-func (l *BatchEmailLogic) handleFailure(ctx context.Context, taskID int64, cause error) error {
+// handleFailure returns cause for asynq to retry the campaign. On the last
+// attempt it also marks the task failed and appends cause to the task's
+// recorded errors, so the administrator sees why the campaign stopped.
+func (h *BatchEmailHandler) handleFailure(ctx context.Context, taskID int64, cause error) error {
 	if cause == nil {
 		return nil
 	}
@@ -107,10 +115,10 @@ func (l *BatchEmailLogic) handleFailure(ctx context.Context, taskID int64, cause
 	if !retryOK || !maxOK || retried < maxRetry {
 		return cause
 	}
-	if l.deps.Store == nil {
+	if h.deps.Tasks == nil {
 		return cause
 	}
-	data, err := l.deps.Store.Task().FindOneByType(ctx, taskID, taskEntity.TypeEmail)
+	data, err := h.deps.Tasks.FindOneByType(ctx, taskID, taskEntity.TypeEmail)
 	if err != nil {
 		return errors.Join(cause, err)
 	}
@@ -127,7 +135,7 @@ func (l *BatchEmailLogic) handleFailure(ctx context.Context, taskID int64, cause
 		return errors.Join(cause, marshalErr)
 	}
 	data.Errors = string(encoded)
-	if _, err := l.deps.Store.Task().UpdateActive(ctx, data); err != nil {
+	if _, err := h.deps.Tasks.UpdateActive(ctx, data); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause

@@ -93,6 +93,8 @@ type Service struct {
 	oauth  *oauth.Service
 }
 
+// NewService builds the subdomain with its account policy and, unless Deps
+// carries one, its OAuth round trip.
 func NewService(deps Deps) *Service {
 	policy := registerpolicy.New(registerpolicy.Deps{
 		Auths:           deps.Store.Auth(),

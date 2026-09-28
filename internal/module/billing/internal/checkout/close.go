@@ -13,7 +13,6 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -87,7 +86,7 @@ func (s *Service) closeOrderOnce(ctx context.Context, orderNo string, actor clos
 		return false, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", orderNo)
 	}
 	if actor.kind == closeByOwner && orderInfo.UserId != actor.userID {
-		return false, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
+		return false, xerr.Errorf(xerr.InvalidAccess, "order does not belong to the current user")
 	}
 	if !order.CanClose(orderInfo.Status) {
 		log.Infow("[CloseOrder] Order is no longer pending",

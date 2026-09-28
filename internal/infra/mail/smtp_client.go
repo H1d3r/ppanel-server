@@ -25,6 +25,7 @@ const (
 	sendTimeout = 60 * time.Second
 )
 
+// SMTPClient sends through an SMTP relay, one connection per message.
 type SMTPClient struct {
 	conf        SMTPConfig
 	implicitTLS bool
@@ -33,6 +34,8 @@ type SMTPClient struct {
 	timeout time.Duration
 }
 
+// SMTPConfig is the stored configuration of the SMTP provider; SiteName,
+// the sender's display name, comes from the site settings instead.
 type SMTPConfig struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -48,6 +51,7 @@ type SMTPConfig struct {
 	InsecureSkipVerify bool `json:"insecure_skip_verify"`
 }
 
+// NewSMTPClient returns a client for conf, or nil for a nil conf.
 func NewSMTPClient(conf *SMTPConfig) *SMTPClient {
 	if conf == nil {
 		return nil
@@ -81,10 +85,6 @@ func implicitTLS(conf *SMTPConfig) bool {
 		return false
 	}
 	return conf.SSL
-}
-
-func (m *SMTPClient) Send(to []string, subject, body string) error {
-	return m.SendContext(context.Background(), to, subject, body)
 }
 
 // SendContext delivers the message over one SMTP conversation, bounded by

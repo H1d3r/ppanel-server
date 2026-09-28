@@ -1,3 +1,5 @@
+// Package tool holds the Hertz handlers of the admin tools: the system log
+// tail, the version, IP geolocation and the server restart.
 package tool
 
 import (

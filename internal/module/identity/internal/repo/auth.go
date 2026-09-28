@@ -64,15 +64,13 @@ func (m *authRepo) Insert(ctx context.Context, data *auth.Auth) error {
 
 func (m *authRepo) FindOne(ctx context.Context, id int64) (*auth.Auth, error) {
 	var resp auth.Auth
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&auth.Auth{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *authRepo) Update(ctx context.Context, data *auth.Auth) error {
@@ -105,7 +103,7 @@ func (m *authRepo) Delete(ctx context.Context, id int64) error {
 // GetAuthListByPage get auth list by page
 func (m *authRepo) GetAuthListByPage(ctx context.Context) ([]*auth.Auth, error) {
 	var list []*auth.Auth
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		conn = conn.Model(&auth.Auth{})
 		return conn.Find(v).Error
 	})
@@ -115,7 +113,7 @@ func (m *authRepo) GetAuthListByPage(ctx context.Context) ([]*auth.Auth, error) 
 // FindOneByMethod find one by method
 func (m *authRepo) FindOneByMethod(ctx context.Context, method string) (*auth.Auth, error) {
 	var data auth.Auth
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&auth.Auth{}).Where("method = ?", method).First(v).Error
 	})
 	return &data, err
@@ -124,7 +122,7 @@ func (m *authRepo) FindOneByMethod(ctx context.Context, method string) (*auth.Au
 // FindAll find all
 func (m *authRepo) FindAll(ctx context.Context) ([]*auth.Auth, error) {
 	var list []*auth.Auth
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		conn = conn.Model(&auth.Auth{})
 		return conn.Find(v).Error
 	})

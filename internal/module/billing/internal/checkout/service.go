@@ -22,7 +22,6 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 )
 
 // Order lifecycle constants shared with the V2 orchestration layer via the
@@ -123,7 +122,7 @@ func NewService(deps Deps) *Service {
 func currentUser(ctx context.Context) (*user.User, error) {
 	u, ok := user.FromContext(ctx)
 	if !ok {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "Invalid Access")
 	}
 	return u, nil
 }
@@ -134,7 +133,7 @@ func orderQuantity(quantity int64) (int64, error) {
 		return 1, nil
 	}
 	if quantity > MaxQuantity {
-		return 0, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "quantity exceeds maximum limit of %d", MaxQuantity)
+		return 0, xerr.Errorf(xerr.InvalidParams, "quantity exceeds maximum limit of %d", MaxQuantity)
 	}
 	return quantity, nil
 }
@@ -180,7 +179,7 @@ func ResolvePlanTerms(ctx context.Context, coupons pricing.CouponFinder, methods
 // planOnSale rejects a plan that is not sold.
 func planOnSale(plan *subscribeEntity.Subscribe) error {
 	if plan.Sell == nil || !*plan.Sell {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.ERROR), "subscribe not sell")
+		return xerr.Errorf(xerr.ERROR, "subscribe not sell")
 	}
 	return nil
 }
@@ -207,7 +206,7 @@ func ensureCouponUserLimit(ctx context.Context, orders couponUserLimiter, userID
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "count coupon uses of user %d", userID)
 	}
 	if count >= c.UserLimit {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon limit exceeded")
+		return xerr.Errorf(xerr.CouponInsufficientUsage, "coupon limit exceeded")
 	}
 	return nil
 }
@@ -223,7 +222,7 @@ func ReserveCoupon(ctx context.Context, tx repository.BillingStore, o *orderEnti
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "reserve coupon %q", o.Coupon)
 	}
 	if !reserved {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used or expired")
+		return xerr.Errorf(xerr.CouponInsufficientUsage, "coupon used or expired")
 	}
 	o.CouponReserved = true
 	return nil
@@ -280,7 +279,7 @@ func ApplyQuote(o *orderEntity.Order, q pricing.Quote) {
 // orderAmountWithinLimit rejects amounts beyond what an order may carry.
 func orderAmountWithinLimit(amount int64) error {
 	if amount > MaxOrderAmount {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "order amount exceeds maximum limit")
+		return xerr.Errorf(xerr.InvalidParams, "order amount exceeds maximum limit")
 	}
 	return nil
 }

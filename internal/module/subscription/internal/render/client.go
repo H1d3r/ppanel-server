@@ -82,9 +82,9 @@ type Proxy struct {
 	XhttpExtra string // xhttp path
 
 	// encryption
-	Encryption              string // encryption，'none', 'mlkem768x25519plus'
-	EncryptionMode          string // encryption mode，'native', 'xorpub', 'random'
-	EncryptionRtt           string // encryption rtt，'0rtt', '1rtt'
+	Encryption              string // encryption, 'none', 'mlkem768x25519plus'
+	EncryptionMode          string // encryption mode, 'native', 'xorpub', 'random'
+	EncryptionRtt           string // encryption rtt, '0rtt', '1rtt'
 	EncryptionClientPadding string // encryption client padding
 	EncryptionPassword      string // encryption password
 
@@ -93,7 +93,7 @@ type Proxy struct {
 	EchServerName string // ECH SNI
 
 	Ratio           float64 // Traffic ratio, default is 1
-	CertMode        string  // Certificate mode, `none`｜`http`｜`dns`｜`self`
+	CertMode        string  // Certificate mode, `none`|`http`|`dns`|`self`
 	CertDNSProvider string  // DNS provider for certificate
 	CertDNSEnv      string  // Environment for DNS provider
 	CertPinSHA256   string  // SHA256 fingerprint of the self-signed certificate (lowercase hex)

@@ -13,6 +13,14 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
+// ServerProtocolConfigReader is the part of the network facade
+// QueryServerProtocolConfigHandler calls.
+type ServerProtocolConfigReader interface {
+	QueryServerProtocolConfig(ctx context.Context, req *dto.QueryServerConfigRequest) (*dto.QueryServerConfigResponse, error)
+}
+
+var _ ServerProtocolConfigReader = network.Service(nil)
+
 // QueryServerProtocolConfigHandler documents Get Server Protocol Config.
 //
 // @Summary Get Server Protocol Config
@@ -23,7 +31,7 @@ import (
 // @Param protocols query []string false "Protocols to include" collectionFormat(multi)
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.QueryServerConfigResponse}
 // @Router /v2/server/{server_id} [get]
-func QueryServerProtocolConfigHandler(service network.Service, nodeSecret func() string) app.HandlerFunc {
+func QueryServerProtocolConfigHandler(service ServerProtocolConfigReader, nodeSecret func() string) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		ctx.Header("Vary", "Accept")
 		acceptsProtobuf := acceptsProtobuf(ctx)

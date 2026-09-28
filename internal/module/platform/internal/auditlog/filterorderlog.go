@@ -5,52 +5,14 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type FilterOrderLogLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-func newFilterOrderLogLogic(ctx context.Context, deps Deps) *FilterOrderLogLogic {
-	return &FilterOrderLogLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-// FilterOrderLog returns durable order-creation audit entries.
-func (l *FilterOrderLogLogic) FilterOrderLog(req *dto.FilterOrderLogRequest) (*dto.FilterOrderLogResponse, error) {
-	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
-		Page:      req.Page,
-		Size:      req.Size,
-		Type:      log.TypeOrderCreated.Uint8(),
-		ObjectID:  req.UserId,
-		Data:      req.Date,
-		StartDate: req.StartDate,
-		EndDate:   req.EndDate,
-		Search:    req.Search,
-	})
-	if err != nil {
-		l.Errorf("[FilterOrderLog] failed to filter system log: %v", err)
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "failed to filter system log: %v", err)
-	}
-
-	list := make([]dto.OrderLog, 0, len(data))
-	for _, datum := range data {
-		var content log.OrderCreated
-		if err := content.Unmarshal([]byte(datum.Content)); err != nil {
-			l.Errorf("[FilterOrderLog] failed to unmarshal content: %v", err)
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "corrupt order log %d: %v", datum.Id, err)
-		}
-		list = append(list, withRequestMetadata(&dto.OrderLog{
-			Id:             datum.Id,
-			UserId:         datum.ObjectID,
+// FilterOrderLog pages the orders created.
+func (s *Service) FilterOrderLog(ctx context.Context, req *dto.FilterOrderLogRequest) (*dto.FilterOrderLogResponse, error) {
+	total, list, err := logPage(ctx, s.deps.Logs, "order", filterParams(log.TypeOrderCreated, req.UserId, req.FilterLogParams), func(row *log.SystemLog, content *log.OrderCreated) dto.OrderLog {
+		return withRequestMetadata(&dto.OrderLog{
+			Id:             row.Id,
+			UserId:         row.ObjectID,
 			OrderNo:        content.OrderNo,
 			OrderType:      content.OrderType,
 			Quantity:       content.Quantity,
@@ -65,8 +27,14 @@ func (l *FilterOrderLogLogic) FilterOrderLog(req *dto.FilterOrderLogRequest) (*d
 			SubscribeId:    content.SubscribeID,
 			Source:         content.Source,
 			Timestamp:      content.Timestamp,
-		}, content.Metadata))
+		}, content.Metadata)
+	})
+	if err != nil {
+		return nil, err
 	}
-
+	// The order log answers an empty list, never null.
+	if list == nil {
+		list = []dto.OrderLog{}
+	}
 	return &dto.FilterOrderLogResponse{Total: total, List: list}, nil
 }

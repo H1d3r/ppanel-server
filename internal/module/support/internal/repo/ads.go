@@ -50,7 +50,7 @@ func (m *adsRepo) Insert(ctx context.Context, data *ads.Ads) error {
 
 func (m *adsRepo) FindOne(ctx context.Context, id int64) (*ads.Ads, error) {
 	var resp ads.Ads
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&ads.Ads{}).Where("id = ?", id).First(&resp).Error
 	})
 	return &resp, err
@@ -84,7 +84,7 @@ func (m *adsRepo) GetAdsListByPage(ctx context.Context, page, size int, filter a
 	var list []*ads.Ads
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		conn = conn.Model(&ads.Ads{})
 		if filter.Status != nil {
 			conn = conn.Where("status = ?", *filter.Status)

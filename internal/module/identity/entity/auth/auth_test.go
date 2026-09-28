@@ -5,6 +5,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/infra/mail"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // A fresh config marshals with every template and subject defaulted; the
@@ -13,7 +14,7 @@ import (
 func TestEmailAuthConfigMarshalFillsAllDefaults(t *testing.T) {
 	cfg := new(EmailAuthConfig)
 	roundTripped := new(EmailAuthConfig)
-	roundTripped.Unmarshal(cfg.Marshal())
+	require.NoError(t, roundTripped.Unmarshal(cfg.Marshal()))
 
 	assert.Equal(t, mail.DefaultEmailVerifyTemplate, roundTripped.VerifyEmailTemplate)
 	assert.Equal(t, mail.DefaultExpirationEmailTemplate, roundTripped.ExpirationEmailTemplate)
@@ -31,7 +32,7 @@ func TestEmailAuthConfigMarshalKeepsCustomizedValues(t *testing.T) {
 		ExpirationEmailSubject:   "【{{.SiteName}}】订阅已到期",
 	}
 	roundTripped := new(EmailAuthConfig)
-	roundTripped.Unmarshal(cfg.Marshal())
+	require.NoError(t, roundTripped.Unmarshal(cfg.Marshal()))
 
 	assert.Equal(t, "<p>自定义维护正文</p>", roundTripped.MaintenanceEmailTemplate)
 	assert.Equal(t, "【{{.SiteName}}】订阅已到期", roundTripped.ExpirationEmailSubject)

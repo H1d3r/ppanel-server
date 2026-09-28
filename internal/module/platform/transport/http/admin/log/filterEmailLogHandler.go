@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -20,7 +19,7 @@ import (
 // @Param request query dto.FilterLogParams false "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.FilterEmailLogResponse}
 // @Router /v1/admin/log/email/list [get]
-func FilterEmailLogHandler(service platform.Service) app.HandlerFunc {
+func FilterEmailLogHandler(service Logs) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.FilterLogParams
 		if err := httpx.ShouldBind(c, &req); err != nil {

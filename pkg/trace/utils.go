@@ -7,15 +7,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// SpanIDFromContext returns the span id from ctx, or an empty string.
-func SpanIDFromContext(ctx context.Context) string {
-	span := trace.SpanContextFromContext(ctx)
-	if span.HasSpanID() {
-		return span.SpanID().String()
-	}
-	return ""
-}
-
 // TraceIDFromContext returns the trace id from ctx, or an empty string.
 func TraceIDFromContext(ctx context.Context) string {
 	span := trace.SpanContextFromContext(ctx)
@@ -25,7 +16,9 @@ func TraceIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// TracerFromContext returns a tracer in ctx, otherwise returns a global tracer.
+// TracerFromContext returns the tracer of the span in ctx, or the global
+// tracer when ctx has none, so a child span stays with its parent's
+// provider.
 func TracerFromContext(ctx context.Context) (tracer trace.Tracer) {
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		tracer = span.TracerProvider().Tracer(TraceName)

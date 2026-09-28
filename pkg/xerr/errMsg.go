@@ -127,18 +127,12 @@ func init() {
 
 }
 
+// MapErrMsg returns the client-facing message of errCode, or that of ERROR
+// for a code without one.
 func MapErrMsg(errCode uint32) string {
 	if msg, ok := message[errCode]; ok {
 		return msg
 	} else {
 		return "Internal Server Error"
-	}
-}
-
-func IsCodeErr(errCode uint32) bool {
-	if _, ok := message[errCode]; ok {
-		return true
-	} else {
-		return false
 	}
 }

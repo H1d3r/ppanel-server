@@ -58,8 +58,8 @@ func TestSendRendersTheTextTemplate(t *testing.T) {
 	if err := s.Send(context.Background(), msg); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if err := s.SendCode("1", "5550001111", "654321"); err != nil {
-		t.Fatalf("SendCode: %v", err)
+	if err := s.Send(context.Background(), CodeMessage("1", "5550001111", "654321")); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
 	want := []sentText{
 		{"86", "13800000000", "Your code is 123456, valid for 5 minutes"},

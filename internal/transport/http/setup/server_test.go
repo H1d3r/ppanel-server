@@ -65,3 +65,21 @@ func TestNewConfigServer_rendersInitAndRedirectsUnknownRoutes(t *testing.T) {
 		t.Fatalf("expected redirect location %q, got %q", "/init", location)
 	}
 }
+
+// A new database stores times in the application's zone, the configuration
+// file's AppLocation; the parameters are written out so a later AppLocation
+// change cannot reinterpret them.
+func TestBuildDatabaseConfigUsesTheAppLocation(t *testing.T) {
+	for driver, want := range map[string]string{
+		"mysql":    "loc=Europe%2FParis",
+		"postgres": "TimeZone=Europe/Paris",
+	} {
+		cfg, err := buildDatabaseConfig(driver, "127.0.0.1", "3306", "ppanel", "root", "secret", "Europe/Paris")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(cfg.Config, want) {
+			t.Errorf("%s parameters = %q, want %s", driver, cfg.Config, want)
+		}
+	}
+}

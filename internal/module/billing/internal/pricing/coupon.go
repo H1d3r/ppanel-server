@@ -9,7 +9,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +26,7 @@ func ResolveCoupon(ctx context.Context, coupons CouponFinder, code string, planI
 	}
 	found, err := coupons.FindOneByCode(ctx, code)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponNotExist), "coupon not found")
+		return nil, xerr.Errorf(xerr.CouponNotExist, "coupon not found")
 	}
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find coupon %q", code)
@@ -42,17 +41,17 @@ func ResolveCoupon(ctx context.Context, coupons CouponFinder, code string, planI
 // nil when it can. Start and expire times are Unix milliseconds.
 func CheckCoupon(c *coupon.Coupon, planID int64, now time.Time) error {
 	if !c.IsEnabled() {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponDisabled), "coupon disabled")
+		return xerr.Errorf(xerr.CouponDisabled, "coupon disabled")
 	}
 	nowMilli := now.UnixMilli()
 	if c.StartTime > 0 && nowMilli < c.StartTime {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponNotApplicable), "coupon is not active")
+		return xerr.Errorf(xerr.CouponNotApplicable, "coupon is not active")
 	}
 	if c.ExpireTime <= 0 || nowMilli > c.ExpireTime {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponExpired), "coupon expired")
+		return xerr.Errorf(xerr.CouponExpired, "coupon expired")
 	}
 	if c.Count != 0 && c.Count <= c.UsedCount {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used")
+		return xerr.Errorf(xerr.CouponInsufficientUsage, "coupon used")
 	}
 	plans, err := slicesx.ParseInt64CSV(c.Subscribe)
 	if err != nil {
@@ -61,7 +60,7 @@ func CheckCoupon(c *coupon.Coupon, planID int64, now time.Time) error {
 		return xerr.Wrapf(err, xerr.CouponNotApplicable, "coupon %d plan list: %v", c.Id, err)
 	}
 	if len(plans) > 0 && !slices.Contains(plans, planID) {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.CouponNotApplicable), "coupon not match")
+		return xerr.Errorf(xerr.CouponNotApplicable, "coupon not match")
 	}
 	return nil
 }

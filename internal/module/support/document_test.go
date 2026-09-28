@@ -167,3 +167,25 @@ func TestBatchDeleteDocumentDeletesEachID(t *testing.T) {
 		t.Fatalf("deleted %v, want 3 ids", repo.deletedIDs)
 	}
 }
+
+// Every document view splits the stored comma-separated tags and shows the
+// document's own switch: the public detail used to answer tags: null, and
+// the admin detail always said hidden.
+func TestDocumentDetailsCarryTheirTagsAndSwitch(t *testing.T) {
+	repo := &fakeDocumentRepo{findOne: &docEntity.Document{Id: 1, Title: "guide", Content: "text", Tags: "setup,ios,setup", Show: ptr(true)}}
+	svc := newDocService(repo, nil)
+
+	public, err := svc.QueryDocumentDetail(context.Background(), &dto.QueryDocumentDetailRequest{Id: 1})
+	if err != nil {
+		t.Fatalf("QueryDocumentDetail: %v", err)
+	}
+	admin, err := svc.GetDocumentDetail(context.Background(), &dto.GetDocumentDetailRequest{Id: 1})
+	if err != nil {
+		t.Fatalf("GetDocumentDetail: %v", err)
+	}
+	for name, doc := range map[string]*dto.Document{"public": public, "admin": admin} {
+		if len(doc.Tags) != 2 || doc.Tags[0] != "setup" || doc.Tags[1] != "ios" || !doc.Show {
+			t.Fatalf("%s detail = %+v, want the tags setup and ios and the document shown", name, doc)
+		}
+	}
+}

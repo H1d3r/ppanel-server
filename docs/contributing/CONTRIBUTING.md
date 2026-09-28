@@ -30,11 +30,11 @@ Makefile pins, into `bin/tools` (ignored by git); nothing is installed globally.
 
 | Command | What it does |
 |---|---|
-| `make check` | Formatting check, `go vet`, golangci-lint on changed lines, unit tests. Run it before pushing. |
+| `make check` | Formatting check, `go vet`, golangci-lint, unit tests. Run it before pushing. |
 | `make fmt` / `make fmt-check` | Rewrite / check formatting (`gofmt` and `goimports`). |
 | `make vet` | `go vet ./...` |
-| `make lint-new LINT_BASE=origin/dev` | golangci-lint, reporting only lines changed since `LINT_BASE` (default `HEAD`, i.e. uncommitted work). CI lints pull requests this way until the existing code is lint clean. |
-| `make lint` | golangci-lint on the whole tree. |
+| `make lint` | golangci-lint on the whole tree, as CI runs it: any finding fails the build. |
+| `make lint-new LINT_BASE=origin/dev` | golangci-lint, reporting only lines changed since `LINT_BASE` (default `HEAD`, i.e. uncommitted work); the pre-commit hook's quick pass. |
 | `make test` / `make test-race` | Unit tests, optionally with the race detector. |
 | `make vulncheck` | govulncheck for reachable known vulnerabilities. |
 | `make proto` / `make proto-check` | Regenerate `api/**/*.pb.go` / fail if the committed files differ. Needs protoc 21.12 (it reports `libprotoc 3.21.12`) on `PATH`; protoc-gen-go is built at the version `go.mod` requires. |

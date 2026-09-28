@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"context"
+
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/pkg/logger"
 )
@@ -13,21 +15,22 @@ type currencySettings struct {
 	AccessKey      string
 }
 
-func Currency(ctx *Dependencies) error {
-	// Retrieve system currency configuration
+// Currency loads the site currency and resets billing's cached exchange rate
+// to zero; the exchange-rate task refreshes it when an API key is configured.
+func Currency(ctx context.Context, deps *Dependencies) error {
 	var configs currencySettings
-	if err := readSettings(categoryCurrency, ctx.Store.System().GetCurrencyConfig, &configs); err != nil {
-		logger.Errorf("[INIT] Failed to get currency configuration: %v", err.Error())
+	if err := readSettings(ctx, categoryCurrency, deps.Settings.GetCurrencyConfig, &configs); err != nil {
+		logger.WithContext(ctx).Errorf("[INIT] Failed to get currency configuration: %v", err.Error())
 		return err
 	}
-	ctx.ExchangeRate.Set(0) // Default exchange rate to 0
+	deps.ExchangeRate.Set(0)
 	currencyConfig := config.Currency{
 		Unit:      configs.CurrencyUnit,
 		Symbol:    configs.CurrencySymbol,
 		AccessKey: configs.AccessKey,
 	}
-	ctx.updateConfig(func(current *config.Config) { current.Currency = currencyConfig })
-	logger.Info("[INIT] Currency configuration loaded",
+	deps.updateRuntime(func(current *config.Runtime) { current.Currency = currencyConfig })
+	logger.WithContext(ctx).Info("[INIT] Currency configuration loaded",
 		logger.Field("unit", currencyConfig.Unit),
 		logger.Field("symbol", currencyConfig.Symbol),
 		logger.Field("provider_configured", currencyConfig.AccessKey != ""),

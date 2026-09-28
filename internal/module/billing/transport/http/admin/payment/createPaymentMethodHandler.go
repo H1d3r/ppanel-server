@@ -1,3 +1,5 @@
+// Package payment holds the HTTP handlers of the admin payment method API;
+// they adapt requests to the billing facade.
 package payment
 
 import (

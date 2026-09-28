@@ -3,7 +3,6 @@ package oauth
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -25,7 +24,7 @@ func (s *Service) OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGet
 	}
 	fields, ok := req.Callback.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("OAuth callback must be an object: %w", xerr.NewErrCode(xerr.InvalidParams))
+		return nil, xerr.Errorf(xerr.InvalidParams, "OAuth callback must be an object")
 	}
 	attempt := account.NewAttempt(s.deps.Store.Log(), req.Method)
 	defer func() {
@@ -70,7 +69,7 @@ func (s *Service) findOrRegister(ctx context.Context, req *dto.OAuthLoginGetToke
 	if !binding.Verified {
 		logger.WithContext(ctx).Errorw("refusing sign-in through an unverified identity",
 			logger.Field("auth_type", req.Method), logger.Field("user_id", binding.UserId))
-		return nil, fmt.Errorf("%s identity is bound to an account that never verified it: %w", req.Method, xerr.NewErrCode(xerr.UserExist))
+		return nil, xerr.Errorf(xerr.UserExist, "%s identity is bound to an account that never verified it", req.Method)
 	}
 	userInfo, err := s.deps.Store.User().FindOne(ctx, binding.UserId)
 	if err != nil {
@@ -108,7 +107,7 @@ func (s *Service) register(ctx context.Context, req *dto.OAuthLoginGetTokenReque
 		existing, err := s.deps.Store.User().FindOneByEmail(ctx, email)
 		switch {
 		case err == nil && existing.Id != 0:
-			return nil, fmt.Errorf("the %s email is registered: %w", method, xerr.NewErrCode(xerr.UserExist))
+			return nil, xerr.Errorf(xerr.UserExist, "the %s email is registered", method)
 		case err != nil && !errors.Is(err, gorm.ErrRecordNotFound):
 			return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user by email")
 		}
@@ -128,7 +127,7 @@ func (s *Service) register(ctx context.Context, req *dto.OAuthLoginGetTokenReque
 func (s *Service) resolveReferer(ctx context.Context, cfg Config, invite string) (*user.User, error) {
 	if invite == "" {
 		if cfg.InviteForced {
-			return nil, fmt.Errorf("invite code is required: %w", xerr.NewErrCode(xerr.InviteCodeError))
+			return nil, xerr.Errorf(xerr.InviteCodeError, "invite code is required")
 		}
 		return nil, nil
 	}

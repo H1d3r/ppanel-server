@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/system"
 	"github.com/perfect-panel/server/internal/module/platform/internal/repo"
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/repository/kernel"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
@@ -30,16 +31,11 @@ type platformTx struct {
 	failCommit error
 }
 
-type txStore struct {
-	repository.PlatformStore
-	system repository.SystemRepo
-}
+var _ SettingsTransactor = (*platformTx)(nil)
 
-func (s txStore) System() repository.SystemRepo { return s.system }
-
-func (p *platformTx) InPlatformTx(ctx context.Context, fn func(repository.PlatformStore) error) error {
+func (p *platformTx) InSettingsTx(ctx context.Context, fn func(SettingsWriter) error) error {
 	return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := fn(txStore{system: repo.NewSystemRepo(cache.NewConn(tx, p.rds))}); err != nil {
+		if err := fn(repo.NewSystemRepo(cache.NewConn(tx, p.rds))); err != nil {
 			return err
 		}
 		return p.failCommit
@@ -50,16 +46,17 @@ func (p *platformTx) InPlatformTx(ctx context.Context, fn func(repository.Platfo
 type runtime struct {
 	mu            sync.Mutex
 	reinitialized []string
-	applied       []dto.VerifyConfig
+	reloadErr     error
 	restarts      chan struct{}
 	restartErr    error
 	path          string
 }
 
-func (r *runtime) reinitialize(subsystem string) {
+func (r *runtime) reinitialize(subsystem string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.reinitialized = append(r.reinitialized, subsystem)
+	return r.reloadErr
 }
 
 func (r *runtime) calls() []string {
@@ -71,13 +68,13 @@ func (r *runtime) calls() []string {
 func (r *runtime) reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.reinitialized, r.applied = nil, nil
+	r.reinitialized = nil
 }
 
 type settingsWorld struct {
 	svc     *Service
 	db      *gorm.DB
-	system  repository.SystemRepo
+	system  kernel.SystemRepo
 	tx      *platformTx
 	runtime *runtime
 }
@@ -110,12 +107,7 @@ func newSettingsWorld(t *testing.T) *settingsWorld {
 			return w.runtime.restartErr
 		},
 		SubscribePath: func() string { return w.runtime.path },
-		ApplyVerifyConfig: func(req *dto.VerifyConfig) {
-			w.runtime.mu.Lock()
-			defer w.runtime.mu.Unlock()
-			w.runtime.applied = append(w.runtime.applied, *req)
-		},
-		Multiplier: func(time.Time) float32 { return 1.5 },
+		Multiplier:    func(time.Time) float32 { return 1.5 },
 	})
 	// The rows the migrations seed with a fixed type.
 	for key, value := range map[string]string{"DNS": "", "Block": "", "Outbound": "", "NodeMultiplierConfig": "[]"} {
@@ -231,16 +223,17 @@ func TestUpdatesReinitializeTheirSubsystem(t *testing.T) {
 	}
 }
 
-// The running verification settings are updated before the subsystem is
-// re-initialized from them.
-func TestUpdateVerifyConfigAppliesTheSettings(t *testing.T) {
+// A reload that fails reaches the administrator: the settings are stored,
+// but the running server still uses the old ones.
+func TestUpdateReportsAFailedReload(t *testing.T) {
 	w := newSettingsWorld(t)
-	req := &dto.VerifyConfig{TurnstileSiteKey: "site-key", EnableLoginVerify: true}
-	if err := w.svc.UpdateVerifyConfig(context.Background(), req); err != nil {
-		t.Fatal(err)
+	w.runtime.reloadErr = errors.New("reload failed")
+	err := w.svc.UpdateSiteConfig(context.Background(), &dto.SiteConfig{SiteName: "x"})
+	if !errors.Is(err, w.runtime.reloadErr) || !strings.Contains(err.Error(), "saved but could not be applied") {
+		t.Fatalf("update = %v, want the reload failure reported", err)
 	}
-	if len(w.runtime.applied) != 1 || w.runtime.applied[0] != *req {
-		t.Fatalf("applied %+v, want the request", w.runtime.applied)
+	if got := w.runtime.calls(); !slices.Equal(got, []string{"site"}) {
+		t.Fatalf("re-initialized %v, want [site]", got)
 	}
 }
 
@@ -301,8 +294,8 @@ func TestFailedUpdatesChangeNothing(t *testing.T) {
 			t.Fatalf("%s: err = %v, want a database update error", name, err)
 		}
 	}
-	if calls := w.runtime.calls(); len(calls) != 0 || len(w.runtime.applied) != 0 {
-		t.Fatalf("failed updates touched the runtime: %v / %+v", calls, w.runtime.applied)
+	if calls := w.runtime.calls(); len(calls) != 0 {
+		t.Fatalf("failed updates touched the runtime: %v", calls)
 	}
 	if got, err := w.svc.GetSiteConfig(ctx); err != nil || got.SiteName != "before" {
 		t.Fatalf("site after a failed update = %+v (err %v)", got, err)
@@ -376,5 +369,62 @@ func TestSettingsReadFailures(t *testing.T) {
 		if err := read(); xerr.CodeOf(err) != xerr.DatabaseQueryError {
 			t.Fatalf("%s: err = %v, want a database query error", name, err)
 		}
+	}
+}
+
+// platformStore is the whole platform store over one test transaction.
+type platformStore struct {
+	tx  *gorm.DB
+	rds *redis.Client
+}
+
+var _ kernel.PlatformStore = platformStore{}
+
+func (s platformStore) System() kernel.SystemRepo {
+	return repo.NewSystemRepo(cache.NewConn(s.tx, s.rds))
+}
+func (s platformStore) Task() kernel.TaskRepo     { return repo.NewTaskRepo(s.tx) }
+func (s platformStore) Log() kernel.LogRepo       { return repo.NewLogRepo(s.tx) }
+func (s platformStore) Inbox() kernel.InboxRepo   { return repo.NewInboxRepo(s.tx) }
+func (s platformStore) Outbox() kernel.OutboxRepo { return repo.NewOutboxRepo(s.tx) }
+
+// storeTx runs platform-scoped transactions on the test database, as the
+// application store does.
+type storeTx struct {
+	db  *gorm.DB
+	rds *redis.Client
+}
+
+var _ PlatformTransactor = storeTx{}
+
+func (p storeTx) InPlatformTx(ctx context.Context, fn func(kernel.PlatformStore) error) error {
+	return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(platformStore{tx: tx, rds: p.rds})
+	})
+}
+
+// The facade's transactor writes the settings into the system settings of
+// a platform transaction: they commit with it, or roll back with it.
+func TestSettingsTransactorWritesInAPlatformTransaction(t *testing.T) {
+	w := newSettingsWorld(t)
+	settings := NewSettingsTransactor(storeTx{db: w.db, rds: w.tx.rds})
+	ctx := context.Background()
+	write := func(value string, then error) error {
+		return settings.InSettingsTx(ctx, func(writer SettingsWriter) error {
+			if err := writer.UpdateValueByCategoryKey(ctx, "site", "SiteName", value, "string"); err != nil {
+				return err
+			}
+			return then
+		})
+	}
+	if err := write("committed", nil); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("abort")
+	if err := write("rolled back", failure); !errors.Is(err, failure) {
+		t.Fatalf("write = %v, want the failure", err)
+	}
+	if got, err := w.svc.GetSiteConfig(ctx); err != nil || got.SiteName != "committed" {
+		t.Fatalf("site = %+v (err %v), want the committed name", got, err)
 	}
 }

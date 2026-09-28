@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 
+	"github.com/perfect-panel/server/internal/module/subscription/entity/client"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 )
 
-// SubscribeRepo subscribe 数据访问接口
+// SubscribeRepo manages the plans (the subscribe table) and their groups,
+// including each plan's inventory and its cached projections.
 type SubscribeRepo interface {
 	Insert(ctx context.Context, data *subscribe.Subscribe) error
 	FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error)
@@ -25,4 +27,15 @@ type SubscribeRepo interface {
 	UpdateGroup(ctx context.Context, data *subscribe.Group) error
 	DeleteGroup(ctx context.Context, id int64) error
 	BatchDeleteGroup(ctx context.Context, ids []int64) error
+}
+
+// ClientRepo manages the subscribe_application rows: the client
+// applications subscription delivery renders for (ADR-001 step 5 places the
+// table in the subscription module).
+type ClientRepo interface {
+	Insert(ctx context.Context, data *client.SubscribeApplication) error
+	FindOne(ctx context.Context, id int64) (*client.SubscribeApplication, error)
+	Update(ctx context.Context, data *client.SubscribeApplication) error
+	Delete(ctx context.Context, id int64) error
+	List(ctx context.Context) ([]*client.SubscribeApplication, error)
 }

@@ -11,9 +11,9 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
+	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -21,7 +21,6 @@ import (
 // scopeStore backs the user-list rebuild: one server with one vless node,
 // one plan on it and two subscriptions, only one of whose owners is enabled.
 type scopeStore struct {
-	repository.Store
 	redis    *redis.Client
 	server   *node.Server
 	lookups  int
@@ -30,70 +29,56 @@ type scopeStore struct {
 	placeholderOwner *usersub.Subscribe
 }
 
-func (s *scopeStore) Node() repository.NodeRepo                         { return scopeNodes{s: s} }
-func (s *scopeStore) Subscribe() repository.SubscribeRepo               { return scopePlans{s: s} }
-func (s *scopeStore) UserSubscription() repository.UserSubscriptionRepo { return scopeSubs{s: s} }
-func (s *scopeStore) User() repository.UserRepo                         { return scopeUsers{s: s} }
+var (
+	_ ServerReader       = (*scopeStore)(nil)
+	_ NodeLister         = (*scopeStore)(nil)
+	_ ServerCache        = (*scopeStore)(nil)
+	_ SubscriptionReader = (*scopeStore)(nil)
+	_ AccountReader      = (*scopeStore)(nil)
+)
 
-type scopeNodes struct {
-	repository.NodeRepo
-	s *scopeStore
-}
-
-func (r scopeNodes) FindOneServer(context.Context, int64) (*node.Server, error) {
-	server := *r.s.server
+func (s *scopeStore) FindOneServer(context.Context, int64) (*node.Server, error) {
+	server := *s.server
 	return &server, nil
 }
-func (r scopeNodes) ServerCacheGeneration(context.Context, int64) (int64, error) { return 0, nil }
-func (r scopeNodes) ListNodes(_ context.Context, params *node.FilterNodeParams) ([]*node.Node, error) {
-	r.s.lookups++
+
+func (s *scopeStore) ServerCacheGeneration(context.Context, int64) (int64, error) { return 0, nil }
+
+func (s *scopeStore) ListNodes(_ context.Context, params *node.FilterNodeParams) ([]*node.Node, error) {
+	s.lookups++
 	if params.Protocol != "vless" {
 		return nil, nil
 	}
-	return []*node.Node{{Id: 11, ServerId: r.s.server.Id, Protocol: "vless"}}, nil
-}
-func (r scopeNodes) SetServerCache(ctx context.Context, _ int64, key string, value interface{}, _ int64) error {
-	r.s.cacheSet = key
-	return r.s.redis.Set(ctx, key, value, time.Minute).Err()
+	return []*node.Node{{Id: 11, ServerId: s.server.Id, Protocol: "vless"}}, nil
 }
 
-type scopePlans struct {
-	repository.SubscribeRepo
-	s *scopeStore
+func (s *scopeStore) SetServerCache(ctx context.Context, _ int64, key string, value any, _ int64) error {
+	s.cacheSet = key
+	return s.redis.Set(ctx, key, value, time.Minute).Err()
 }
 
-func (r scopePlans) FindByNodeScope(_ context.Context, nodeIDs []int64, _ []string) ([]*subscribe.Subscribe, error) {
+// ServableSubscriptionsByNodeScope serves plan 7, which selects the vless
+// node, with its two subscriptions.
+func (s *scopeStore) ServableSubscriptionsByNodeScope(_ context.Context, nodeIDs []int64, _ []string) ([]subscription.ServedSubscription, error) {
 	if len(nodeIDs) == 0 {
 		return nil, nil
 	}
-	return []*subscribe.Subscribe{{Id: 7}}, nil
-}
-
-type scopeSubs struct {
-	repository.UserSubscriptionRepo
-	s *scopeStore
-}
-
-func (r scopeSubs) FindUsersSubscribeBySubscribeIds(context.Context, []int64) ([]*usersub.Subscribe, error) {
-	return []*usersub.Subscribe{
-		{Id: 21, UserId: 100, SubscribeId: 7, UUID: "uuid-21"},
-		{Id: 22, UserId: 101, SubscribeId: 7, UUID: "uuid-22"},
+	plan := &subscribe.Subscribe{Id: 7}
+	return []subscription.ServedSubscription{
+		{Subscription: &usersub.Subscribe{Id: 21, UserId: 100, SubscribeId: 7, UUID: "uuid-21"}, Plan: plan},
+		{Subscription: &usersub.Subscribe{Id: 22, UserId: 101, SubscribeId: 7, UUID: "uuid-22"}, Plan: plan},
 	}, nil
 }
-func (r scopeSubs) FindOneSubscribe(_ context.Context, id int64) (*usersub.Subscribe, error) {
-	if r.s.placeholderOwner == nil || r.s.placeholderOwner.Id != id {
+
+func (s *scopeStore) SubscriptionByID(_ context.Context, id int64) (*usersub.Subscribe, error) {
+	if s.placeholderOwner == nil || s.placeholderOwner.Id != id {
 		return nil, gorm.ErrRecordNotFound
 	}
-	sub := *r.s.placeholderOwner
+	sub := *s.placeholderOwner
 	return &sub, nil
 }
 
-type scopeUsers struct {
-	repository.UserRepo
-	s *scopeStore
-}
-
-func (r scopeUsers) FindEnabledUserIDs(context.Context, []int64) ([]int64, error) {
+func (s *scopeStore) FindEnabledUserIDs(context.Context, []int64) ([]int64, error) {
 	return []int64{100}, nil
 }
 
@@ -103,12 +88,15 @@ func newScopeDeps(t *testing.T) (Deps, *scopeStore, *redis.Client) {
 	client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 	store := &scopeStore{redis: client, server: &node.Server{Id: 4, Protocols: `[{"type":"vless","ratio":1}]`}}
-	return Deps{Store: store, Redis: client, Config: func() Snapshot { return Snapshot{} }}, store, client
+	return Deps{
+		Servers: store, Nodes: store, Caches: store, Subscriptions: store, Accounts: store,
+		Redis: client, Config: func() Snapshot { return Snapshot{} },
+	}, store, client
 }
 
 func servedIDs(t *testing.T, deps Deps) string {
 	t.Helper()
-	ids, err := newGetServerUserListLogic(context.Background(), deps, RequestMeta{}).servedSubscriptionIDs(4, "vless")
+	ids, err := NewService(deps).servedSubscriptionIDs(context.Background(), 4, "vless")
 	if err != nil {
 		t.Fatalf("servedSubscriptionIDs: %v", err)
 	}
@@ -135,7 +123,7 @@ func TestServedSubscriptionIDsSharesTheUserListCache(t *testing.T) {
 		t.Fatalf("rebuild did not populate the user-list cache: key=%q lookups=%d", store.cacheSet, store.lookups)
 	}
 	// The node's own pull now hits the list the report rebuilt.
-	resp, err := newGetServerUserListLogic(context.Background(), deps, RequestMeta{}).GetServerUserList(&dto.GetServerUserListRequest{ServerCommon: dto.ServerCommon{ServerId: 4, Protocol: "vless"}})
+	resp, _, err := NewService(deps).GetServerUserList(context.Background(), &dto.GetServerUserListRequest{ServerCommon: dto.ServerCommon{ServerId: 4, Protocol: "vless"}}, RequestMeta{})
 	if err != nil || len(resp.Users) != 1 || resp.Users[0].Id != 21 {
 		t.Fatalf("user list = %+v, %v", resp, err)
 	}
@@ -145,7 +133,7 @@ func TestServedSubscriptionIDsSharesTheUserListCache(t *testing.T) {
 
 	// A protocol without nodes rebuilds to the placeholder, which serves
 	// nobody, and caches it for the node.
-	got, err := newGetServerUserListLogic(context.Background(), deps, RequestMeta{}).servedSubscriptionIDs(4, "trojan")
+	got, err := NewService(deps).servedSubscriptionIDs(context.Background(), 4, "trojan")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("placeholder list served %v, %v", got, err)
 	}
@@ -192,7 +180,7 @@ func TestServedSubscriptionIDsIgnoresCachedPlaceholder(t *testing.T) {
 // The push endpoint only bills subscriptions the reporting server serves.
 func TestServerPushUserTrafficDropsSubscriptionsTheServerDoesNotServe(t *testing.T) {
 	deps, _, client := newScopeDeps(t)
-	err := newServerPushUserTrafficLogic(context.Background(), deps).ServerPushUserTraffic(&dto.ServerPushUserTrafficRequest{
+	err := NewService(deps).ServerPushUserTraffic(context.Background(), &dto.ServerPushUserTrafficRequest{
 		ServerCommon: dto.ServerCommon{ServerId: 4, Protocol: "vless"},
 		Traffic: []dto.UserTraffic{
 			{SID: 21, Upload: 5, Download: 7},

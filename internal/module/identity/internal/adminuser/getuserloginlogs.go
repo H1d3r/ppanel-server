@@ -7,34 +7,19 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type GetUserLoginLogsLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// Get user login logs
-func newGetUserLoginLogsLogic(ctx context.Context, deps Deps) *GetUserLoginLogsLogic {
-	return &GetUserLoginLogsLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *GetUserLoginLogsLogic) GetUserLoginLogs(req *dto.GetUserLoginLogsRequest) (resp *dto.GetUserLoginLogsResponse, err error) {
-	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
+// GetUserLoginLogs pages the sign-in audits of an account.
+func (s *Service) GetUserLoginLogs(ctx context.Context, req *dto.GetUserLoginLogsRequest) (*dto.GetUserLoginLogsResponse, error) {
+	data, total, err := s.deps.Logs.FilterSystemLog(ctx, &log.FilterParams{
 		Page:     req.Page,
 		Size:     req.Size,
 		Type:     log.TypeLogin.Uint8(),
 		ObjectID: req.UserId,
 	})
 	if err != nil {
-		l.Errorw("[GetUserLoginLogs] get user login logs failed", logger.Field("error", err.Error()), logger.Field("request", req))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "get user login logs failed: %v", err.Error())
+		logger.WithContext(ctx).Errorw("[GetUserLoginLogs] get user login logs failed", logger.Field("error", err.Error()), logger.Field("request", req))
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "get user login logs failed: %v", err.Error())
 	}
 	var list []dto.UserLoginLog
 

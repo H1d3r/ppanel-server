@@ -9,6 +9,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support"
 	ticket "github.com/perfect-panel/server/internal/module/support/entity/ticket"
@@ -19,7 +20,8 @@ import (
 
 // newSupportModule wires the support module against the application store.
 // The adapters below bridge its remaining ports to the task queue, the email
-// worker manager, the Telegram ticket topics and the user subscriptions.
+// worker manager, the Telegram ticket topics and the identity and
+// subscription facades.
 func newSupportModule(store repository.Store, queue *taskqueue.Client, srv *Application) support.Service {
 	return support.New(support.Deps{
 		Announcements: store.Announcement(),
@@ -27,9 +29,9 @@ func newSupportModule(store repository.Store, queue *taskqueue.Client, srv *Appl
 		Documents:     store.Document(),
 		Tickets:       store.Ticket(),
 		Tasks:         store.Task(),
-		Subscriptions: subscriptionReader{store: store},
-		Recipients:    store.User(),
-		QuotaTargets:  store.UserSubscription(),
+		Subscriptions: supportSubscriptions{srv: srv},
+		Recipients:    supportAccounts{srv: srv},
+		QuotaTargets:  supportSubscriptions{srv: srv},
 		Queue:         marketingQueue{client: queue},
 		EmailStopper:  emailWorkerStopper{},
 		TicketNotify:  ticketTopicNotifier{srv: srv},
@@ -127,22 +129,42 @@ type emailWorkerStopper struct{}
 
 func (emailWorkerStopper) StopBatchEmail(taskID int64) {
 	if email.Manager == nil {
-		logger.Error("[StopBatchSendEmailTaskLogic] email worker manager is nil, cannot stop task")
+		logger.Error("[StopBatchSendEmail] email worker manager is nil, cannot stop task")
 		return
 	}
 	email.Manager.RemoveWorker(taskID)
 }
 
-// subscriptionReader adapts the subscription module's user-subscription
-// repository to the support module's SubscriptionReader port.
-type subscriptionReader struct {
-	store repository.Store
-}
+// supportSubscriptions serves support's subscription reads, the ticket
+// flows' active-subscription check and the quota-task target selection, from
+// the subscription facade, which is constructed after support and resolved
+// per call.
+type supportSubscriptions struct{ srv *Application }
 
-func (r subscriptionReader) HasActiveSubscription(ctx context.Context, userID int64) (bool, error) {
-	subs, err := r.store.UserSubscription().QueryUserSubscribe(ctx, userID, int64(usersub.SubscribeStatusActive))
+func (s supportSubscriptions) HasActiveSubscription(ctx context.Context, userID int64) (bool, error) {
+	subs, err := s.srv.Subscription.UserSubscriptions(ctx, userID, int64(usersub.SubscribeStatusActive))
 	if err != nil {
 		return false, err
 	}
 	return len(subs) > 0, nil
+}
+
+func (s supportSubscriptions) QuerySubscribeIdsByFilter(ctx context.Context, filter *usersub.SubscribeFilter) ([]int64, error) {
+	return s.srv.Subscription.SelectSubscriptionIDs(ctx, filter)
+}
+
+func (s supportSubscriptions) CountSubscribesByFilter(ctx context.Context, filter *usersub.SubscribeFilter) (int64, error) {
+	return s.srv.Subscription.CountSelectedSubscriptions(ctx, filter)
+}
+
+// supportAccounts serves the marketing emails' recipient selection from the
+// identity facade, which is constructed after support and resolved per call.
+type supportAccounts struct{ srv *Application }
+
+func (a supportAccounts) QueryEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) ([]string, error) {
+	return a.srv.Identity.QueryEmailRecipients(ctx, filter)
+}
+
+func (a supportAccounts) CountEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) (int64, error) {
+	return a.srv.Identity.CountEmailRecipients(ctx, filter)
 }

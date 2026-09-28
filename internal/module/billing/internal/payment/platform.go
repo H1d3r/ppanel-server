@@ -1,3 +1,6 @@
+// Package payment holds what every payment gateway protocol shares: the
+// supported platforms and their names, and the money conversions between
+// the minor units orders count and the decimal amounts gateways exchange.
 package payment
 
 import (

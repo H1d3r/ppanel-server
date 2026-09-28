@@ -24,6 +24,8 @@ func NewAsynqClient(c config.Config) *taskqueue.Client {
 	return taskqueue.NewClient(asynq.NewClient(QueueRedisOpt(c)))
 }
 
+// NewAsynqInspector returns the queue inspector with which the paid-order
+// reconciler repairs conflicting activation tasks.
 func NewAsynqInspector(c config.Config) *asynq.Inspector {
 	return asynq.NewInspector(QueueRedisOpt(c))
 }

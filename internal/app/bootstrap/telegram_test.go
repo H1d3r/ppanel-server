@@ -10,23 +10,15 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
-	"github.com/perfect-panel/server/internal/module/notification"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 )
 
-type emptyTelegramTokenStore struct {
-	repository.Store
-	auth repository.AuthRepo
-}
+// emptyTelegramToken stores a Telegram auth method without a bot token.
+type emptyTelegramToken struct{}
 
-func (s emptyTelegramTokenStore) Auth() repository.AuthRepo { return s.auth }
+var _ LoginMethods = emptyTelegramToken{}
 
-type emptyTelegramTokenAuthRepo struct {
-	repository.AuthRepo
-}
-
-func (emptyTelegramTokenAuthRepo) FindOneByMethod(context.Context, string) (*auth.Auth, error) {
+func (emptyTelegramToken) FindLoginMethod(context.Context, string) (*auth.Auth, error) {
 	enabled := false
 	return &auth.Auth{
 		Method:  "telegram",
@@ -35,15 +27,21 @@ func (emptyTelegramTokenAuthRepo) FindOneByMethod(context.Context, string) (*aut
 	}, nil
 }
 
+// panickingNotification is a notification module whose update handler
+// panics.
 type panickingNotification struct {
-	notification.Service
 	handled int
 }
+
+var _ TelegramNotifications = (*panickingNotification)(nil)
 
 func (n *panickingNotification) HandleTelegramUpdate(context.Context, *models.Update) {
 	n.handled++
 	panic("handler bug")
 }
+
+func (n *panickingNotification) PublishTelegramCommands(context.Context) error { return nil }
+func (n *panickingNotification) SetupTelegramGroup(context.Context) error      { return nil }
 
 // The polling loop runs handlers without recover: a panic escaping the
 // update handler would kill the API process.
@@ -65,7 +63,7 @@ func TestTelegramUpdateHandlerContainsPanics(t *testing.T) {
 }
 
 func TestTelegramEmptyTokenClearsPublishedRuntimeState(t *testing.T) {
-	runtimeConfig := config.Config{Telegram: config.Telegram{
+	runtimeConfig := config.Config{Runtime: config.Runtime{Telegram: config.Telegram{
 		Enable:        true,
 		BotID:         123,
 		BotName:       "old-bot",
@@ -73,22 +71,22 @@ func TestTelegramEmptyTokenClearsPublishedRuntimeState(t *testing.T) {
 		EnableNotify:  true,
 		WebHookDomain: "https://old.example.com",
 		GroupChatID:   -100123,
-	}}
+	}}}
 	botSetterCalled := false
 	publishedBot := new(tgbot.Bot)
 	deps := &Dependencies{
 		Config: func() config.Config { return runtimeConfig },
-		UpdateConfig: func(update func(*config.Config)) {
-			update(&runtimeConfig)
+		UpdateRuntime: func(update func(*config.Runtime)) {
+			update(&runtimeConfig.Runtime)
 		},
-		Store: emptyTelegramTokenStore{auth: emptyTelegramTokenAuthRepo{}},
+		LoginMethods: emptyTelegramToken{},
 		SetTelegramBot: func(bot *tgbot.Bot) {
 			botSetterCalled = true
 			publishedBot = bot
 		},
 	}
 
-	if err := Telegram(deps); err != nil {
+	if err := Telegram(context.Background(), deps); err != nil {
 		t.Fatalf("Telegram() = %v", err)
 	}
 

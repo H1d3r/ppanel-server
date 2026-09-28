@@ -17,11 +17,15 @@ import (
 // Consumer is persisted; changing it would recreate accounts during replay.
 const Consumer = "identity.guest_account"
 
+// Store is the persistence guest accounts need: the markers of the orders
+// whose account exists, and the identity transaction that creates an account
+// together with its marker.
 type Store interface {
 	Inbox() repository.InboxRepo
 	repository.IdentityTransactor
 }
 
+// Command is the account a paid guest order asks for.
 type Command struct {
 	OrderNo      string
 	AuthType     string
@@ -33,8 +37,10 @@ type Command struct {
 	InviteCode     string
 }
 
+// Service creates the accounts of paid guest orders.
 type Service struct{ store Store }
 
+// New builds the service over the store it persists to.
 func New(store Store) *Service { return &Service{store: store} }
 
 // FindGuestAccount lets billing recover the committed account even when its
@@ -51,6 +57,10 @@ func (s *Service) FindGuestAccount(ctx context.Context, orderNo string) (int64, 
 	return id, true, nil
 }
 
+// EnsureGuestAccount returns the account of the order, creating it on the
+// first call: the account, its unverified identity and the order's marker
+// commit in one identity transaction, so a replay finds the account instead
+// of creating another.
 func (s *Service) EnsureGuestAccount(ctx context.Context, command Command) (int64, error) {
 	if id, found, err := s.FindGuestAccount(ctx, command.OrderNo); err != nil || found {
 		return id, err

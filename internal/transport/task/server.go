@@ -1,3 +1,8 @@
+// Package task is the application's asynq consumer: it registers the handler
+// of every task type and runs them behind the trace middleware, with one
+// failure log line per attempt and the retry policy of the scheduled tasks.
+// The handlers live in the subpackages and only decode payloads and call the
+// modules, which own the transactions.
 package task
 
 import (
@@ -7,6 +12,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // resetTrafficRetryDelay spaces the calendar traffic reset's retries so a
@@ -14,6 +20,8 @@ import (
 // reset's day, which its once-per-day guard is keyed by.
 const resetTrafficRetryDelay = 30 * time.Minute
 
+// Service is the task worker the process runs next to the HTTP server and
+// the scheduler.
 type Service struct {
 	deps   Dependencies
 	server *asynq.Server
@@ -28,6 +36,7 @@ func NewService(redisOpt asynq.RedisConnOpt, deps Dependencies) *Service {
 	}
 }
 
+// Start registers the handlers and consumes tasks until Stop.
 func (m *Service) Start() {
 	logger.Infof("start consumer service")
 	mux := asynq.NewServeMux()
@@ -44,6 +53,7 @@ func (m *Service) Start() {
 	}
 }
 
+// Stop waits for the running handlers and stops consuming.
 func (m *Service) Stop() {
 	logger.Info("stop consumer service")
 	m.server.Stop()
@@ -63,6 +73,9 @@ func initService(redisOpt asynq.RedisConnOpt) *asynq.Server {
 	)
 }
 
+// logTaskFailure logs a failed task run once, with the whole error chain: a
+// coded error's message leaves out the failure it wraps, so the log line
+// uses xerr.Detail rather than Error.
 func logTaskFailure(ctx context.Context, task *asynq.Task, err error) {
 	id, _ := asynq.GetTaskID(ctx)
 	retried, _ := asynq.GetRetryCount(ctx)
@@ -72,10 +85,12 @@ func logTaskFailure(ctx context.Context, task *asynq.Task, err error) {
 		logger.Field("task_id", id),
 		logger.Field("retried", retried),
 		logger.Field("max_retry", maxRetry),
-		logger.Field("error", err.Error()),
+		logger.Field("error", xerr.Detail(err)),
 	)
 }
 
+// retryDelay spaces the retries of a failed task: asynq's backoff, except for
+// the calendar traffic reset (see resetTrafficRetryDelay).
 func retryDelay(n int, err error, task *asynq.Task) time.Duration {
 	if task.Type() == taskqueue.SchedulerResetTraffic {
 		return resetTrafficRetryDelay

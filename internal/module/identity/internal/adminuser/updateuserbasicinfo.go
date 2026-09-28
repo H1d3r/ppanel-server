@@ -2,15 +2,12 @@ package adminuser
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/auth/usersession"
+	"github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
-	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository"
-	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
@@ -80,48 +77,14 @@ func (s *Service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBa
 		}
 	}
 
-	err = s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
-		// Financial adjustments must compare and write the latest values
-		// under the wallet lock, with their audit logs in the same
-		// transaction.
-		walletInfo, err := store.Wallet().FindOneForUpdate(ctx, req.UserId)
-		if err != nil {
-			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find wallet of user %d", req.UserId)
-		}
-		if walletInfo.Balance == req.Balance &&
-			walletInfo.GiftAmount == req.GiftAmount &&
-			walletInfo.Commission == req.Commission {
-			return nil
-		}
-		if walletInfo.Balance != req.Balance {
-			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: req.Balance - walletInfo.Balance, Balance: req.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
-				return err
-			}
-		}
-		if walletInfo.GiftAmount != req.GiftAmount {
-			changeType := log.GiftTypeReduce
-			if req.GiftAmount > walletInfo.GiftAmount {
-				changeType = log.GiftTypeIncrease
-			}
-			content, _ := (&log.Gift{Type: changeType, Amount: req.GiftAmount - walletInfo.GiftAmount, Balance: req.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
-				return err
-			}
-		}
-		if walletInfo.Commission != req.Commission {
-			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: req.Commission - walletInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: req.UserId, Content: string(content)}); err != nil {
-				return err
-			}
-		}
-		walletInfo.Balance = req.Balance
-		walletInfo.GiftAmount = req.GiftAmount
-		walletInfo.Commission = req.Commission
-		if err := store.Wallet().UpdateBalanceFields(ctx, walletInfo); err != nil {
-			return err
-		}
-		return store.Wallet().UpdateCommission(ctx, walletInfo)
+	// The money adjustment is billing's: it compares and writes the latest
+	// values under the wallet lock, with their audit logs, in the billing
+	// module's own transaction.
+	err = s.deps.Wallet.AdjustWallet(ctx, wallet.Wallet{
+		UserId:     req.UserId,
+		Balance:    req.Balance,
+		GiftAmount: req.GiftAmount,
+		Commission: req.Commission,
 	})
 	if err != nil {
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "adjust wallet of user %d", req.UserId)
@@ -139,7 +102,7 @@ func validateAvatarUpdate(currentAvatar, requestedAvatar string) error {
 	}
 
 	if !IsValidImageSize(requestedAvatar, 1024) {
-		return fmt.Errorf("invalid avatar: %w", xerr.NewErrCode(xerr.InvalidParams))
+		return xerr.Errorf(xerr.InvalidParams, "invalid avatar")
 	}
 
 	return nil

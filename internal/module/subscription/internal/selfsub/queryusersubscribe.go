@@ -38,9 +38,12 @@ func (s *Service) QueryUserSubscribe(ctx context.Context) (*dto.QueryUserSubscri
 	cal, now := period.App(), timeutil.Now()
 	for _, item := range data {
 		var sub dto.UserSubscribe
-		mapping.DeepCopy(&sub, item)
+		if err := mapping.Copy(&sub, item); err != nil {
+			return nil, xerr.Wrapf(err, xerr.ERROR, "map subscription %d", item.Id)
+		}
 
-		// 解析Discount字段 避免在续订时只能续订一个月
+		// The plan's discount tiers let the client offer a renewal of more
+		// than one period.
 		if item.Subscribe != nil && item.Subscribe.Discount != "" {
 			var discounts []dto.SubscribeDiscount
 			if err := json.Unmarshal([]byte(item.Subscribe.Discount), &discounts); err == nil {

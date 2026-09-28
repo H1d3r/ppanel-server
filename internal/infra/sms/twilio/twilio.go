@@ -1,3 +1,4 @@
+// Package twilio sends text messages through the Twilio API.
 package twilio
 
 import (
@@ -9,6 +10,7 @@ import (
 	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"
 )
 
+// Config is the stored provider configuration.
 type Config struct {
 	Access      string `json:"access"`
 	Secret      string `json:"secret"`
@@ -16,6 +18,7 @@ type Config struct {
 	Template    string `json:"template"`
 }
 
+// Client sends through one Twilio account.
 type Client struct {
 	config Config
 	http   *http.Client

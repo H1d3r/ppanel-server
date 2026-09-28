@@ -19,13 +19,11 @@ func (f *fixture) assertUntouched(t *testing.T, sub *usersub.Subscribe) {
 	if got := f.Load(t, sub.Id); got.Status != sub.Status {
 		t.Fatalf("status = %d, want %d", got.Status, sub.Status)
 	}
-	for _, consumer := range []string{unsubscribeCancelConsumer, unsubscribeRefundConsumer} {
-		if _, ok := f.marker(t, consumer, sub.Id); ok {
-			t.Fatalf("a refused request wrote the %s marker", consumer)
-		}
+	if _, ok := f.cancelMarker(t, sub.Id); ok {
+		t.Fatalf("a refused request wrote the %s marker", unsubscribeCancelConsumer)
 	}
-	if f.billing.locks != 0 {
-		t.Fatalf("a refused request locked %d wallets", f.billing.locks)
+	if len(f.refunds.requests) != 0 {
+		t.Fatalf("a refused request settled refunds: %+v", f.refunds.requests)
 	}
 }
 

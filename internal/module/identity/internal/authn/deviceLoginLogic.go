@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
@@ -28,7 +27,7 @@ func (s *Service) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) 
 	}
 	if s.deps.Config().DeviceOnlyReal {
 		if secure, _ := ctx.Value(requestctx.CtxKeyDeviceSecure).(bool); !secure {
-			return nil, fmt.Errorf("verified device transport is required: %w", xerr.NewErrCode(xerr.InvalidAccess))
+			return nil, xerr.Errorf(xerr.InvalidAccess, "verified device transport is required")
 		}
 	}
 	attempt := account.NewAttempt(s.deps.Store.Log(), identifier.Device)
@@ -63,7 +62,7 @@ func (s *Service) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) 
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "read device state")
 	}
 	if !deviceInfo.Enabled || deviceInfo.UserId != userInfo.Id {
-		return nil, fmt.Errorf("device is disabled or its binding changed: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "device is disabled or its binding changed")
 	}
 	ip, userAgent := deviceMetadata(ctx)
 	touched, err := devices.TouchDevice(ctx, deviceInfo.Id, userInfo.Id, ip, userAgent)
@@ -71,7 +70,7 @@ func (s *Service) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) 
 		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "refresh device")
 	}
 	if !touched {
-		return nil, fmt.Errorf("device binding changed: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "device binding changed")
 	}
 	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().sessions(), userInfo.Id, identifier.Device, deviceInfo)
 	if err != nil {

@@ -49,13 +49,17 @@ func TestCreateAdsConvertsMilliTimestamps(t *testing.T) {
 	start := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 	err := svc.CreateAds(context.Background(), &dto.CreateAdsRequest{
-		Title: "t", StartTime: start.UnixMilli(), EndTime: end.UnixMilli(),
+		Title: "t", Description: "d", StartTime: start.UnixMilli(), EndTime: end.UnixMilli(),
 	})
 	if err != nil {
 		t.Fatalf("CreateAds: %v", err)
 	}
 	if repo.inserted == nil || !repo.inserted.StartTime.Equal(start) || !repo.inserted.EndTime.Equal(end) {
 		t.Fatalf("timestamps not converted: %+v", repo.inserted)
+	}
+	// The description used to be dropped on create; only an update kept it.
+	if repo.inserted.Description != "d" {
+		t.Fatalf("description = %q, want the request's", repo.inserted.Description)
 	}
 }
 
@@ -96,6 +100,29 @@ func TestUpdateAdsOverwritesTimesAfterCopy(t *testing.T) {
 		t.Fatalf("update not applied: %+v", got)
 	}
 	if !got.StartTime.Equal(start) || !got.EndTime.Equal(end) {
-		t.Fatalf("times must come from the request, not DeepCopy: start=%v end=%v", got.StartTime, got.EndTime)
+		t.Fatalf("times must come from the request: start=%v end=%v", got.StartTime, got.EndTime)
+	}
+}
+
+// The detail shows every field of the ad, its times in Unix milliseconds.
+func TestGetAdsDetailMapsEntity(t *testing.T) {
+	start := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	repo := &fakeAdsRepo{findOne: &adsEntity.Ads{
+		Id: 5, Title: "t", Type: "banner", Content: "c", Description: "d", TargetURL: "https://example.com",
+		StartTime: start, EndTime: start.Add(time.Hour), Status: 1,
+		CreatedAt: start.Add(-time.Hour), UpdatedAt: start.Add(-time.Minute),
+	}}
+
+	got, err := newAdsService(repo).GetAdsDetail(context.Background(), &dto.GetAdsDetailRequest{Id: 5})
+	if err != nil {
+		t.Fatalf("GetAdsDetail: %v", err)
+	}
+	want := dto.Ads{
+		Id: 5, Title: "t", Type: "banner", Content: "c", Description: "d", TargetURL: "https://example.com",
+		StartTime: start.UnixMilli(), EndTime: start.Add(time.Hour).UnixMilli(), Status: 1,
+		CreatedAt: start.Add(-time.Hour).UnixMilli(), UpdatedAt: start.Add(-time.Minute).UnixMilli(),
+	}
+	if *got != want {
+		t.Fatalf("detail = %+v, want %+v", *got, want)
 	}
 }

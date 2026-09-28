@@ -1,3 +1,6 @@
+// Package user holds the HTTP handlers of the user wallet API: commission
+// withdrawal, balance, commission and withdrawal statements, and the
+// affiliate overview; they adapt requests to the billing facade.
 package user
 
 import (

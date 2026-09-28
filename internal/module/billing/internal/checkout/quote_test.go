@@ -93,7 +93,7 @@ func TestPurchasePreviewEqualsTheCreatedOrder(t *testing.T) {
 	for _, tc := range pricingCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCheckoutFixture(t)
-			u, ctx := f.buyer(0, tc.gift)
+			u, ctx := f.buyer(tc.gift)
 			plan, method, code := f.pricingTerms(tc)
 			req := &dto.PurchaseOrderRequest{SubscribeId: plan.Id, Quantity: tc.quantity, Payment: method.Id, Coupon: code}
 
@@ -121,7 +121,7 @@ func TestRenewalPreviewEqualsTheCreatedOrder(t *testing.T) {
 	for _, tc := range pricingCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCheckoutFixture(t)
-			u, ctx := f.buyer(0, tc.gift)
+			u, ctx := f.buyer(tc.gift)
 			plan, method, code := f.pricingTerms(tc)
 			sub := f.h.UserSubscription(u.Id, plan)
 
@@ -150,7 +150,7 @@ func TestRenewalPreviewEqualsTheCreatedOrder(t *testing.T) {
 // and its gift ledger entry names the traffic reset.
 func TestResetTrafficIsPricedCanonically(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 400)
+	u, ctx := f.buyer(400)
 	plan := f.h.Plan(5000, func(p *subscribe.Subscribe) { p.Replacement = 1000 })
 	sub := f.h.UserSubscription(u.Id, plan)
 	method := f.epay(percentFee(10))
@@ -173,7 +173,7 @@ func TestResetTrafficIsPricedCanonically(t *testing.T) {
 // A recharge carries the recharged amount as its price and the fee on top.
 func TestRechargeChargesTheFeeOnTop(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 900)
+	u, ctx := f.buyer(900)
 	method := f.epay(percentFee(3))
 
 	resp, err := f.svc.Recharge(ctx, &dto.RechargeOrderRequest{Amount: 1990, Payment: method.Id})
@@ -192,7 +192,7 @@ func TestRechargeChargesTheFeeOnTop(t *testing.T) {
 // would convert gift credit into regular balance.
 func TestRechargeRejectsBalancePayment(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 0)
+	u, ctx := f.buyer(0)
 	balance := f.h.Payment("balance", "")
 	_, err := f.svc.Recharge(ctx, &dto.RechargeOrderRequest{Amount: 1000, Payment: balance.Id})
 	assertCode(t, err, xerr.PaymentMethodNotFound)
@@ -222,7 +222,7 @@ func assertGiftSpent(t *testing.T, f *checkoutFixture, userID int64, tc pricingC
 // Every flow reports a missing payment method the same way.
 func TestOrderFlowsReportAMissingPaymentMethodAlike(t *testing.T) {
 	f := newCheckoutFixture(t)
-	u, ctx := f.buyer(0, 0)
+	u, ctx := f.buyer(0)
 	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Replacement = 100 })
 	sub := f.h.UserSubscription(u.Id, plan)
 	const missing = 404
@@ -258,7 +258,7 @@ func TestOrderFlowsReportAMissingPaymentMethodAlike(t *testing.T) {
 // A used-up coupon is reported with one code by the preview and the order.
 func TestUsedUpCouponIsReportedAlikeByPreviewAndOrder(t *testing.T) {
 	f := newCheckoutFixture(t)
-	_, ctx := f.buyer(0, 0)
+	_, ctx := f.buyer(0)
 	plan := f.h.Plan(1000)
 	method := f.epay()
 	f.h.Coupon("GONE", func(c *coupon.Coupon) { c.Count, c.UsedCount = 1, 1 })
@@ -274,13 +274,15 @@ func TestUsedUpCouponIsReportedAlikeByPreviewAndOrder(t *testing.T) {
 // order transaction runs, standing in for a concurrent request that held
 // the buyer's wallet lock first.
 type raceTransactor struct {
-	Transactor
+	tx      Transactor
 	compete func()
 }
 
+var _ Transactor = raceTransactor{}
+
 func (r raceTransactor) InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error {
 	r.compete()
-	return r.Transactor.InBillingTx(ctx, fn)
+	return r.tx.InBillingTx(ctx, fn)
 }
 
 // Concurrent orders all pass the per-user coupon count taken before the order
@@ -290,12 +292,12 @@ func TestCheckoutRechecksCouponUserLimitUnderWalletLock(t *testing.T) {
 		t.Run(flow, func(t *testing.T) {
 			for _, limit := range []int64{1, 2} {
 				f := newCheckoutFixture(t)
-				u, ctx := f.buyer(0, 0)
+				u, ctx := f.buyer(0)
 				plan := f.h.Plan(1000)
 				sub := f.h.UserSubscription(u.Id, plan)
 				method := f.epay()
 				f.h.Coupon("ONCE", func(c *coupon.Coupon) { c.UserLimit = limit })
-				f.svc.deps.Tx = raceTransactor{Transactor: f.h.Store, compete: func() {
+				f.svc.deps.Tx = raceTransactor{tx: f.h.Store, compete: func() {
 					f.h.Order(&order.Order{OrderNo: "competing-" + flow, UserId: u.Id, Coupon: "ONCE", Status: order.StatusPending})
 				}}
 				var err error

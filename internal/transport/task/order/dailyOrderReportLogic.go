@@ -13,25 +13,27 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
-// DailyOrderReportLogic posts the previous day's settlement summary into
+// DailyOrderReportHandler posts the previous day's settlement summary into
 // the admin group's notification topic. It reports yesterday because it
 // runs after midnight, when the day it summarises is complete.
-type DailyOrderReportLogic struct {
+type DailyOrderReportHandler struct {
 	deps Dependencies
 }
 
-func NewDailyOrderReportLogic(deps Dependencies) *DailyOrderReportLogic {
-	return &DailyOrderReportLogic{deps: deps}
+// NewDailyOrderReportHandler builds the report over the billing and
+// notification facades.
+func NewDailyOrderReportHandler(deps Dependencies) *DailyOrderReportHandler {
+	return &DailyOrderReportHandler{deps: deps}
 }
 
-func (l *DailyOrderReportLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+func (h *DailyOrderReportHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
 	log := logger.WithContext(ctx)
-	if !l.deps.telegramConfig().EnableNotify {
+	if !h.deps.telegramConfig().EnableNotify {
 		return nil
 	}
 
 	date := timeutil.Now().AddDate(0, 0, -1)
-	report, err := l.deps.Billing.DailyOrderReport(ctx, date)
+	report, err := h.deps.Billing.DailyOrderReport(ctx, date)
 	if err != nil {
 		return err
 	}
@@ -50,7 +52,7 @@ func (l *DailyOrderReportLogic) ProcessTask(ctx context.Context, _ *asynq.Task) 
 
 	// The admin group's notification topic is the only administrator
 	// channel; without a usable group the report is skipped, not retried.
-	if err := l.deps.Notification.NotifyAdminsTelegram(ctx, text); err != nil {
+	if err := h.deps.Notification.NotifyAdminsTelegram(ctx, text); err != nil {
 		log.Infow("[DailyOrderReport] report skipped", logger.Field("reason", err.Error()))
 		return nil
 	}

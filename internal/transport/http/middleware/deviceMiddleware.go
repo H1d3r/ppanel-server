@@ -17,6 +17,14 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
+// DeviceMiddleware applies the device transport to the requests of devices:
+// the device login, a request that declares the device login type, and any
+// request a device session signed in. The signed session counts without the
+// Login-Type header too, so dropping the header cannot skip the transport.
+// With transport security on, such a request is accepted only in a signed,
+// encrypted envelope and the data of its response is encrypted for the
+// device; a response that cannot be encrypted is replaced by an error, never
+// sent in plaintext.
 func DeviceMiddleware(configProvider func() config.DeviceConfig, replayStore deviceauth.ReplayStore) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		cfg := configProvider()
@@ -28,7 +36,8 @@ func DeviceMiddleware(configProvider func() config.DeviceConfig, replayStore dev
 		isDeviceLogin := string(c.Path()) == "/v1/auth/login/device"
 		signedLoginType, _ := ctx.Value(requestctx.LoginType).(string)
 		_, authenticated := user.FromContext(ctx)
-		if !isDeviceLogin && loginType != "device" && !(authenticated && signedLoginType == "device") {
+		deviceSession := authenticated && signedLoginType == "device"
+		if !isDeviceLogin && loginType != "device" && !deviceSession {
 			c.Next(ctx)
 			return
 		}
@@ -66,7 +75,7 @@ func DecryptDeviceRequest(ctx context.Context, c *app.RequestContext, secret str
 	method, path := string(c.Method()), string(c.Path())
 	query := c.QueryArgs()
 	var envelopes []deviceauth.Envelope
-	var queryParams map[string]interface{}
+	var queryParams map[string]any
 	var plainBody string
 	if query.Len() > 0 {
 		seen := make(map[string]bool)
@@ -92,7 +101,7 @@ func DecryptDeviceRequest(ctx context.Context, c *app.RequestContext, secret str
 		var envelope deviceauth.Envelope
 		decoder := json.NewDecoder(bytes.NewReader(body))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&envelope) != nil || decoder.Decode(new(interface{})) != io.EOF {
+		if decoder.Decode(&envelope) != nil || decoder.Decode(new(any)) != io.EOF {
 			return deviceauth.ErrInvalidEnvelope
 		}
 		var err error
@@ -124,7 +133,7 @@ func DecryptDeviceRequest(ctx context.Context, c *app.RequestContext, secret str
 
 // EncryptDeviceResponse preserves the data/time format and adds a signature.
 func EncryptDeviceResponse(c *app.RequestContext, secret string) error {
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(c.Response.Body(), &response); err != nil {
 		return err
 	}

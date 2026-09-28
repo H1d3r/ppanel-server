@@ -1,3 +1,7 @@
+// Package lifecycle runs the process's services as one group: started
+// together and stopped once, in the reverse order they were added, with the
+// log output closed last so the lines written while stopping reach the log
+// files. A service does its own shutdown work in its Stop.
 package lifecycle
 
 import (
@@ -43,14 +47,9 @@ func (sg *Group) Add(service Service) {
 	sg.services = append([]Service{service}, sg.services...)
 }
 
-// Start starts the ServiceGroup.
-// There should not be any logic code after calling this method, because this
-// method is a blocking one: it returns once every service's Start returned.
+// Start starts the services together. It blocks until every service's Start
+// returned.
 func (sg *Group) Start() {
-	AddShutdownListener(func() {
-		sg.Stop()
-	})
-
 	sg.doStart()
 }
 

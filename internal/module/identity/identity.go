@@ -1,19 +1,25 @@
-// Package identity is the facade of the identity module (accounts, auth
-// methods, devices; the authentication flows join as migration proceeds).
-// See docs/design/adr-001-modular-monolith.md.
+// Package identity is the facade of the identity module: accounts, their
+// sign-in identities and devices, the authentication and OAuth flows, the
+// verification codes and the admin management of accounts and
+// authentication methods. See docs/design/adr-001-modular-monolith.md.
 package identity
 
 import (
 	"context"
+	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/internal/module/identity/internal/adminuser"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authmethodadmin"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/oauth"
+	"github.com/perfect-panel/server/internal/module/identity/internal/devicestate"
 	"github.com/perfect-panel/server/internal/module/identity/internal/oauthflow"
 	"github.com/perfect-panel/server/internal/module/identity/internal/profile"
 	"github.com/perfect-panel/server/internal/module/identity/internal/repo"
+	"github.com/perfect-panel/server/internal/module/identity/internal/startup"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verifycode"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -22,6 +28,9 @@ import (
 // Service is the only surface other code may depend on; the implementation
 // lives under internal/ where the compiler seals it off.
 type Service interface {
+	// Accounts serves the other modules' account reads and writes.
+	Accounts
+
 	CreateUser(ctx context.Context, req *dto.CreateUserRequest) error
 	DeleteUser(ctx context.Context, req *dto.GetDetailRequest) error
 	BatchDeleteUser(ctx context.Context, req *dto.BatchDeleteUserRequest) error
@@ -93,7 +102,40 @@ type Service interface {
 	SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (*dto.SendCodeResponse, error)
 	SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) (*dto.SendCodeResponse, error)
 	CheckVerificationCode(ctx context.Context, req *dto.CheckVerificationCodeRequest) (*dto.CheckVerificationCodeResponse, error)
+
+	// The presence the device WebSocket reports, which the composition
+	// root's socket callbacks record. Both skip a device that no longer
+	// exists.
+	//
+	// MarkDeviceOnline shows the connected device identifier online; a
+	// disabled device stays offline.
+	MarkDeviceOnline(ctx context.Context, identifier string) error
+	// MarkDeviceOffline shows the device offline again and records, for the
+	// account userID, the online time of its connection opened at
+	// connectedAt; the time is recorded even when the flag cannot be cleared.
+	MarkDeviceOffline(ctx context.Context, userID int64, identifier string, connectedAt time.Time) error
+
+	// The startup work of the runtime bootstrap and the server start.
+	//
+	// CreateInitialAdministrator creates the first administrator, signing in
+	// with the verified email address and password, when the database holds
+	// no account yet, and reports whether it created one.
+	CreateInitialAdministrator(ctx context.Context, email, password string) (bool, error)
+	// FindAdministratorsWithPassword returns the administrators, with their
+	// auth methods, who sign in with password.
+	FindAdministratorsWithPassword(ctx context.Context, password string) ([]*user.User, error)
+	// ValidateEmailIdentities fails with EmailIdentityAmbiguous when email
+	// sign-in cannot tell two email bindings apart.
+	ValidateEmailIdentities(ctx context.Context) error
+	// NormalizePhoneNumbers rewrites the phone numbers stored in a legacy
+	// form to E.164 and logs what it changed; it is idempotent.
+	NormalizePhoneNumbers(ctx context.Context) error
 }
+
+// UserRegisteredTopic is the integration event every self-service
+// registration emits, keyed by the new account's id; subscribers reference
+// this constant rather than spelling the topic.
+const UserRegisteredTopic = account.RegisteredTopic
 
 // AuthSnapshot re-exports the authentication subdomain's per-request view of
 // the runtime-mutable settings; the composition root supplies the snapshot
@@ -111,17 +153,20 @@ type Deps struct {
 	UserAuths repository.UserAuthRepo
 	Devices   repository.UserDeviceRepo
 	Cache     repository.UserCacheRepo
-	// UserSubs is the subscription read port the admin account views and
-	// the deletion cache cascade use.
-	UserSubs repository.UserSubscriptionRepo
-	Logs     repository.LogRepo
-	Store    Store
+	Logs      repository.LogRepo
+	Store     Store
 	// KickDevice force-disconnects a bound device.
 	KickDevice func(userID int64, identifier string)
+	// SubscriptionCaches and ServerCaches drop the subscription tokens and
+	// node user lists that keep serving an account after its deletion or
+	// disabling (the subscription and network facades).
+	SubscriptionCaches adminuser.SubscriptionCaches
+	ServerCaches       adminuser.ServerCaches
 
-	// Wallet is the read port onto the billing domain's wallet table for
-	// the admin and self-service account views.
-	Wallet repository.WalletRepo
+	// Wallet is the port onto the billing module's wallets: the admin and
+	// self-service account views read them, and the admin's money edits run
+	// in billing's own transaction after the identity one.
+	Wallet Wallets
 
 	// Profile-specific dependencies.
 	Auths repository.AuthRepo
@@ -145,8 +190,13 @@ type Deps struct {
 	// per request, and Reinitialize re-runs a sender subsystem's
 	// initialization after its configuration changed.
 	SenderConfig func() SenderSnapshot
-	Reinitialize func(subsystem string)
+	Reinitialize func(subsystem string) error
 }
+
+// Wallets re-exports the admin account subdomain's billing port, which also
+// covers the self-service account view's wallet read; the billing facade
+// provides it.
+type Wallets = adminuser.Wallets
 
 // SenderSnapshot re-exports the auth-method subdomain's sender settings view
 // for the composition root.
@@ -175,6 +225,8 @@ func NewRepoBuilder() repository.IdentityBuilder {
 	}
 }
 
+// New builds the module over the dependencies the composition root
+// provides.
 func New(deps Deps) Service {
 	// Sign-in and account binding share the OAuth round trip.
 	oauthFlow := oauthflow.New(oauthflow.Deps{
@@ -189,18 +241,21 @@ func New(deps Deps) Service {
 		OAuth:  oauthFlow,
 	})
 	return &service{
-		authn: authSvc,
+		accounts: newAccounts(deps),
+		authn:    authSvc,
 		adminUsers: adminuser.NewService(adminuser.Deps{
 			Wallet:     deps.Wallet,
 			Users:      deps.Users,
 			UserAuths:  deps.UserAuths,
 			Devices:    deps.Devices,
 			Cache:      deps.Cache,
-			UserSubs:   deps.UserSubs,
 			Logs:       deps.Logs,
 			Store:      deps.Store,
 			KickDevice: deps.KickDevice,
 			Redis:      deps.Redis,
+			// The access-cache cascade of deleted and disabled accounts.
+			SubscriptionCaches: deps.SubscriptionCaches,
+			ServerCaches:       deps.ServerCaches,
 		}),
 		methods: authmethodadmin.NewService(authmethodadmin.Deps{
 			Auths:        deps.Auths,
@@ -231,15 +286,22 @@ func New(deps Deps) Service {
 			NotifyUnbind:    deps.NotifyTelegramUnbind,
 			KickDevice:      deps.KickDevice,
 		}),
+		startup: startup.NewService(startup.Deps{
+			Users:     deps.Users,
+			UserAuths: deps.UserAuths,
+			Store:     deps.Store,
+		}),
 	}
 }
 
 type service struct {
+	accounts
 	adminUsers *adminuser.Service
 	profile    *profile.Service
 	authn      *authn.Service
 	verify     *verifycode.Service
 	methods    *authmethodadmin.Service
+	startup    *startup.Service
 }
 
 func (s *service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) error {
@@ -462,10 +524,35 @@ func (s *service) TestSmsSend(ctx context.Context, req *dto.TestSmsSendRequest) 
 	return s.methods.TestSmsSend(ctx, req)
 }
 
+func (s *service) MarkDeviceOnline(ctx context.Context, identifier string) error {
+	return devicestate.MarkOnline(ctx, s.devices, identifier)
+}
+
+func (s *service) MarkDeviceOffline(ctx context.Context, userID int64, identifier string, connectedAt time.Time) error {
+	return devicestate.MarkOffline(ctx, s.devices, userID, identifier, connectedAt)
+}
+
+func (s *service) CreateInitialAdministrator(ctx context.Context, email, password string) (bool, error) {
+	return s.startup.CreateInitialAdministrator(ctx, email, password)
+}
+
+func (s *service) FindAdministratorsWithPassword(ctx context.Context, password string) ([]*user.User, error) {
+	return s.startup.FindAdministratorsWithPassword(ctx, password)
+}
+
+func (s *service) ValidateEmailIdentities(ctx context.Context) error {
+	return s.startup.ValidateEmailIdentities(ctx)
+}
+
+func (s *service) NormalizePhoneNumbers(ctx context.Context) error {
+	return s.startup.NormalizePhoneNumbers(ctx)
+}
+
 // Store is the persistence capability required by this package. It excludes
 // unrelated repositories and application-wide transactions.
 type Store interface {
 	adminuser.Store
 	authn.Store
 	profile.Store
+	startup.Store
 }

@@ -4,43 +4,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/subtest"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"gorm.io/gorm"
 )
 
-// fixture is the subscription fixture with the billing side of a refund:
-// buyers, orders and wallets in memory, the refund's system log and inbox
-// markers in the fixture database.
+// fixture is the subscription fixture with the billing side of a
+// cancellation: the orders a quote reads in memory and the refund stage the
+// billing module settles, recorded; the cancellation markers are in the
+// fixture database.
 type fixture struct {
 	*subtest.Fixture
 	svc     *Service
-	buyers  buyers
 	orders  orders
-	billing *billing
+	refunds *refunds
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	logtest.Discard(t)
-	f := &fixture{Fixture: subtest.New(t), buyers: buyers{}, orders: orders{}}
-	f.billing = &billing{db: f.DB, orders: f.orders, wallets: map[int64]wallet.Wallet{}}
+	f := &fixture{Fixture: subtest.New(t), orders: orders{}, refunds: &refunds{settled: map[int64]refund{}}}
 	f.svc = NewService(Deps{
 		UserSubs:    f.Store.UserSubscription(),
 		Plans:       f.Store.Subscribe(),
-		Users:       f.buyers,
 		Orders:      f.orders,
-		Cache:       f.Store.UserCache(),
+		Refunds:     f.refunds,
+		Cache:       f.Store.UserSubscription(),
 		Logs:        subtest.NewLogs(f.DB),
 		Inbox:       subtest.NewInbox(f.DB),
-		Store:       refundStore{Store: f.Store, billing: f.billing},
+		Store:       f.Store,
 		SingleModel: func() bool { return false },
 	})
 	return f
@@ -51,10 +47,11 @@ func as(userID int64) context.Context {
 	return user.NewContext(context.Background(), &user.User{Id: userID})
 }
 
-// marker returns the result of an inbox marker, or false without one.
-func (f *fixture) marker(t *testing.T, consumer string, subID int64) (string, bool) {
+// cancelMarker returns the result of the subscription's cancellation marker,
+// or false without one.
+func (f *fixture) cancelMarker(t *testing.T, subID int64) (string, bool) {
 	t.Helper()
-	record, err := subtest.NewInbox(f.DB).Find(context.Background(), consumer, fmt.Sprint(subID))
+	record, err := subtest.NewInbox(f.DB).Find(context.Background(), unsubscribeCancelConsumer, fmt.Sprint(subID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,18 +70,6 @@ func (f *fixture) cancelled(t *testing.T, subID int64, result string) {
 	}
 }
 
-// buyers is the identity read port.
-type buyers map[int64]*user.User
-
-var _ BuyerReader = buyers{}
-
-func (b buyers) FindOne(_ context.Context, id int64) (*user.User, error) {
-	if u, ok := b[id]; ok {
-		return u, nil
-	}
-	return nil, gorm.ErrRecordNotFound
-}
-
 // orders is the billing read port.
 type orders map[int64]*order.Details
 
@@ -97,100 +82,44 @@ func (o orders) FindOneDetails(_ context.Context, id int64) (*order.Details, err
 	return nil, gorm.ErrRecordNotFound
 }
 
-// refundStore is the package's Store over the fixture: the fixture's
-// subscription transaction and the billing transaction below.
-type refundStore struct {
-	*subtest.Store
-	billing *billing
+var (
+	errWalletUnavailable = errors.New("wallet unavailable")
+	errAlreadySettled    = errors.New("refund already settled")
+)
+
+// refund is one settlement the refund stage requested.
+type refund struct {
+	userID, subID, orderID, amount int64
 }
 
-var _ Store = refundStore{}
-
-func (s refundStore) InRefundTx(ctx context.Context, fn func(RefundLedger) error) error {
-	return s.billing.inTx(ctx, fn)
+// refunds is the billing port of the refund stage. It records every
+// settlement requested and reports a subscription settled once one
+// succeeded; a second settlement fails like the billing marker makes it.
+type refunds struct {
+	settled  map[int64]refund
+	requests []refund
+	// failNext fails that many settlements, which then leave nothing
+	// settled.
+	failNext int
 }
 
-var errWalletUnavailable = errors.New("wallet unavailable")
+var _ RefundSettler = (*refunds)(nil)
 
-// billing holds the wallets. A settlement runs on a copy of them and on a
-// database transaction for its log and marker rows; a failed one leaves
-// neither behind.
-type billing struct {
-	db      *gorm.DB
-	orders  orders
-	wallets map[int64]wallet.Wallet
-	// locks counts the wallets settlements locked; failSaves fails that many
-	// balance writes.
-	locks     int
-	failSaves int
+func (r *refunds) UnsubscribeRefundSettled(_ context.Context, subID int64) (bool, error) {
+	_, ok := r.settled[subID]
+	return ok, nil
 }
 
-func (b *billing) inTx(ctx context.Context, fn func(RefundLedger) error) error {
-	var staged map[int64]wallet.Wallet
-	err := b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		l := &ledger{billing: b, tx: tx, wallets: maps.Clone(b.wallets)}
-		if err := fn(l); err != nil {
-			return err
-		}
-		staged = l.wallets
-		return nil
-	})
-	if err == nil {
-		b.wallets = staged
-	}
-	return err
-}
-
-// wallet returns the user's committed wallet.
-func (b *billing) wallet(userID int64) wallet.Wallet {
-	w := b.wallets[userID]
-	w.UserId = userID
-	return w
-}
-
-// ledger is one settlement's view of the billing side: its own copy of the
-// wallets and the database transaction.
-type ledger struct {
-	billing *billing
-	tx      *gorm.DB
-	wallets map[int64]wallet.Wallet
-}
-
-var _ RefundLedger = (*ledger)(nil)
-
-func (l *ledger) LockWallet(_ context.Context, userID int64) (*wallet.Wallet, error) {
-	l.billing.locks++
-	w := l.wallets[userID]
-	w.UserId = userID
-	return &w, nil
-}
-
-func (l *ledger) SaveBalance(_ context.Context, w *wallet.Wallet) error {
-	if l.billing.failSaves > 0 {
-		l.billing.failSaves--
+func (r *refunds) SettleUnsubscribeRefund(_ context.Context, userID, subID, orderID, amount int64) error {
+	request := refund{userID: userID, subID: subID, orderID: orderID, amount: amount}
+	r.requests = append(r.requests, request)
+	if r.failNext > 0 {
+		r.failNext--
 		return errWalletUnavailable
 	}
-	stored := l.wallets[w.UserId]
-	stored.Balance, stored.GiftAmount = w.Balance, w.GiftAmount
-	l.wallets[w.UserId] = stored
+	if _, ok := r.settled[subID]; ok {
+		return errAlreadySettled
+	}
+	r.settled[subID] = request
 	return nil
-}
-
-func (l *ledger) SaveCommission(_ context.Context, w *wallet.Wallet) error {
-	stored := l.wallets[w.UserId]
-	stored.Commission = w.Commission
-	l.wallets[w.UserId] = stored
-	return nil
-}
-
-func (l *ledger) OrderDetails(ctx context.Context, orderID int64) (*order.Details, error) {
-	return l.billing.orders.FindOneDetails(ctx, orderID)
-}
-
-func (l *ledger) AppendLog(ctx context.Context, entry *log.SystemLog) error {
-	return subtest.NewLogs(l.tx).Insert(ctx, entry)
-}
-
-func (l *ledger) MarkRefunded(ctx context.Context, subKey string) error {
-	return subtest.NewInbox(l.tx).Insert(ctx, unsubscribeRefundConsumer, subKey, "")
 }

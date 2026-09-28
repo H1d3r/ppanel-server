@@ -1,3 +1,5 @@
+// Package common holds the identity module's handlers of the verification
+// codes: sending email and SMS codes and pre-checking them.
 package common
 
 import (

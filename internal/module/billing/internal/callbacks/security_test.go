@@ -67,9 +67,11 @@ func paymentContext(method *payment.Payment) context.Context {
 	return context.WithValue(context.Background(), requestctx.CtxKeyPayment, method)
 }
 
-func pendingOrder(orderNo string, method *payment.Payment, amount int64, currency string) *order.Order {
+// pendingOrder is order-1, the order the callbacks name, pending payment of
+// amount in currency through method.
+func pendingOrder(method *payment.Payment, amount int64, currency string) *order.Order {
 	return &order.Order{
-		OrderNo: orderNo, PaymentId: method.Id, Method: method.Platform, Status: order.StatusPending,
+		OrderNo: "order-1", PaymentId: method.Id, Method: method.Platform, Status: order.StatusPending,
 		PaymentAmount: amount, PaymentCurrency: currency,
 	}
 }
@@ -99,10 +101,12 @@ func epayMethod(queryURL string) *payment.Payment {
 	}
 }
 
-func signedEPayParams(money string) map[string]string {
+// signedEPayParams is the signed EPay callback reporting order-1 paid with
+// 10.00.
+func signedEPayParams() map[string]string {
 	params := map[string]string{
 		"pid": "1001", "trade_no": "trade-1", "out_trade_no": "order-1", "type": "alipay",
-		"name": "product", "money": money, "trade_status": "TRADE_SUCCESS", "param": "", "sign_type": "MD5",
+		"name": "product", "money": "10.00", "trade_status": "TRADE_SUCCESS", "param": "", "sign_type": "MD5",
 	}
 	params["sign"] = signEPayTestParams(params, "secret")
 	return params
@@ -134,10 +138,10 @@ func TestEPayNotifySettlesOnlyAfterSignedAndQueriedDetailsMatch(t *testing.T) {
 		})
 	})
 	method := epayMethod(queryURL)
-	orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
+	orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
 	queue := &fakeActivationQueue{}
 	svc := NewService(orders, queue, nil)
-	notification := gateway.Notification{HTTPMethod: "POST", Params: signedEPayParams("10.00")}
+	notification := gateway.Notification{HTTPMethod: "POST", Params: signedEPayParams()}
 
 	for range 2 {
 		if err := svc.Notify(paymentContext(method), notification); err != nil {
@@ -154,10 +158,10 @@ func TestEPayNotifySettlesOnlyAfterSignedAndQueriedDetailsMatch(t *testing.T) {
 
 func TestEPayNotifySettlesWithSignedCallbackWhenQueryUnsupported(t *testing.T) {
 	method := epayMethod(epayQueryServer(t, http.NotFound))
-	orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
+	orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
 	svc := NewService(orders, &fakeActivationQueue{}, nil)
 
-	if err := svc.Notify(paymentContext(method), gateway.Notification{Params: signedEPayParams("10.00")}); err != nil {
+	if err := svc.Notify(paymentContext(method), gateway.Notification{Params: signedEPayParams()}); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
 	if orders.markCount != 1 || orders.order.TradeNo != "trade-1" {
@@ -175,8 +179,8 @@ func TestEPayNotifyAcceptsAPaidStatusOnlyQuery(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"code":1,"msg":"ok","data":{"status":"success"}}`))
 	}))
-	orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
-	if err := NewService(orders, &fakeActivationQueue{}, nil).Notify(paymentContext(method), gateway.Notification{Params: signedEPayParams("10.00")}); err != nil {
+	orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
+	if err := NewService(orders, &fakeActivationQueue{}, nil).Notify(paymentContext(method), gateway.Notification{Params: signedEPayParams()}); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
 	if orders.markCount != 1 {
@@ -200,8 +204,8 @@ func TestEPayNotifyRejectsMismatchedCallbacks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
-			params := signedEPayParams("10.00")
+			orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
+			params := signedEPayParams()
 			delete(params, "sign")
 			tt.mutate(params)
 			params["sign"] = signEPayTestParams(params, "secret")
@@ -227,8 +231,8 @@ func TestEPayNotifyRejectsWhenTheGatewayDisagrees(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			method := epayMethod(epayQueryServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
-			orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
-			if err := NewService(orders, &fakeActivationQueue{}, nil).Notify(paymentContext(method), gateway.Notification{Params: signedEPayParams("10.00")}); err == nil {
+			orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
+			if err := NewService(orders, &fakeActivationQueue{}, nil).Notify(paymentContext(method), gateway.Notification{Params: signedEPayParams()}); err == nil {
 				t.Fatal("the callback was accepted although the gateway disagrees")
 			}
 			if orders.markCount != 0 {
@@ -277,7 +281,7 @@ func stripeEvent(eventType string, amount int64, currency, method string) gatewa
 
 func TestStripeNotifySettlesAConfirmedIntent(t *testing.T) {
 	registry, fake, method := stripeFixture(t, "succeeded")
-	orders := &callbackOrders{order: pendingOrder("order-1", method, 1990, "USD")}
+	orders := &callbackOrders{order: pendingOrder(method, 1990, "USD")}
 	orders.order.TradeNo = "pi_1"
 	svc := NewService(orders, &fakeActivationQueue{}, registry)
 
@@ -304,7 +308,7 @@ func TestStripeNotifyRequiresBoundAmountCurrencyAndMethod(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry, _, method := stripeFixture(t, tt.wantStatus)
-			orders := &callbackOrders{order: pendingOrder("order-1", method, 1990, "USD")}
+			orders := &callbackOrders{order: pendingOrder(method, 1990, "USD")}
 			err := NewService(orders, &fakeActivationQueue{}, registry).Notify(paymentContext(method), tt.event)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Notify = %v, want %q", err, tt.want)
@@ -382,7 +386,7 @@ func alipayFields(overrides map[string]string) map[string]string {
 
 func TestAlipayNotifySettlesAConfirmedTrade(t *testing.T) {
 	method := alipayMethod(t, alipayTradeServer(t, "TRADE_SUCCESS"))
-	orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
+	orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
 	if err := NewService(orders, &fakeActivationQueue{}, nil).Notify(paymentContext(method), alipayNotification(t, alipayFields(nil))); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
@@ -405,7 +409,7 @@ func TestAlipayNotifyRequiresBoundAppAndExactAmount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			method := alipayMethod(t, alipayTradeServer(t, tt.status))
-			orders := &callbackOrders{order: pendingOrder("order-1", method, 1000, "CNY")}
+			orders := &callbackOrders{order: pendingOrder(method, 1000, "CNY")}
 			err := NewService(orders, &fakeActivationQueue{}, nil).Notify(paymentContext(method), alipayNotification(t, alipayFields(tt.overrides)))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Notify = %v, want %q", err, tt.want)

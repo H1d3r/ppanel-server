@@ -12,13 +12,30 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
+// ownershipUserSubs serves the one user subscription a renewal or traffic
+// reset targets; those flows read nothing else before they refuse.
 type ownershipUserSubs struct {
-	UserSubscriptionReader
 	subscribe *usersub.SubscribeDetails
 }
 
+var _ UserSubscriptionReader = ownershipUserSubs{}
+
+var errOwnershipOnly = errors.New("ownershipUserSubs: only the targeted subscription is read")
+
 func (r ownershipUserSubs) FindOneUserSubscribe(_ context.Context, _ int64) (*usersub.SubscribeDetails, error) {
 	return r.subscribe, nil
+}
+
+func (ownershipUserSubs) HasBlockingSubscription(context.Context, int64) (bool, error) {
+	return false, errOwnershipOnly
+}
+
+func (ownershipUserSubs) CountQuotaConsumingSubscriptions(context.Context, int64, int64) (int64, error) {
+	return 0, errOwnershipOnly
+}
+
+func (ownershipUserSubs) FindOneSubscribe(context.Context, int64) (*usersub.Subscribe, error) {
+	return nil, errOwnershipOnly
 }
 
 func ownerContext(id int64) context.Context {

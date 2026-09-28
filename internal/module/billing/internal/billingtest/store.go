@@ -6,6 +6,7 @@ package billingtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -253,7 +254,7 @@ func (h *Harness) ReloadWallet(userID int64) wallet.Wallet {
 	h.t.Helper()
 	var w wallet.Wallet
 	err := h.DB.Where("user_id = ?", userID).Take(&w).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		h.t.Fatal(err)
 	}
 	return w
@@ -349,5 +350,16 @@ func (q *Queue) EnqueueActivation(_ context.Context, orderNo string) error {
 
 func (q *Queue) EnqueueDeferredClose(_ context.Context, orderNo string) error {
 	q.DeferredCloses = append(q.DeferredCloses, orderNo)
+	return nil
+}
+
+// UserCache stands in for the identity module's user cache: it records the
+// users whose cached projection a flow dropped.
+type UserCache struct {
+	Cleared []int64
+}
+
+func (c *UserCache) ClearUserCache(_ context.Context, userIDs ...int64) error {
+	c.Cleared = append(c.Cleared, userIDs...)
 	return nil
 }

@@ -7,8 +7,8 @@
 
 | 目录 | 职责与入口 |
 |---|---|
-| `app` | `NewApplication` 组装七个模块；`server.go` 管理启动与重启；`bootstrap` 加载及重载运行时配置；`state` 发布快照，`lifecycle` 管理停止钩子，`buildinfo` 保存版本元数据；`scheduler` 管理定时调度，`migration` 管理迁移 |
-| `config` | 配置结构、系统设置转换、数据库和 Redis 配置解析 |
+| `app` | `NewServices` 是唯一组装入口：`NewApplication` 连接基础设施并组装七个模块，`services.go` 拼出 HTTP、任务与调度服务的依赖；`server.go` 管理启动与重启；`bootstrap` 加载及重载运行时配置；`state` 发布快照，`lifecycle` 管理停止钩子，`buildinfo` 保存版本元数据；`scheduler` 管理定时调度，`migration` 管理迁移 |
+| `config` | 配置结构（启动配置 `Boot` 与运行时配置 `Runtime` 两部分）、系统设置转换、数据库和 Redis 配置解析 |
 | `auth` | 跨模块的令牌、设备签名与会话、标识规范化、密码、挑战和限流 |
 | `module` | 七个业务模块，各自拥有门面、契约、实体、内部实现与业务 handler |
 | `transport` | `http/server`、`http/routes`、`http/middleware`、`http/validation`；首次安装页面位于 `http/setup`；设备 WebSocket 位于 `devicesocket`；`task` 统一任务消费服务、路由与各类处理器，邮件批次执行器并入 `task/email` |
@@ -16,8 +16,14 @@
 | `repository` | 现有仓储契约、作用域事务和 GORM 组装；各业务仓储实现仍在所属模块内部 |
 | `arch` | 目录归属、模块隔离、共享包及组装根依赖方向的测试 |
 
-应用组装按业务拆成 `app/billing.go`、`identity.go`、`subscription.go` 等文件。
-只有 CLI 可以导入 `internal/app` 根包；业务模块通过各自的依赖参数取得能力。
+应用组装按业务拆成 `app/billing.go`、`identity.go`、`subscription.go` 等文件，服务依赖集中在 `services.go`。
+只有 CLI 可以导入 `internal/app` 根包，它只负责配置文件的引导与加载，然后调用 `app.NewServices`；
+业务模块通过各自的依赖参数取得能力。`TestAssembledDependenciesAreComplete` 在内存基础设施上组装整张
+依赖图，任何未接好的依赖都会让它失败。
+
+配置分两部分：`config.Boot` 来自配置文件，进程运行期间不变（监听地址、连接、密钥）；`config.Runtime`
+由系统设置表在启动和管理员修改时覆盖，运行时状态只允许通过 `UpdateRuntime` 修改这一部分。
+`AppLocation` 在启动时同时设为进程时区，业务时间、GORM 自动时间戳与数据库会话共用一个时钟。
 `app/buildinfo` 是独立的版本元数据包，CLI 与管理端版本接口均可读取。
 共享基础设施和认证包不得反向依赖应用组装、接入层或业务实现；领域实体作为数据定义可复用。
 
@@ -50,7 +56,9 @@
   临时订单随后过期，重试也不会再建号。旧明文密码兼容数据由 identity 转换为密码哈希。
   新建账号若同时缺少密码哈希和旧明文则直接拒绝，避免生成空密码账号。
 - `TestModulesDoNotDependOnFullStore` 禁止模块恢复完整 Store 依赖；
-  `TestTasksDoNotOwnIdentityTransactions` 防止任务处理器重新承担账号写事务。
+  `TestModulesUseOnlyTheirOwnRepositories` 禁止模块使用其他模块的仓储契约或作用域事务；
+  `TestTaskHandlersOpenNoTransactions` 防止任务处理器重新承担任何事务；
+  `TestEntryPointsReachModuleDataThroughModules` 要求入口层与组装根经门面访问模块数据。
 
 共享数据库、共享 ORM 实体以及其他维护任务的存储适配仍存在；它们属于后续数据与任务边界演进。
 

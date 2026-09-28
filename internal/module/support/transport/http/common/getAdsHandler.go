@@ -1,3 +1,4 @@
+// Package common holds the Hertz handler of the ads the public site shows.
 package common
 
 import (

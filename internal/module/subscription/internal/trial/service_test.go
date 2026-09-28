@@ -16,16 +16,20 @@ import (
 func newTrialService(f *subtest.Fixture, policy *Policy) *Service {
 	return NewService(Deps{
 		Plans:       f.Store.Subscribe(),
-		Cache:       f.Store.UserCache(),
+		Cache:       f.Store.UserSubscription(),
 		Store:       f.Store,
 		TrialPolicy: func() Policy { return *policy },
 	})
 }
 
-func (f trialFixture) trials(t *testing.T, userID int64) []usersub.Subscribe {
+// trialUser is the account every test registers.
+const trialUser int64 = 7
+
+// trials lists the test account's subscriptions.
+func (f trialFixture) trials(t *testing.T) []usersub.Subscribe {
 	t.Helper()
 	var subs []usersub.Subscribe
-	if err := f.DB.Where("user_id = ?", userID).Find(&subs).Error; err != nil {
+	if err := f.DB.Where("user_id = ?", trialUser).Find(&subs).Error; err != nil {
 		t.Fatal(err)
 	}
 	return subs
@@ -44,11 +48,11 @@ func TestGrantTrialGrantsOncePerRegistration(t *testing.T) {
 
 	before := timeutil.Now()
 	for range 3 {
-		if err := svc.GrantTrial(ctx, 7); err != nil {
+		if err := svc.GrantTrial(ctx, trialUser); err != nil {
 			t.Fatal(err)
 		}
 	}
-	subs := f.trials(t, 7)
+	subs := f.trials(t)
 	if len(subs) != 1 {
 		t.Fatalf("trials granted = %d, want 1", len(subs))
 	}
@@ -72,14 +76,14 @@ func TestGrantTrialConsumesTheEventWhenDisabled(t *testing.T) {
 	policy := &Policy{Enabled: false, PlanID: 3, Duration: 1, TimeUnit: "Day"}
 	svc := newTrialService(f.Fixture, policy)
 	ctx := context.Background()
-	if err := svc.GrantTrial(ctx, 7); err != nil {
+	if err := svc.GrantTrial(ctx, trialUser); err != nil {
 		t.Fatal(err)
 	}
 	policy.Enabled = true
-	if err := svc.GrantTrial(ctx, 7); err != nil {
+	if err := svc.GrantTrial(ctx, trialUser); err != nil {
 		t.Fatal(err)
 	}
-	if subs := f.trials(t, 7); len(subs) != 0 {
+	if subs := f.trials(t); len(subs) != 0 {
 		t.Fatalf("a late policy change granted %d trials", len(subs))
 	}
 }
@@ -93,17 +97,17 @@ func TestGrantTrialRejectsAnUnknownUnitUntilFixed(t *testing.T) {
 	policy := &Policy{Enabled: true, PlanID: 3, Duration: 1, TimeUnit: ""}
 	svc := newTrialService(f.Fixture, policy)
 	ctx := context.Background()
-	if err := svc.GrantTrial(ctx, 7); !errors.Is(err, period.ErrUnknownUnit) {
+	if err := svc.GrantTrial(ctx, trialUser); !errors.Is(err, period.ErrUnknownUnit) {
 		t.Fatalf("GrantTrial = %v, want ErrUnknownUnit", err)
 	}
-	if subs := f.trials(t, 7); len(subs) != 0 {
+	if subs := f.trials(t); len(subs) != 0 {
 		t.Fatalf("a failed grant created %d trials", len(subs))
 	}
 	policy.TimeUnit = "Hour"
-	if err := svc.GrantTrial(ctx, 7); err != nil {
+	if err := svc.GrantTrial(ctx, trialUser); err != nil {
 		t.Fatal(err)
 	}
-	if subs := f.trials(t, 7); len(subs) != 1 {
+	if subs := f.trials(t); len(subs) != 1 {
 		t.Fatalf("the retried grant created %d trials, want 1", len(subs))
 	}
 }
@@ -115,13 +119,13 @@ func TestGrantTrialRetriesAfterARolledBackGrant(t *testing.T) {
 	svc := newTrialService(f.Fixture, &Policy{Enabled: true, PlanID: 3, Duration: 1, TimeUnit: "Day"})
 	ctx := context.Background()
 	f.Store.FailNextCommits(1)
-	if err := svc.GrantTrial(ctx, 7); !errors.Is(err, subtest.ErrInjectedRollback) {
+	if err := svc.GrantTrial(ctx, trialUser); !errors.Is(err, subtest.ErrInjectedRollback) {
 		t.Fatalf("GrantTrial = %v, want the rollback", err)
 	}
-	if err := svc.GrantTrial(ctx, 7); err != nil {
+	if err := svc.GrantTrial(ctx, trialUser); err != nil {
 		t.Fatal(err)
 	}
-	if subs := f.trials(t, 7); len(subs) != 1 {
+	if subs := f.trials(t); len(subs) != 1 {
 		t.Fatalf("trials after the retry = %d, want 1", len(subs))
 	}
 }

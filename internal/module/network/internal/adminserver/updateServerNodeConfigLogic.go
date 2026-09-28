@@ -2,50 +2,40 @@ package adminserver
 
 import (
 	"context"
+	"fmt"
 
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/internal/nodeconfig"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type UpdateServerNodeConfigLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-func newUpdateServerNodeConfigLogic(ctx context.Context, deps Deps) *UpdateServerNodeConfigLogic {
-	return &UpdateServerNodeConfigLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *UpdateServerNodeConfigLogic) UpdateServerNodeConfig(req *dto.UpdateServerNodeConfigRequest) error {
-	nodeStore := l.deps.Store.Node()
-	if _, err := nodeStore.FindOneServer(l.ctx, req.ServerID); err != nil {
-		l.Errorf("[UpdateServerNodeConfig] FindOneServer Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find server error: %v", err)
+// UpdateServerNodeConfig stores a server's node configuration override, or
+// removes it when every value is inherited, and drops the server's
+// node-facing caches.
+func (s *Service) UpdateServerNodeConfig(ctx context.Context, req *dto.UpdateServerNodeConfigRequest) error {
+	log := logger.WithContext(ctx)
+	nodeStore := s.deps.Store.Node()
+	if _, err := nodeStore.FindOneServer(ctx, req.ServerID); err != nil {
+		log.Errorf("[UpdateServerNodeConfig] FindOneServer Error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find server error: %v", err)
 	}
 
 	data, allInherited, err := nodeconfig.OverrideModel(req.ServerID, req.ServerNodeConfigOverride)
 	if err != nil {
-		l.Errorf("[UpdateServerNodeConfig] OverrideModel Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "server node config is invalid"), "server node config is invalid: %v", err)
+		log.Errorf("[UpdateServerNodeConfig] OverrideModel Error: %v", err.Error())
+		return fmt.Errorf("server node config is invalid: %w: %w", err, xerr.NewErrCodeMsg(xerr.InvalidParams, "server node config is invalid"))
 	}
 
 	if allInherited {
-		err = nodeStore.DeleteServerConfigOverride(l.ctx, req.ServerID)
+		err = nodeStore.DeleteServerConfigOverride(ctx, req.ServerID)
 	} else {
-		err = nodeStore.SaveServerConfigOverride(l.ctx, data)
+		err = nodeStore.SaveServerConfigOverride(ctx, data)
 	}
 	if err != nil {
-		l.Errorf("[UpdateServerNodeConfig] SaveServerConfigOverride Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update server node config error: %v", err)
+		log.Errorf("[UpdateServerNodeConfig] SaveServerConfigOverride Error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update server node config error: %v", err)
 	}
 
-	return nodeStore.ClearServerCache(l.ctx, req.ServerID)
+	return nodeStore.ClearServerCache(ctx, req.ServerID)
 }

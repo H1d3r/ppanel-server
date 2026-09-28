@@ -1,3 +1,7 @@
+// Package repo holds the subscription module's repository implementations:
+// plans and groups, user subscriptions with their traffic accounting and
+// cache bridges, client applications and provider entitlements (ADR-001
+// step-6 preparation).
 package repo
 
 import (
@@ -312,6 +316,20 @@ func (m *UserSubscriptionRepo) FindSubscribeDetailsByIds(ctx context.Context, id
 	return list, err
 }
 
+// FindSubscribeDetailsByUserIds loads every subscription of the users,
+// whatever its status, with its plan: one query for the rows and one for the
+// plans, however many users there are.
+func (m *UserSubscriptionRepo) FindSubscribeDetailsByUserIds(ctx context.Context, userIds []int64) ([]*usersub.SubscribeDetails, error) {
+	var list []*usersub.SubscribeDetails
+	if len(userIds) == 0 {
+		return list, nil
+	}
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
+		return conn.Model(&usersub.Subscribe{}).Preload("Subscribe").Where("user_id IN ?", userIds).Order("id ASC").Find(v).Error
+	})
+	return list, err
+}
+
 func (m *UserSubscriptionRepo) BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta) error {
 	deltas = mergeSubscribeTrafficDeltas(deltas)
 	if len(deltas) == 0 {
@@ -441,7 +459,7 @@ func (m *UserSubscriptionRepo) UpdateSubscribeColumns(ctx context.Context, data 
 	if data == nil || data.Id == 0 {
 		return errSubscriptionID
 	}
-	now := time.Now()
+	now := timeutil.Now()
 	reactivates := slices.Contains(columns, "status") && data.Status == usersub.SubscribeStatusActive
 	if data.EntitlementSource != "" {
 		for _, column := range columns {

@@ -11,7 +11,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/pricing"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 )
 
 // Recharge creates a balance recharge order. The recharged amount is the
@@ -22,10 +21,10 @@ func (s *Service) Recharge(ctx context.Context, req *dto.RechargeOrderRequest) (
 		return nil, err
 	}
 	if req.Amount < MinRechargeAmount {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "recharge amount must be at least %d", MinRechargeAmount)
+		return nil, xerr.Errorf(xerr.InvalidParams, "recharge amount must be at least %d", MinRechargeAmount)
 	}
 	if req.Amount > MaxRechargeAmount {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "recharge amount exceeds maximum limit")
+		return nil, xerr.Errorf(xerr.InvalidParams, "recharge amount exceeds maximum limit")
 	}
 	method, err := gateway.LookupMethod(ctx, s.deps.Payments, req.Payment)
 	if err != nil {
@@ -35,7 +34,7 @@ func (s *Service) Recharge(ctx context.Context, req *dto.RechargeOrderRequest) (
 	// checkout spends gift credit first, so a balance-paid recharge would turn
 	// gift credit into regular balance.
 	if gateway.IsBalance(method) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance cannot pay for a recharge")
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "balance cannot pay for a recharge")
 	}
 	quote := pricing.Compute(pricing.Input{UnitPrice: req.Amount, Quantity: 1, Fee: pricing.FeeTerms(method)})
 	if err := orderAmountWithinLimit(quote.Amount); err != nil {

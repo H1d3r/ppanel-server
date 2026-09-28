@@ -60,10 +60,18 @@ Administrator: # 首位管理员，仅在首次启动时创建
 
 - **`Host`**：服务监听的地址。
   - 默认：`0.0.0.0`（监听所有网络接口）。
+  - 它只是绑定地址。支付回调等对外链接由站点设置中的站点地址或支付方式自己的域名生成。
 - **`Port`**：服务监听的端口。
   - 默认：`8080`。
 - **`Debug`**：是否开启调试模式，开启后禁用后台日志功能。
   - 默认：`false`。
+- **`AppLocation`**：应用使用的 IANA 时区，"今天"、到期提醒、流量重置周期和每日统计都按它计算。
+  - 默认：`Asia/Shanghai`。
+  - 服务启动时还会把它设为进程时区（不论 `TZ` 如何设置），因此写入的所有时间（包括自动填写的 `created_at` /
+    `updated_at`）都在同一个时钟上。
+  - 必须与数据库时区（`Database.Config` 中 MySQL 的 `loc`、PostgreSQL 的 `TimeZone`）一致：时间按数据库时区存储，
+    统计也按数据库时区分天。安装页会把 `AppLocation` 的时区写进新数据库的连接参数；对已有数据库，两者不一致时服务
+    启动会记录错误日志。只能在空库上，或把已存储的时间换算之后再修改数据库时区，否则所有已存时间都会被重新解读。
 
 ### 3.2 JWT 认证 (`JwtAuth`)
 
@@ -118,6 +126,7 @@ Administrator: # 首位管理员，仅在首次启动时创建
 - **`Config`**：对应数据库的连接参数。
   - MySQL 默认：`charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true`。
   - PostgreSQL 默认：`sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel`。
+  - 这些参数中的时区即数据库时区，见 `AppLocation`。
 - **`MaxIdleConns`**：最大空闲连接数。
   - 默认：`10`。
 - **`MaxOpenConns`**：最大打开连接数。

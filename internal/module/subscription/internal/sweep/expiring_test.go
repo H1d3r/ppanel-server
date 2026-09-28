@@ -76,7 +76,7 @@ func newSweepService(f *subtest.Fixture, who owners) (*Service, *recordingNotifi
 	return NewService(Deps{
 		UserSubs: f.Store.UserSubscription(),
 		Plans:    f.Store.Subscribe(),
-		Cache:    f.Store.UserCache(),
+		Cache:    f.Store.UserSubscription(),
 		Store:    f.Store,
 		Emails:   who,
 		Owners:   who,

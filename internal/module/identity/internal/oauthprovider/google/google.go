@@ -1,3 +1,5 @@
+// Package google is the Google client of the Google sign-in method: the
+// OAuth configuration and the profile of the signed-in user.
 package google
 
 import (

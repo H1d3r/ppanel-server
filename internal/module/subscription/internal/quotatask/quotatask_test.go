@@ -9,49 +9,63 @@ import (
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/platform/entity/task"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/subtest"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
 // quotaStore is the package's Store over the subscription fixture: the grant
-// stage runs in the fixture's transactions against its tables, the task
-// bookkeeping records the progress, and the billing stage — not under test
-// here — counts its calls and fails.
+// stage runs in the fixture's transactions against its tables and the task
+// bookkeeping records the progress.
 type quotaStore struct {
 	*subtest.Store
-	tasks        *quotaTasks
-	cache        *recordingUserCache
-	billingCalls int
+	tasks *quotaTasks
+	cache *quotaAccounts
 }
 
 var _ Store = (*quotaStore)(nil)
-
-var errUnexpectedBilling = errors.New("unexpected billing transaction")
 
 func newQuotaStore(f *subtest.Fixture) *quotaStore {
 	return &quotaStore{
 		Store: f.Store,
 		tasks: &quotaTasks{},
-		cache: &recordingUserCache{UserCacheRepo: f.Store.UserCache()},
+		cache: &quotaAccounts{},
 	}
 }
 
-func (s *quotaStore) InBillingTx(context.Context, func(repository.BillingStore) error) error {
-	s.billingCalls++
-	return errUnexpectedBilling
+// quotaGift is one gift credit the gift stage requested.
+type quotaGift struct {
+	taskID, subID, userID, amount int64
+	at                            time.Time
+}
+
+// quotaGifts is the billing port of the gift stage: it records the credits
+// requested and reports a (task, subscription) credited once one was.
+type quotaGifts struct {
+	credited map[string]bool
+	credits  []quotaGift
+}
+
+var _ GiftLedger = (*quotaGifts)(nil)
+
+func newQuotaGifts() *quotaGifts { return &quotaGifts{credited: map[string]bool{}} }
+
+func (g *quotaGifts) QuotaGiftCredited(_ context.Context, taskID, subID int64) (bool, error) {
+	return g.credited[inboxKey(taskID, subID)], nil
+}
+
+func (g *quotaGifts) CreditQuotaGift(_ context.Context, taskID, subID, userID, amount int64, at time.Time) error {
+	g.credits = append(g.credits, quotaGift{taskID: taskID, subID: subID, userID: userID, amount: amount, at: at})
+	g.credited[inboxKey(taskID, subID)] = true
+	return nil
 }
 
 func (s *quotaStore) InPlatformTx(_ context.Context, fn func(repository.PlatformStore) error) error {
 	return fn(quotaPlatform{tasks: s.tasks})
 }
 
-func (s *quotaStore) Task() repository.TaskRepo           { return s.tasks }
-func (s *quotaStore) UserCache() repository.UserCacheRepo { return s.cache }
-
-// User is read only to refresh the cached balances after a gift, which the
-// billing stage above never grants.
-func (s *quotaStore) User() repository.UserRepo { return nil }
+func (s *quotaStore) Task() repository.TaskRepo { return s.tasks }
 
 // quotaPlatform is the platform transaction's view: only the task rows.
 type quotaPlatform struct {
@@ -112,23 +126,32 @@ func (r *quotaTasks) FindErrors(context.Context, []int64) ([]*task.TaskError, er
 	return nil, errTaskUnsupported
 }
 
-// recordingUserCache is the fixture's cache counting the users whose cached
-// rows were dropped.
-type recordingUserCache struct {
-	repository.UserCacheRepo
+// quotaAccounts is the identity port counting the accounts whose cached
+// rows were dropped. It finds no accounts: the gifts under test refresh the
+// recipient's cache by id.
+type quotaAccounts struct {
 	cleared int
 }
 
-func (c *recordingUserCache) ClearUserCache(ctx context.Context, users ...*userEntity.User) error {
-	c.cleared += len(users)
-	return c.UserCacheRepo.ClearUserCache(ctx, users...)
+var _ Accounts = (*quotaAccounts)(nil)
+
+func (a *quotaAccounts) FindUsersByIds(context.Context, []int64) ([]*userEntity.User, error) {
+	return nil, nil
 }
 
-// grantMarker reports whether the grant stage of (task, subscription)
-// committed its marker.
-func grantMarker(t *testing.T, f *subtest.Fixture, taskID, subID int64) bool {
+func (a *quotaAccounts) ClearUserCache(_ context.Context, userIDs ...int64) error {
+	a.cleared += len(userIDs)
+	return nil
+}
+
+// testTaskID is the quota task every test runs.
+const testTaskID int64 = 7
+
+// grantMarker reports whether the grant stage of the test task committed its
+// marker for the subscription.
+func grantMarker(t *testing.T, f *subtest.Fixture, subID int64) bool {
 	t.Helper()
-	record, err := f.Store.Inbox().Find(context.Background(), inboxQuotaGrant, inboxKey(taskID, subID))
+	record, err := f.Store.Inbox().Find(context.Background(), inboxQuotaGrant, inboxKey(testTaskID, subID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,13 +167,13 @@ func TestGrantSubscriptionDoesNotMarkInboxAfterUpdateFailure(t *testing.T) {
 	if err := f.DB.Exec(`CREATE TRIGGER fail_update BEFORE UPDATE ON user_subscribe BEGIN SELECT RAISE(ABORT, 'write failed'); END`).Error; err != nil {
 		t.Fatal(err)
 	}
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
 	stale := *sub
-	if err := logic.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{Days: 1}, time.Now()); err == nil {
+	if err := svc.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{Days: 1}, time.Now()); err == nil {
 		t.Fatal("the failed write was reported as granted")
 	}
-	if grantMarker(t, f, 7, sub.Id) {
+	if grantMarker(t, f, sub.Id) {
 		t.Fatal("the rolled-back grant left its marker")
 	}
 	if got := f.Load(t, sub.Id); !got.ExpireTime.Equal(term) {
@@ -160,10 +183,10 @@ func TestGrantSubscriptionDoesNotMarkInboxAfterUpdateFailure(t *testing.T) {
 	if err := f.DB.Exec(`DROP TRIGGER fail_update`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := logic.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{Days: 1}, time.Now()); err != nil {
+	if err := svc.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{Days: 1}, time.Now()); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if got := f.Load(t, sub.Id); !got.ExpireTime.Equal(term.AddDate(0, 0, 1)) || !grantMarker(t, f, 7, sub.Id) {
+	if got := f.Load(t, sub.Id); !got.ExpireTime.Equal(term.AddDate(0, 0, 1)) || !grantMarker(t, f, sub.Id) {
 		t.Fatalf("retry stored %+v", got)
 	}
 }
@@ -178,14 +201,14 @@ func TestGrantSubscriptionReactivatesTrafficFinishedSubscription(t *testing.T) {
 		Id: 9, UserId: 3, Status: usersub.SubscribeStatusFinished, FinishedAt: &finishedAt,
 		ExpireTime: time.Now().Add(24 * time.Hour), Traffic: 30, Download: 10, Upload: 20,
 	})
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
 	stale := *sub
-	if err := logic.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{ResetTraffic: true}, time.Now()); err != nil {
+	if err := svc.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{ResetTraffic: true}, time.Now()); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
 	stored := f.Load(t, sub.Id)
-	if stored.Status != usersub.SubscribeStatusActive || stored.FinishedAt != nil || stored.Download != 0 || stored.Upload != 0 || !grantMarker(t, f, 7, sub.Id) {
+	if stored.Status != usersub.SubscribeStatusActive || stored.FinishedAt != nil || stored.Download != 0 || stored.Upload != 0 || !grantMarker(t, f, sub.Id) {
 		t.Fatalf("reset quota did not reactivate the subscription atomically: %+v", stored)
 	}
 	if rows := f.Logs(t, log.TypeResetSubscribe); len(rows) != 1 || rows[0].ObjectID != sub.Id {
@@ -200,34 +223,52 @@ func TestGrantSubscriptionReactivatesTrafficFinishedSubscription(t *testing.T) {
 func TestGrantSubscriptionPreservesNoLimitExpiry(t *testing.T) {
 	f := subtest.New(t)
 	sub := f.Subscription(t, usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusActive, ExpireTime: usersub.NoLimitExpiry})
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
 	stale := *sub
-	if err := logic.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{Days: 30}, time.Now()); err != nil {
+	if err := svc.grantSubscription(context.Background(), 7, &stale, task.QuotaContent{Days: 30}, time.Now()); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
-	if stored := f.Load(t, sub.Id); !usersub.NoExpiry(stored.ExpireTime) || stored.Status != usersub.SubscribeStatusActive || !grantMarker(t, f, 7, sub.Id) {
+	if stored := f.Load(t, sub.Id); !usersub.NoExpiry(stored.ExpireTime) || stored.Status != usersub.SubscribeStatusActive || !grantMarker(t, f, sub.Id) {
 		t.Fatalf("the unlimited subscription was downgraded: %+v", stored)
 	}
 }
 
+// The gift stage hands billing the plan share for the subscription's owner,
+// dated at the task run, and refreshes the owner's cached balance.
+func TestGrantGiftCreditsThePlanShare(t *testing.T) {
+	f := subtest.New(t)
+	f.Plan(t, subscribe.Subscribe{Id: 13, UnitPrice: 1990})
+	store, gifts := newQuotaStore(f), newQuotaGifts()
+	svc := NewService(Deps{Accounts: store.cache, Store: store, Gifts: gifts})
+	now := time.Now()
+
+	err := svc.grantGift(context.Background(), 7, &usersub.Subscribe{Id: 9, UserId: 11, SubscribeId: 13}, task.QuotaContent{GiftType: 2, GiftValue: 10}, now)
+	if err != nil {
+		t.Fatalf("grantGift: %v", err)
+	}
+	want := quotaGift{taskID: 7, subID: 9, userID: 11, amount: 199, at: now}
+	if len(gifts.credits) != 1 || gifts.credits[0] != want || store.cache.cleared != 1 {
+		t.Fatalf("gift credits = %+v, cache clears = %d; want %+v and one clear", gifts.credits, store.cache.cleared, want)
+	}
+}
+
 // A gift stage that already committed is not granted again: no plan lookup
-// (the plan is gone), no billing transaction, but the cached balance is
+// (the plan is gone), no billing credit, but the cached balance is
 // refreshed.
 func TestGrantGiftReplaySkipsPlanLookupAndRefreshesCache(t *testing.T) {
 	f := subtest.New(t)
-	if err := f.Store.Inbox().Insert(context.Background(), inboxQuotaGift, inboxKey(7, 9), ""); err != nil {
-		t.Fatal(err)
-	}
+	gifts := newQuotaGifts()
+	gifts.credited[inboxKey(7, 9)] = true
 	store := newQuotaStore(f)
-	logic := &QuotaTaskLogic{deps: Deps{Store: store}}
+	svc := NewService(Deps{Accounts: store.cache, Store: store, Gifts: gifts})
 
-	err := logic.grantGift(context.Background(), 7, &usersub.Subscribe{Id: 9, UserId: 11, SubscribeId: 13}, task.QuotaContent{GiftType: 2, GiftValue: 10}, time.Now())
+	err := svc.grantGift(context.Background(), 7, &usersub.Subscribe{Id: 9, UserId: 11, SubscribeId: 13}, task.QuotaContent{GiftType: 2, GiftValue: 10}, time.Now())
 	if err != nil {
 		t.Fatalf("completed gift replay: %v", err)
 	}
-	if store.billingCalls != 0 || store.cache.cleared != 1 {
-		t.Fatalf("completed gift stage replayed work: billing_calls=%d cache_clears=%d", store.billingCalls, store.cache.cleared)
+	if len(gifts.credits) != 0 || store.cache.cleared != 1 {
+		t.Fatalf("completed gift stage replayed work: credits=%+v cache_clears=%d", gifts.credits, store.cache.cleared)
 	}
 }
 

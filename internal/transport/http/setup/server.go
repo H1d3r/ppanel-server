@@ -1,3 +1,9 @@
+// Package setup serves the first-installation wizard. While the server has no
+// usable configuration, the command line serves this page on 127.0.0.1:8080
+// instead of the API. The page tests the database and Redis the installer
+// enters; on submit the wizard migrates the database, creates the first
+// administrator and writes the configuration file, then signals the caller to
+// start the real server.
 package setup
 
 import (
@@ -10,7 +16,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 	"uuid"
+
+	"errors"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -21,7 +30,6 @@ import (
 	"github.com/perfect-panel/server/pkg/conf"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -98,7 +106,7 @@ func handleInitConfig(_ context.Context, ctx *app.RequestContext) {
 	// jwt secret
 	cfg.JwtAuth.AccessSecret = uuid.NewV4().String()
 	// database
-	dbConfig, err := buildDatabaseConfig(request.DatabaseDriver, request.MysqlHost, request.MysqlPort, request.MysqlDatabase, request.MysqlUser, request.MysqlPassword)
+	dbConfig, err := buildDatabaseConfig(request.DatabaseDriver, request.MysqlHost, request.MysqlPort, request.MysqlDatabase, request.MysqlUser, request.MysqlPassword, cfg.AppLocation)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, utils.H{
 			"code": 400,
@@ -214,7 +222,8 @@ func HandleDatabaseTest(_ context.Context, ctx *app.RequestContext) {
 	var message string
 	var tx *sql.DB
 	var tables []string
-	dbConfig, err := buildDatabaseConfig(request.Driver, request.Host, request.Port, request.Database, request.User, request.Password)
+	// Only the connection is tested; the session zone does not matter.
+	dbConfig, err := buildDatabaseConfig(request.Driver, request.Host, request.Port, request.Database, request.User, request.Password, orm.DefaultLocation)
 	if err != nil {
 		ctx.JSON(http.StatusOK, utils.H{
 			"code":   200,
@@ -273,7 +282,9 @@ func closeDatabase(db io.Closer) {
 	}
 }
 
-func buildDatabaseConfig(driver, host, port, database, user, password string) (orm.Config, error) {
+// buildDatabaseConfig is the configuration of the database the installation
+// sets up. Its session stores times in zone, the application's zone.
+func buildDatabaseConfig(driver, host, port, database, user, password, zone string) (orm.Config, error) {
 	normalizedDriver := orm.NormalizeDriver(driver)
 	switch normalizedDriver {
 	case orm.DriverMySQL, orm.DriverPostgres:
@@ -292,38 +303,50 @@ func buildDatabaseConfig(driver, host, port, database, user, password string) (o
 		ConnMaxIdleTime: orm.DefaultConnMaxIdleTimeSeconds,
 		SlowThreshold:   orm.DefaultSlowThresholdMs,
 	}
+	// A new database stores times in the application's zone from the
+	// start. The parameters are written out, so a later AppLocation change
+	// cannot silently reinterpret the stored times.
 	if normalizedDriver == orm.DriverPostgres {
-		cfg.Config = orm.DefaultPostgresConfig
+		cfg.Config = orm.DefaultPostgresQuery(zone)
 	} else {
-		cfg.Config = orm.DefaultMySQLConfig
+		cfg.Config = orm.DefaultMySQLQuery(zone)
 	}
 	return cfg, nil
 }
 
-func HandleRedisTest(_ context.Context, ctx *app.RequestContext) {
+// redisTestTimeout bounds the Redis connection test. Without it an address
+// that drops packets keeps the install page waiting through every dial retry
+// of the client.
+const redisTestTimeout = 5 * time.Second
+
+// HandleRedisTest reports whether the Redis server the installer entered
+// answers, before the configuration is written.
+func HandleRedisTest(ctx context.Context, requestCtx *app.RequestContext) {
 	var request struct {
 		Host     string `json:"host"`
 		Port     string `json:"port"`
 		Password string `json:"password"`
 	}
-	if err := ctx.BindJSON(&request); err != nil {
-		ctx.JSON(http.StatusBadRequest, utils.H{
+	if err := requestCtx.BindJSON(&request); err != nil {
+		requestCtx.JSON(http.StatusBadRequest, utils.H{
 			"code": 400,
 			"msg":  "Invalid request",
 			"data": nil,
 		})
-		ctx.Abort()
+		requestCtx.Abort()
 		return
 	}
-	if err := config.RedisPing(fmt.Sprintf("%s:%s", request.Host, request.Port), request.Password, 0); err != nil {
-		ctx.JSON(http.StatusOK, utils.H{
+	pingCtx, cancel := context.WithTimeout(ctx, redisTestTimeout)
+	defer cancel()
+	if err := config.RedisPing(pingCtx, fmt.Sprintf("%s:%s", request.Host, request.Port), request.Password, 0); err != nil {
+		requestCtx.JSON(http.StatusOK, utils.H{
 			"code":   200,
 			"msg":    nil,
 			"status": false,
 		})
 		return
 	}
-	ctx.JSON(http.StatusOK, utils.H{
+	requestCtx.JSON(http.StatusOK, utils.H{
 		"code":   200,
 		"msg":    nil,
 		"status": true,

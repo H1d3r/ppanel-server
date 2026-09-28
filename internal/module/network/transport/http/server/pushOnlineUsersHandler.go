@@ -9,6 +9,14 @@ import (
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 )
 
+// OnlineUsersReporter is the part of the network facade
+// PushOnlineUsersHandler calls.
+type OnlineUsersReporter interface {
+	PushOnlineUsers(ctx context.Context, req *dto.OnlineUsersRequest) error
+}
+
+var _ OnlineUsersReporter = network.Service(nil)
+
 // PushOnlineUsersHandler documents Push online users.
 //
 // @Summary Push online users
@@ -19,7 +27,7 @@ import (
 // @Param request body dto.OnlineUsersRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/server/online [post]
-func PushOnlineUsersHandler(service network.Service) app.HandlerFunc {
+func PushOnlineUsersHandler(service OnlineUsersReporter) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.OnlineUsersRequest{}
 		if err := bindOnlineUsersRequest(ctx, &req); err != nil {

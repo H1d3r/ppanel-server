@@ -33,7 +33,7 @@ const TelegramConfigKey = "system:telegram_config"
 // AdminTelegramChatIdsKey cached admin Telegram chat ID list (not system config)
 const AdminTelegramChatIdsKey = "system:telegram_admin_chat_ids"
 
-// TosConfigKey Tos配置
+// TosConfigKey caches the terms-of-service settings (the "tos" category).
 const TosConfigKey = "system:tos_config"
 
 // VerifyCodeConfigKey Verify Code Config Key

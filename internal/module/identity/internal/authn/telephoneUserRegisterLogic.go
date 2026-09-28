@@ -2,7 +2,6 @@ package authn
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
@@ -25,7 +24,7 @@ func (s *Service) TelephoneUserRegister(ctx context.Context, req *dto.TelephoneR
 		return nil, err
 	}
 	if !identifier.Check(req.TelephoneAreaCode, req.Telephone) {
-		return nil, fmt.Errorf("telephone number is not valid: %w", xerr.NewErrCode(xerr.TelephoneError))
+		return nil, xerr.Errorf(xerr.TelephoneError, "telephone number is not valid")
 	}
 	phoneNumber, err := identifier.FormatToE164(req.TelephoneAreaCode, req.Telephone)
 	if err != nil {
@@ -40,7 +39,7 @@ func (s *Service) TelephoneUserRegister(ctx context.Context, req *dto.TelephoneR
 		return nil, err
 	}
 	if exist {
-		return nil, fmt.Errorf("telephone already exists: %w", xerr.NewErrCode(xerr.UserExist))
+		return nil, xerr.Errorf(xerr.UserExist, "telephone already exists")
 	}
 	referer, err := s.resolveReferer(ctx, req.Invite)
 	if err != nil {
@@ -70,5 +69,5 @@ func (s *Service) TelephoneUserRegister(ctx context.Context, req *dto.TelephoneR
 	}, identifier.Mobile); err != nil {
 		return nil, err
 	}
-	return s.signInRegistered(ctx, newUser.Id, identifier.Mobile, req.Identifier, req.LoginType)
+	return s.signInRegistered(ctx, newUser.Id, identifier.Mobile, req.Identifier)
 }

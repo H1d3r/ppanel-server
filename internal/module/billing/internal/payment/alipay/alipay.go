@@ -1,3 +1,5 @@
+// Package alipay implements the Alipay face-to-face payment protocol: QR code
+// trade creation, trade query and close, and signed notification decoding.
 package alipay
 
 import (

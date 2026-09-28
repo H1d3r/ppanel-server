@@ -8,6 +8,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// UnbindTelegramService is the part of the identity facade
+// UnbindTelegramHandler calls.
+type UnbindTelegramService interface {
+	UnbindTelegram(ctx context.Context) error
+}
+
+var _ UnbindTelegramService = identity.Service(nil)
+
 // UnbindTelegramHandler documents Unbind Telegram.
 //
 // @Summary Unbind Telegram
@@ -16,7 +24,7 @@ import (
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/public/user/unbind_telegram [post]
-func UnbindTelegramHandler(service identity.Service) app.HandlerFunc {
+func UnbindTelegramHandler(service UnbindTelegramService) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 
 		err := service.UnbindTelegram(c)

@@ -9,21 +9,34 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // racingSubs is the real subscription repository with a write landing right
 // after the note edit reads the subscription.
 type racingSubs struct {
-	repository.UserSubscriptionRepo
+	subs      UserSubscriptions
 	afterRead func()
 }
 
-func (r racingSubs) FindOneUserSubscribe(ctx context.Context, id int64) (*usersub.SubscribeDetails, error) {
-	details, err := r.UserSubscriptionRepo.FindOneUserSubscribe(ctx, id)
+var _ UserSubscriptions = (*racingSubs)(nil)
+
+func (r *racingSubs) FindOneSubscribe(ctx context.Context, id int64) (*usersub.Subscribe, error) {
+	return r.subs.FindOneSubscribe(ctx, id)
+}
+
+func (r *racingSubs) FindOneUserSubscribe(ctx context.Context, id int64) (*usersub.SubscribeDetails, error) {
+	details, err := r.subs.FindOneUserSubscribe(ctx, id)
 	r.afterRead()
 	return details, err
+}
+
+func (r *racingSubs) QueryUserSubscribe(ctx context.Context, userID int64, statuses ...int64) ([]*usersub.SubscribeDetails, error) {
+	return r.subs.QueryUserSubscribe(ctx, userID, statuses...)
+}
+
+func (r *racingSubs) UpdateSubscribeColumns(ctx context.Context, data *usersub.Subscribe, columns ...string) error {
+	return r.subs.UpdateSubscribeColumns(ctx, data, columns...)
 }
 
 // A note edit writes the note alone: traffic accounted between its read and
@@ -36,8 +49,8 @@ func TestUpdateUserSubscribeNoteWritesOnlyTheNote(t *testing.T) {
 	if _, err := f.Store.UserSubscription().FindOneSubscribeByToken(ctx, "note-token"); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(Deps{UserSubs: racingSubs{
-		UserSubscriptionRepo: f.Store.UserSubscription(),
+	svc := NewService(Deps{UserSubs: &racingSubs{
+		subs: f.Store.UserSubscription(),
 		afterRead: func() {
 			if err := f.DB.Model(&usersub.Subscribe{}).Where("id = ?", sub.Id).Update("upload", 99).Error; err != nil {
 				t.Error(err)

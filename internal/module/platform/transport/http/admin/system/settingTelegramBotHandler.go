@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
@@ -16,7 +15,7 @@ import (
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/admin/system/setting_telegram_bot [post]
-func SettingTelegramBotHandler(service platform.Service) app.HandlerFunc {
+func SettingTelegramBotHandler(service Settings) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 
 		err := service.SettingTelegramBot(ctx)

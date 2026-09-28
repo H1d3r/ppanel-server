@@ -23,7 +23,7 @@ type UserRepo interface {
 	// UpdateColumns writes only the named columns. There is deliberately no
 	// whole-row update: a snapshot saved back whole reverts whatever changed
 	// meanwhile, including an administrator's disable or demotion.
-	UpdateColumns(ctx context.Context, id int64, columns map[string]interface{}) error
+	UpdateColumns(ctx context.Context, id int64, columns map[string]any) error
 	UpgradePasswordHash(ctx context.Context, id int64, currentHash, password, algo, salt string) (bool, error)
 	Delete(ctx context.Context, id int64) error
 	BatchDeleteUser(ctx context.Context, ids []int64) error
@@ -113,6 +113,9 @@ type UserSubscriptionRepo interface {
 	// ApplyEntitlementProjection is only called with a locked provider row.
 	ApplyEntitlementProjection(ctx context.Context, data *usersub.Subscribe) error
 	DeleteSubscribeById(ctx context.Context, id int64) error
+	// ClearSubscribeCache drops the cached entries of the subscriptions: by
+	// id, by token and their owners' subscription lists.
+	ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error
 	BatchUpdateUserSubscribeWithTraffic(ctx context.Context, deltas []trafficEntity.SubscribeTrafficDelta) error
 	// FindUsersSubscribeBySubscribeIds returns the plans' subscriptions a
 	// node may serve now (usersub.ServableCondition).
@@ -122,6 +125,10 @@ type UserSubscriptionRepo interface {
 	// FindSubscribeDetailsByIds loads the subscriptions with their plans in
 	// one round trip per table; missing ids are absent from the result.
 	FindSubscribeDetailsByIds(ctx context.Context, ids []int64) ([]*usersub.SubscribeDetails, error)
+	// FindSubscribeDetailsByUserIds loads every subscription of the users,
+	// whatever its status, with its plan: one round trip per table however
+	// many users there are.
+	FindSubscribeDetailsByUserIds(ctx context.Context, userIds []int64) ([]*usersub.SubscribeDetails, error)
 	CountQuotaConsumingSubscriptions(ctx context.Context, userId, subscribeId int64) (int64, error)
 	HasBlockingSubscription(ctx context.Context, userId int64) (bool, error)
 	CountUserSubscribesBySubscribeIdAndStatus(ctx context.Context, subscribeId int64, status ...int64) (int64, error)

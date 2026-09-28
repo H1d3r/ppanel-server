@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
-	payment2 "github.com/perfect-panel/server/internal/module/billing/internal/payment"
+	paymentPlatform "github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -54,15 +54,13 @@ func (m *paymentRepo) Insert(ctx context.Context, data *payment.Payment) error {
 
 func (m *paymentRepo) FindOne(ctx context.Context, id int64) (*payment.Payment, error) {
 	var resp payment.Payment
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&payment.Payment{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *paymentRepo) Update(ctx context.Context, data *payment.Payment) error {
@@ -92,7 +90,7 @@ func (m *paymentRepo) Delete(ctx context.Context, id int64) error {
 
 func (m *paymentRepo) FindOneByPaymentToken(ctx context.Context, token string) (*payment.Payment, error) {
 	var resp *payment.Payment
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&payment.Payment{}).Where("token = ?", token).First(v).Error
 	})
 	return resp, err
@@ -100,7 +98,7 @@ func (m *paymentRepo) FindOneByPaymentToken(ctx context.Context, token string) (
 
 func (m *paymentRepo) FindAll(ctx context.Context) ([]*payment.Payment, error) {
 	var resp []*payment.Payment
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&payment.Payment{}).Order("sort ASC, id ASC").Find(v).Error
 	})
 	return resp, err
@@ -108,11 +106,11 @@ func (m *paymentRepo) FindAll(ctx context.Context) ([]*payment.Payment, error) {
 
 func (m *paymentRepo) FindAvailableMethods(ctx context.Context) ([]*payment.Payment, error) {
 	var resp []*payment.Payment
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		// Legacy rows for removed or otherwise unsupported gateways must never
 		// be offered to a buyer, even if they remain enabled in the database.
 		return conn.Model(&payment.Payment{}).
-			Where("enable = ? AND platform IN ?", true, payment2.SupportedPlatformNames()).
+			Where("enable = ? AND platform IN ?", true, paymentPlatform.SupportedPlatformNames()).
 			Order("sort ASC, id ASC").
 			Find(v).Error
 	})
@@ -123,7 +121,7 @@ func (m *paymentRepo) FindListByPage(ctx context.Context, page, size int, req *p
 	var resp []*payment.Payment
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		conn = conn.Model(&payment.Payment{})
 		if req != nil {
 			if req.Enable != nil {

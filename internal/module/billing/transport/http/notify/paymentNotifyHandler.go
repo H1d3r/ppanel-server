@@ -1,3 +1,5 @@
+// Package notify holds the HTTP handler that receives payment gateway
+// callbacks and hands them to the billing facade to authenticate and settle.
 package notify
 
 import (

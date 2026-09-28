@@ -150,9 +150,9 @@ func routeHandlerOwners(t *testing.T) map[string]string {
 func TestRegisterHandlers_edgeManifestHidesUnauthorizedRequests(t *testing.T) {
 	// Given
 	router := server.Default()
-	RegisterHandlers(router, Dependencies{Config: appconfig.Config{
+	RegisterHandlers(router, Dependencies{Config: appconfig.Config{Boot: appconfig.Boot{
 		EdgeSubscribe: appconfig.EdgeSubscribeConfig{Enabled: true},
-	}})
+	}}})
 	ctx := router.NewContext()
 	ctx.Request.SetRequestURI("/api/edge/v1/manifest?token=probe")
 	ctx.Request.Header.SetMethod(http.MethodGet)
@@ -215,7 +215,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 	for _, tc := range routeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given
-			config := appconfig.Config{Subscribe: tc.subscribe}
+			config := appconfig.Config{Runtime: appconfig.Runtime{Subscribe: tc.subscribe}}
 			if tc.name == "edge-manifest-enabled" {
 				config.EdgeSubscribe.Enabled = true
 			}
@@ -285,7 +285,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given
 			router := server.Default()
-			RegisterHandlers(router, Dependencies{Config: appconfig.Config{Subscribe: tc.subscribe}})
+			RegisterHandlers(router, Dependencies{Config: appconfig.Config{Runtime: appconfig.Runtime{Subscribe: tc.subscribe}}})
 			ctx := router.NewContext()
 			ctx.Request.SetRequestURI(tc.path)
 			ctx.Request.Header.SetMethod(http.MethodGet)
@@ -313,19 +313,19 @@ func TestRegisterHandlers_middlewareContracts(t *testing.T) {
 	}{
 		{
 			name: "public-auth-before-device",
-			config: appconfig.Config{Device: appconfig.DeviceConfig{
+			config: appconfig.Config{Runtime: appconfig.Runtime{Device: appconfig.DeviceConfig{
 				Enable: true,
-			}},
+			}}},
 			paths:    []string{"/v1/public/announcement/list"},
 			wantCode: xerr.ErrorTokenEmpty,
 			wantMsg:  "User token is empty",
 		},
 		{
 			name: "device-only",
-			config: appconfig.Config{Device: appconfig.DeviceConfig{
+			config: appconfig.Config{Runtime: appconfig.Runtime{Device: appconfig.DeviceConfig{
 				Enable:         true,
 				EnableSecurity: true,
-			}},
+			}}},
 			paths:    []string{"/v1/auth/login/device"},
 			method:   http.MethodPost,
 			wantCode: xerr.SecretIsEmpty,

@@ -1,3 +1,5 @@
+// Package announcement holds the Hertz handler of the announcements users
+// see.
 package announcement
 
 import (

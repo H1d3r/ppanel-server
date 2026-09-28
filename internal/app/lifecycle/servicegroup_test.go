@@ -36,7 +36,6 @@ func TestServiceGroup(t *testing.T) {
 	}
 
 	group.Stop()
-	Shutdown()
 
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -145,6 +144,8 @@ type bufferedWriter struct {
 	closed           bool
 }
 
+var _ logger.Writer = (*bufferedWriter)(nil)
+
 func (w *bufferedWriter) add(v any) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -160,14 +161,11 @@ func (w *bufferedWriter) Close() error {
 	return nil
 }
 
-func (w *bufferedWriter) Alert(v any)                       { w.add(v) }
 func (w *bufferedWriter) Debug(v any, _ ...logger.LogField) { w.add(v) }
 func (w *bufferedWriter) Error(v any, _ ...logger.LogField) { w.add(v) }
 func (w *bufferedWriter) Info(v any, _ ...logger.LogField)  { w.add(v) }
-func (w *bufferedWriter) Severe(v any)                      { w.add(v) }
 func (w *bufferedWriter) Slow(v any, _ ...logger.LogField)  { w.add(v) }
 func (w *bufferedWriter) Stack(v any)                       { w.add(v) }
-func (w *bufferedWriter) Stat(v any, _ ...logger.LogField)  { w.add(v) }
 
 // Stop closes the log output last, so the errors the services log while
 // stopping are flushed before the process exits — also when a service panics

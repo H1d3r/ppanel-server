@@ -1,3 +1,5 @@
+// Package repo holds the network module's repository implementations: the
+// servers and nodes with their Redis caches, and the traffic log.
 package repo
 
 import (
@@ -14,6 +16,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	"github.com/perfect-panel/server/pkg/orm"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -60,7 +63,8 @@ func NewNodeRepo(db *gorm.DB, cache *redis.Client, retriers ...*ServerCacheInval
 	}
 }
 
-// nodeInSet 支持多值 OR 查询
+// nodeInSet selects the rows whose comma-separated field holds any of the
+// values.
 func nodeInSet(field string, values []string) func(db *gorm.DB) *gorm.DB {
 	return orm.CommaSeparatedContains(field, values)
 }
@@ -124,7 +128,7 @@ func (m *nodeRepo) UpdateServerProtocolsIfCurrent(ctx context.Context, id int64,
 		Where("id = ? AND protocols = ?", id, current).
 		UpdateColumns(map[string]any{
 			"protocols":  updated,
-			"updated_at": time.Now(),
+			"updated_at": timeutil.Now(),
 		})
 	return result.RowsAffected == 1, result.Error
 }
@@ -238,13 +242,14 @@ func (m *nodeRepo) DeleteNode(ctx context.Context, id int64) error {
 	return db.WithContext(ctx).Where("id = ?", id).Delete(&node.Node{}).Error
 }
 
-// UpdateStatusCache Update server status to cache
+// UpdateStatusCache stores the status a server reported until it expires.
 func (m *nodeRepo) UpdateStatusCache(ctx context.Context, serverId int64, status *node.Status) error {
 	key := fmt.Sprintf(node.StatusCacheKey, serverId)
 	return m.Cache.Set(ctx, key, status.Marshal(), node.Expiry).Err()
 }
 
-// StatusCache Get server status from cache
+// StatusCache returns the status a server last reported, or a zero status
+// when none is cached.
 func (m *nodeRepo) StatusCache(ctx context.Context, serverId int64) (node.Status, error) {
 	var status node.Status
 	key := fmt.Sprintf(node.StatusCacheKey, serverId)
@@ -263,7 +268,8 @@ func (m *nodeRepo) StatusCache(ctx context.Context, serverId int64) (node.Status
 	return status, err
 }
 
-// OnlineUserSubscribe Get online user subscribe
+// OnlineUserSubscribe returns the subscriptions a server reports online over
+// the protocol, with their IPs.
 func (m *nodeRepo) OnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) (node.OnlineUserSubscribe, error) {
 	key := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
 	result, err := m.Cache.Get(ctx, key).Result()
@@ -281,7 +287,8 @@ func (m *nodeRepo) OnlineUserSubscribe(ctx context.Context, serverId int64, prot
 	return subscribe, err
 }
 
-// UpdateOnlineUserSubscribe Update online user subscribe
+// UpdateOnlineUserSubscribe stores the subscriptions a server reports online
+// over the protocol until the report expires.
 func (m *nodeRepo) UpdateOnlineUserSubscribe(ctx context.Context, serverId int64, protocol string, subscribe node.OnlineUserSubscribe) error {
 	key := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
 	data, err := json.Marshal(subscribe)
@@ -291,28 +298,27 @@ func (m *nodeRepo) UpdateOnlineUserSubscribe(ctx context.Context, serverId int64
 	return m.Cache.Set(ctx, key, data, node.Expiry).Err()
 }
 
-// OnlineUserSubscribeGlobal Get global online user subscribe count
+// OnlineUserSubscribeGlobal counts the subscriptions online on any server,
+// dropping the entries whose report expired.
 func (m *nodeRepo) OnlineUserSubscribeGlobal(ctx context.Context) (int64, error) {
 	now := time.Now().Unix()
-	// Clear expired data
 	if err := m.Cache.ZRemRangeByScore(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal, "-inf", fmt.Sprintf("%d", now)).Err(); err != nil {
 		return 0, err
 	}
 	return m.Cache.ZCard(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal).Result()
 }
 
-// UpdateOnlineUserSubscribeGlobal Update global online user subscribe count
+// UpdateOnlineUserSubscribeGlobal marks the subscriptions online for five
+// minutes in the global count, dropping the expired entries.
 func (m *nodeRepo) UpdateOnlineUserSubscribeGlobal(ctx context.Context, subscribe node.OnlineUserSubscribe) error {
 	now := time.Now()
-	expireTime := now.Add(5 * time.Minute).Unix() // set expire time 5 minutes later
+	expireTime := now.Add(5 * time.Minute).Unix()
 
 	pipe := m.Cache.Pipeline()
 
-	// Clear expired data
 	pipe.ZRemRangeByScore(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal, "-inf", fmt.Sprintf("%d", now.Unix()))
-	// Add or update each subscribe with new expire time
+	// Each member's score is the time its entry expires.
 	for sub := range subscribe {
-		// Use ZAdd to add or update the member with new score (expire time)
 		pipe.ZAdd(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal, redis.Z{
 			Score:  float64(expireTime),
 			Member: sub,
@@ -323,7 +329,8 @@ func (m *nodeRepo) UpdateOnlineUserSubscribeGlobal(ctx context.Context, subscrib
 	return err
 }
 
-// FilterServerList Filter Server List
+// FilterServerList returns a page of the servers matching params, in sort
+// order, and how many match.
 func (m *nodeRepo) FilterServerList(ctx context.Context, params *node.FilterParams) (int64, []*node.Server, error) {
 	var servers []*node.Server
 	var total int64
@@ -405,7 +412,8 @@ func (m *nodeRepo) nodeListQuery(ctx context.Context, params *node.FilterNodePar
 	return query
 }
 
-// FilterNodeList Filter Node List
+// FilterNodeList returns a page of the nodes matching params, in sort
+// order, and how many match.
 func (m *nodeRepo) FilterNodeList(ctx context.Context, params *node.FilterNodeParams) (int64, []*node.Node, error) {
 	if params == nil {
 		params = &node.FilterNodeParams{}
@@ -528,7 +536,9 @@ func (m *nodeRepo) SetServerCache(ctx context.Context, serverId int64, key strin
 	return err
 }
 
-// ClearServerCache Clear Server Cache
+// ClearServerCache drops a server's node-facing response caches. With a
+// retrier, a Redis failure is retried in the background instead of being
+// returned.
 func (m *nodeRepo) ClearServerCache(ctx context.Context, serverId int64) error {
 	err := clearServerCache(ctx, m.Cache, serverId)
 	if err == nil || m.cacheRetrier == nil {

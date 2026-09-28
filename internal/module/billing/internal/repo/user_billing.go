@@ -35,7 +35,7 @@ func NewWalletRepo(conn cache.CachedConn) *WalletRepo {
 // use so every account has a wallet once money moves.
 func (m *WalletRepo) FindOneForUpdate(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
 	var result *walletEntity.Wallet
-	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v any) error {
 		var w walletEntity.Wallet
 		err := conn.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ?", userId).First(&w).Error
@@ -60,7 +60,7 @@ func (m *WalletRepo) FindOneForUpdate(ctx context.Context, userId int64) (*walle
 // means the account has no wallet row yet; callers treat it as zero values.
 func (m *WalletRepo) FindWallet(ctx context.Context, userId int64) (*walletEntity.Wallet, error) {
 	var w *walletEntity.Wallet
-	err := m.QueryNoCacheCtx(ctx, &w, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &w, func(conn *gorm.DB, v any) error {
 		var row walletEntity.Wallet
 		err := conn.Where("user_id = ?", userId).First(&row).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -86,7 +86,7 @@ func (m *WalletRepo) FindWalletsByUserIds(ctx context.Context, userIds []int64) 
 		return result, nil
 	}
 	var rows []*walletEntity.Wallet
-	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v any) error {
 		return conn.Where("user_id IN ?", userIds).Find(v).Error
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func (m *WalletRepo) InsertWithdrawal(ctx context.Context, data *walletEntity.Wi
 
 func (m *WalletRepo) FindWithdrawalForUpdate(ctx context.Context, id int64) (*walletEntity.Withdrawal, error) {
 	var data walletEntity.Withdrawal
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", id).
 			First(v).Error
@@ -143,7 +143,7 @@ func (m *WalletRepo) QueryWithdrawalList(ctx context.Context, userID int64, stat
 	var list []*walletEntity.Withdrawal
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		query := conn.Model(&walletEntity.Withdrawal{})
 		if userID != 0 {
 			query = query.Where("user_id = ?", userID)

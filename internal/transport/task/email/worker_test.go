@@ -119,10 +119,6 @@ func (s *workerSender) SendContext(ctx context.Context, to []string, _, _ string
 	return s.err
 }
 
-func (s *workerSender) Send(to []string, subject, body string) error {
-	return s.SendContext(context.Background(), to, subject, body)
-}
-
 func newEmailTask(t *testing.T, status int8, current uint64, recipients ...string) *task.Task {
 	t.Helper()
 	scope, err := (&task.EmailScope{Recipients: recipients, Limit: 10}).Marshal()

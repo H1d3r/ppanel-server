@@ -6,6 +6,7 @@ package portal
 
 import (
 	"context"
+	"errors"
 
 	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -16,7 +17,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -75,9 +75,10 @@ type Transactor interface {
 	InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error
 }
 
-// UserCache drops a user's cached projection after a wallet movement.
+// UserCache drops a user's cached projection after a wallet movement; the
+// identity module provides it.
 type UserCache interface {
-	ClearUserCache(ctx context.Context, data ...*user.User) error
+	ClearUserCache(ctx context.Context, userIDs ...int64) error
 }
 
 // OrderQueue mirrors the facade's order queue port: the deferred close of a
@@ -94,15 +95,14 @@ type Inventory interface {
 // Config is the static configuration snapshot for the portal flows. ClientIP
 // is deliberately absent: it is resolved per request from the context.
 type Config struct {
-	Host string
 	// SiteName/CurrencyUnit/CurrencyAccessKey/SiteHost/GuestVerification are
 	// runtime-mutable (the admin edits them and ReinitSubsystem reloads);
 	// read per request.
 	SiteName          func() string
 	CurrencyUnit      func() string
 	CurrencyAccessKey func() string
-	// SiteHost is the configured public site host; with Host it is the only
-	// fallback base for payment notify URLs when a method has no Domain.
+	// SiteHost is the configured public site host, the base of payment notify
+	// URLs when a method has no Domain.
 	SiteHost func() string
 	// GuestVerification is the Turnstile policy for guest purchases, which
 	// create an account once paid and therefore follow the registration check.
@@ -186,7 +186,7 @@ func (s *Service) IssueSession(ctx context.Context, userID int64) (string, error
 func (s *Service) findOrder(ctx context.Context, orderNo string) (*order.Order, error) {
 	orderInfo, err := s.deps.Orders.FindOneByOrderNo(ctx, orderNo)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", orderNo)
+		return nil, xerr.Errorf(xerr.OrderNotExist, "order not exist: %v", orderNo)
 	}
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", orderNo)

@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       lint:
-        description: Lint the lines the calling event changed (golangci-lint --new-from-rev).
+        description: Run golangci-lint over the whole tree.
         type: boolean
         default: true
 
@@ -157,14 +157,12 @@ jobs:
         run: make proto-check
 
   lint:
-    name: golangci-lint (changed lines)
+    name: golangci-lint
     if: ${{ inputs.lint }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -172,21 +170,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Only lines the pull request (or push) changed are reported until the
-      # existing code is lint clean; a later pass switches this job to make lint.
-      - name: Resolve the lint base
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if [ -n "$BASE_REF" ]; then
-            base=$(git merge-base HEAD "origin/$BASE_REF")
-          elif [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            base=$BEFORE
-          else
-            base=$(git rev-parse HEAD^)
-          fi
-          echo "LINT_BASE=$base" >> "$GITHUB_ENV"
-
-      - name: Lint changed lines
-        run: make lint-new LINT_BASE="$LINT_BASE"
+      # The tree is lint clean: any finding fails the job.
+      - name: Lint
+        run: make lint

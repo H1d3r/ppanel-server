@@ -1,3 +1,5 @@
+// Package order holds the HTTP handlers of the admin order API; they adapt
+// requests to the billing facade.
 package order
 
 import (

@@ -45,8 +45,8 @@ func (b *Bot) relaySupport(ctx context.Context, msg *models.Message) {
 		}
 	}
 
-	topics := NewTopicService(ctx, b.deps.TopicClient, b.deps.Topics, group)
-	topic, created, err := topics.Ensure(telegramtopic.KindSupport, auth.UserId, b.supportTopicTitle(ctx, auth.UserId, msg))
+	topics := NewTopicService(b.deps.TopicClient, b.deps.Topics, group)
+	topic, created, err := topics.Ensure(ctx, telegramtopic.KindSupport, auth.UserId, b.supportTopicTitle(ctx, auth.UserId, msg))
 	if err != nil {
 		log.Errorw("support relay: ensure topic failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))
 		b.send(ctx, chatID, "客服暂时不可用，请稍后再试。")
@@ -56,7 +56,7 @@ func (b *Bot) relaySupport(ctx context.Context, msg *models.Message) {
 		b.send(ctx, chatID, "已为您接入人工客服，直接发送消息即可，客服会尽快回复。")
 	}
 
-	if _, err := topics.Relay(topic, func(threadID int64) error {
+	if _, err := topics.Relay(ctx, topic, func(threadID int64) error {
 		return b.deps.TopicClient.ForwardToThread(ctx, group, threadID, chatID, msg.ID)
 	}); err != nil {
 		log.Errorw("support relay: forward failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))

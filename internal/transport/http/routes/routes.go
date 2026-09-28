@@ -1,3 +1,8 @@
+// Package routes is the URL table of the HTTP API: it registers every route
+// with its middleware and hands each handler its module's facade. The
+// handlers live in the modules' transport/http packages; composing them here
+// keeps the whole API surface in one place, pinned by the route inventory in
+// testdata/routes.golden.
 package routes
 
 import (
@@ -11,7 +16,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/internal/transport/http/middleware"
 	"github.com/redis/go-redis/v9"
 )
@@ -22,7 +26,6 @@ type Dependencies struct {
 	Config         config.Config
 	ConfigProvider func() config.Config
 	Redis          *redis.Client
-	Store          repository.Store
 	Support        support.Service
 	Billing        billing.Service
 	Platform       platform.Service
@@ -50,9 +53,11 @@ func (deps Dependencies) nodeSecret() string {
 	return deps.runtimeConfig().Node.NodeSecret
 }
 
+// authDeps resolves sessions through the identity facade, which owns the
+// accounts and devices a session belongs to.
 func (deps Dependencies) authDeps() middleware.AuthDeps {
 	return middleware.AuthDeps{
-		JWT: deps.runtimeConfig().JwtAuth, Redis: deps.Redis, Accounts: middleware.AccountsFromStore(deps.Store),
+		JWT: deps.runtimeConfig().JwtAuth, Redis: deps.Redis, Accounts: deps.Identity,
 	}
 }
 

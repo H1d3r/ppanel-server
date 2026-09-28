@@ -1,3 +1,5 @@
+// Package facebook is the Graph API client of the Facebook sign-in method:
+// the OAuth endpoints and the profile of the signed-in user.
 package facebook
 
 import (

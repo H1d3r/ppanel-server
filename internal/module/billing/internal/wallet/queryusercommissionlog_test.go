@@ -2,21 +2,27 @@ package wallet
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
 )
 
+// commissionLogRepo serves a fixed page of log entries.
 type commissionLogRepo struct {
-	repository.LogRepo
 	logs []*log.SystemLog
 }
 
+var _ LogReader = (*commissionLogRepo)(nil)
+
 func (r *commissionLogRepo) FilterSystemLog(_ context.Context, _ *log.FilterParams) ([]*log.SystemLog, int64, error) {
 	return r.logs, int64(len(r.logs)), nil
+}
+
+func (*commissionLogRepo) SumAmountByTypeAndObjectID(context.Context, uint8, int64) (int64, error) {
+	return 0, errors.New("commissionLogRepo: the statement must not sum the log")
 }
 
 // A referrer's commission log must not reveal the referee's order number:
@@ -29,7 +35,7 @@ func TestQueryUserCommissionLogHidesRefereeOrderNumbers(t *testing.T) {
 	repo := &commissionLogRepo{logs: []*log.SystemLog{{Type: log.TypeCommission.Uint8(), ObjectID: 3, Content: string(content)}}}
 	ctx := user.NewContext(context.Background(), &user.User{Id: 3})
 
-	resp, err := newQueryUserCommissionLogLogic(ctx, Deps{Logs: repo}).QueryUserCommissionLog(&dto.QueryUserCommissionLogListRequest{Page: 1, Size: 10})
+	resp, err := NewService(Deps{Logs: repo}).QueryUserCommissionLog(ctx, &dto.QueryUserCommissionLogListRequest{Page: 1, Size: 10})
 	if err != nil {
 		t.Fatalf("QueryUserCommissionLog() error = %v", err)
 	}

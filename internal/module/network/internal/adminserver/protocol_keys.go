@@ -49,7 +49,7 @@ func mergeMissingProtocolFields(next node.Protocol, existing node.Protocol, prov
 		return node.Protocol{}, err
 	}
 	for field, value := range existingMap {
-		if _, ok := provided[field]; !ok {
+		if !providedField(provided, field) {
 			nextMap[field] = value
 		}
 	}
@@ -62,6 +62,21 @@ func mergeMissingProtocolFields(next node.Protocol, existing node.Protocol, prov
 		return node.Protocol{}, err
 	}
 	return merged, nil
+}
+
+// providedField reports whether the request named field. The request body
+// is decoded case-insensitively, like encoding/json, so a key sent as
+// "Enable" set the enable field and counts as provided.
+func providedField(provided map[string]struct{}, field string) bool {
+	if _, ok := provided[field]; ok {
+		return true
+	}
+	for key := range provided {
+		if strings.EqualFold(key, field) {
+			return true
+		}
+	}
+	return false
 }
 
 func protocolJSONMap(protocol node.Protocol) (map[string]json.RawMessage, error) {

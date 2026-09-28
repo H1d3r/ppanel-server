@@ -54,17 +54,24 @@ func TestCreateAndCheckoutIsIdempotent(t *testing.T) {
 }
 
 // staleIdempotencyLookup misses the order a concurrent request with the same
-// key committed, as the initial lookup of a request racing it does.
+// key committed, as the initial lookup of a request racing it does; every
+// other read goes to orders.
 type staleIdempotencyLookup struct {
-	Orders
+	orders Orders
 	misses atomic.Int32
+}
+
+var _ Orders = (*staleIdempotencyLookup)(nil)
+
+func (s *staleIdempotencyLookup) FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error) {
+	return s.orders.FindOneByOrderNo(ctx, orderNo)
 }
 
 func (s *staleIdempotencyLookup) FindOneByIdempotencyKey(ctx context.Context, key string) (*order.Order, error) {
 	if s.misses.Add(-1) >= 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return s.Orders.FindOneByIdempotencyKey(ctx, key)
+	return s.orders.FindOneByIdempotencyKey(ctx, key)
 }
 
 // Design: concurrent submissions of one key produce one order and one
@@ -80,7 +87,7 @@ func TestConcurrentCreateWithOneKeyReservesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAndCheckout: %v", err)
 	}
-	lookup := &staleIdempotencyLookup{Orders: f.svc.deps.Orders}
+	lookup := &staleIdempotencyLookup{orders: f.svc.deps.Orders}
 	lookup.misses.Store(1)
 	f.svc.deps.Orders = lookup
 
@@ -158,15 +165,33 @@ func TestStripeRetryReturnsTheOnePaymentIntent(t *testing.T) {
 }
 
 // competingClaim lets another checkout claim its intent for the order just
-// before this one claims its own.
+// before this one claims its own; everything else goes to orders.
 type competingClaim struct {
-	portal.Orders
-	claim func(orderNo string)
+	orders portal.Orders
+	claim  func(orderNo string)
+}
+
+var _ portal.Orders = competingClaim{}
+
+func (c competingClaim) FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error) {
+	return c.orders.FindOneByOrderNo(ctx, orderNo)
+}
+
+func (c competingClaim) CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error) {
+	return c.orders.CountPendingGuestOrders(ctx, authType, identifier)
+}
+
+func (c competingClaim) UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string) (bool, error) {
+	return c.orders.UpdatePaymentExpectation(ctx, orderNo, amount, currency)
 }
 
 func (c competingClaim) SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string) (bool, error) {
 	c.claim(orderNo)
-	return c.Orders.SetPaymentTradeNoIfEmpty(ctx, orderNo, tradeNo)
+	return c.orders.SetPaymentTradeNoIfEmpty(ctx, orderNo, tradeNo)
+}
+
+func (c competingClaim) UpdateOrderStatusFrom(ctx context.Context, orderNo string, from, status uint8) (bool, error) {
+	return c.orders.UpdateOrderStatusFrom(ctx, orderNo, from, status)
 }
 
 // Design: two checkouts can each create an intent; the one that loses the
@@ -177,7 +202,7 @@ func TestStripeCheckoutsRacingForTheOrderKeepOneIntent(t *testing.T) {
 	f = newV2Fixture(t, v2Options{
 		gateways: gateway.NewRegistry(gateway.WithStripeBackends(fake.Backends)),
 		orders: func(orders portal.Orders) portal.Orders {
-			return competingClaim{Orders: orders, claim: func(orderNo string) {
+			return competingClaim{orders: orders, claim: func(orderNo string) {
 				fake.Seed("pi_winner", 1000, "cny", "requires_payment_method", orderNo, "card")
 				if _, err := orders.SetPaymentTradeNoIfEmpty(context.Background(), orderNo, "pi_winner"); err != nil {
 					f.t.Error(err)

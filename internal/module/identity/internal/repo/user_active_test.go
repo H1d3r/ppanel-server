@@ -141,13 +141,13 @@ func TestUpdateColumnsKeepsConcurrentAdminChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.Model(&user.User{}).Where("id = ?", u.Id).Updates(map[string]interface{}{"enable": false, "is_admin": false}).Error; err != nil {
+	if err := db.Model(&user.User{}).Where("id = ?", u.Id).Updates(map[string]any{"enable": false, "is_admin": false}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Where("user_id = ? AND auth_type = ?", u.Id, "telegram").Delete(&user.AuthMethods{}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.UpdateColumns(ctx, snapshot.Id, map[string]interface{}{"enable_login_notify": true}); err != nil {
+	if err := repo.UpdateColumns(ctx, snapshot.Id, map[string]any{"enable_login_notify": true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +167,7 @@ func TestUpdateColumnsKeepsConcurrentAdminChanges(t *testing.T) {
 	if err := db.Delete(&user.User{}, u.Id).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.UpdateColumns(ctx, snapshot.Id, map[string]interface{}{"rules": "[]"}); err != nil {
+	if err := repo.UpdateColumns(ctx, snapshot.Id, map[string]any{"rules": "[]"}); err != nil {
 		t.Fatal(err)
 	}
 	var deleted user.User

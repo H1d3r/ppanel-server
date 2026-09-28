@@ -46,6 +46,7 @@ type Service struct {
 	deps Deps
 }
 
+// NewService builds OAuth sign-in over its collaborators.
 func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
 }

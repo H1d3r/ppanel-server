@@ -8,20 +8,20 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/repository/kernel"
 	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/perfect-panel/server/pkg/requestmeta"
 	"gorm.io/gorm"
 )
 
-var _ repository.LogRepo = (*logRepo)(nil)
+var _ kernel.LogRepo = (*logRepo)(nil)
 
 type logRepo struct {
 	*gorm.DB
 }
 
 // NewLogRepo builds the module-owned implementation.
-func NewLogRepo(db *gorm.DB) repository.LogRepo {
+func NewLogRepo(db *gorm.DB) kernel.LogRepo {
 	return &logRepo{
 		DB: db,
 	}
@@ -143,11 +143,11 @@ func (m *logRepo) FilterSystemLog(ctx context.Context, filter *log.FilterParams)
 	if filter == nil {
 		filter = &log.FilterParams{
 			Page: 1,
-			Size: repository.DefaultPageSize,
+			Size: kernel.DefaultPageSize,
 		}
 	}
 
-	filter.Page, filter.Size = repository.NormalizePage(filter.Page, filter.Size)
+	filter.Page, filter.Size = kernel.NormalizePage(filter.Page, filter.Size)
 
 	if filter.Type != 0 {
 		tx = tx.Where("type = ?", filter.Type)

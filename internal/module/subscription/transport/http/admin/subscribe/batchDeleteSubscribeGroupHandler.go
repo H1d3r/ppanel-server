@@ -1,3 +1,4 @@
+// Package subscribe holds the admin HTTP handlers for plans and plan groups.
 package subscribe
 
 import (

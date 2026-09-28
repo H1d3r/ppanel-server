@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	paymentModel "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
@@ -14,7 +13,6 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // Payments is the payment-method persistence administration needs.
@@ -37,9 +35,9 @@ type Deps struct {
 	// Gateways validates configurations and manages Stripe webhooks; nil
 	// selects the production gateways.
 	Gateways *gateway.Registry
-	// NotifyHosts reads the configured hosts a callback URL falls back to
-	// when a method has no domain.
-	NotifyHosts func() gateway.NotifyHosts
+	// SiteHost reads the public site host a callback URL falls back to when
+	// the method has no domain.
+	SiteHost func() string
 }
 
 type Service struct {
@@ -53,16 +51,16 @@ func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
 }
 
-func (s *Service) notifyHosts() gateway.NotifyHosts {
-	if s.deps.NotifyHosts == nil {
-		return gateway.NotifyHosts{}
+func (s *Service) siteHost() string {
+	if s.deps.SiteHost == nil {
+		return ""
 	}
-	return s.deps.NotifyHosts()
+	return s.deps.SiteHost()
 }
 
 func (s *Service) Create(ctx context.Context, req *dto.CreatePaymentMethodRequest) (*dto.PaymentConfig, error) {
 	if payment.ParsePlatform(req.Platform) == payment.UNSUPPORTED {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UnsupportedPaymentPlatform), "unsupported payment platform: %s", req.Platform)
+		return nil, xerr.Errorf(xerr.UnsupportedPaymentPlatform, "unsupported payment platform: %s", req.Platform)
 	}
 	if err := validatePaymentFee(req.FeeMode, req.FeePercent, req.FeeAmount); err != nil {
 		return nil, err
@@ -106,9 +104,9 @@ func (s *Service) createStripeMethod(ctx context.Context, method *paymentModel.P
 		return xerr.Wrapf(err, xerr.InvalidPaymentConfig, "invalid Stripe config")
 	}
 	if config.SecretKey == "" {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidPaymentConfig), "stripe secret key is empty")
+		return xerr.Errorf(xerr.InvalidPaymentConfig, "stripe secret key is empty")
 	}
-	notifyURL, err := gateway.NotifyURL(method, s.notifyHosts())
+	notifyURL, err := gateway.NotifyURL(method, s.siteHost())
 	if err != nil {
 		return err
 	}
@@ -135,14 +133,14 @@ func (s *Service) createStripeMethod(ctx context.Context, method *paymentModel.P
 
 func (s *Service) Update(ctx context.Context, req *dto.UpdatePaymentMethodRequest) (*dto.PaymentConfig, error) {
 	if payment.ParsePlatform(req.Platform) == payment.UNSUPPORTED {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UnsupportedPaymentPlatform), "unsupported payment platform: %s", req.Platform)
+		return nil, xerr.Errorf(xerr.UnsupportedPaymentPlatform, "unsupported payment platform: %s", req.Platform)
 	}
 	method, err := s.deps.Payments.FindOne(ctx, req.Id)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find payment method %d", req.Id)
 	}
 	if method.Platform != req.Platform {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentPlatformImmutable), "payment platform cannot be changed")
+		return nil, xerr.Errorf(xerr.PaymentPlatformImmutable, "payment platform cannot be changed")
 	}
 	if err := validatePaymentFee(req.FeeMode, req.FeePercent, req.FeeAmount); err != nil {
 		return nil, err
@@ -164,8 +162,18 @@ func (s *Service) Update(ctx context.Context, req *dto.UpdatePaymentMethodReques
 			}
 		}
 	}
-	mapping.DeepCopy(method, req)
+	// The id and the platform are those of the stored method: the platform
+	// was checked above and the token never changes.
+	method.Name = req.Name
+	method.Icon = req.Icon
+	method.Domain = req.Domain
+	method.Description = req.Description
 	method.Config = config
+	method.FeeMode = req.FeeMode
+	method.FeePercent = req.FeePercent
+	method.FeeAmount = req.FeeAmount
+	method.Sort = req.Sort
+	method.Enable = req.Enable
 	if err := s.deps.Payments.Update(ctx, method); err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update payment method %d", req.Id)
 	}
@@ -181,7 +189,7 @@ func (s *Service) Delete(ctx context.Context, req *dto.DeletePaymentMethodReques
 	// depends on; deleting it breaks every balance purchase with an opaque
 	// record-not-found until the seed row is restored by hand.
 	if payment.ParsePlatform(method.Platform) == payment.Balance {
-		return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodInternal), "the balance payment method cannot be deleted")
+		return xerr.Errorf(xerr.PaymentMethodInternal, "the balance payment method cannot be deleted")
 	}
 	if err := s.ensureNoPendingOrders(ctx, req.Id); err != nil {
 		return err
@@ -200,7 +208,7 @@ func (s *Service) ensureNoPendingOrders(ctx context.Context, paymentID int64) er
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "count pending orders of payment method %d", paymentID)
 	}
 	if pending > 0 {
-		return errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodHasPendingOrders), "payment method has %d pending orders", pending)
+		return xerr.Errorf(xerr.PaymentMethodHasPendingOrders, "payment method has %d pending orders", pending)
 	}
 	return nil
 }
@@ -218,7 +226,7 @@ func (s *Service) List(ctx context.Context, req *dto.GetPaymentMethodListRequest
 		Total: total,
 		List:  make([]dto.PaymentMethodDetail, len(list)),
 	}
-	hosts := s.notifyHosts()
+	siteHost := s.siteHost()
 	for i, v := range list {
 		config := make(map[string]any)
 		_ = json.Unmarshal([]byte(v.Config), &config)
@@ -234,7 +242,7 @@ func (s *Service) List(ctx context.Context, req *dto.GetPaymentMethodListRequest
 			FeeAmount:   v.FeeAmount,
 			Sort:        v.Sort,
 			Enable:      v.Enable != nil && *v.Enable,
-			NotifyURL:   s.displayNotifyURL(v, hosts),
+			NotifyURL:   s.displayNotifyURL(v, siteHost),
 			Description: v.Description,
 		}
 	}
@@ -244,11 +252,11 @@ func (s *Service) List(ctx context.Context, req *dto.GetPaymentMethodListRequest
 // displayNotifyURL is the callback URL checkout gives the gateway, or empty
 // when the method has none: the balance method, or a method whose callback
 // cannot be built until a domain or site host is configured.
-func (s *Service) displayNotifyURL(method *paymentModel.Payment, hosts gateway.NotifyHosts) string {
+func (s *Service) displayNotifyURL(method *paymentModel.Payment, siteHost string) string {
 	if !s.deps.Gateways.Handles(method.Platform) {
 		return ""
 	}
-	notifyURL, err := gateway.NotifyURL(method, hosts)
+	notifyURL, err := gateway.NotifyURL(method, siteHost)
 	if err != nil {
 		return ""
 	}
@@ -261,16 +269,28 @@ func (s *Service) Platforms(_ context.Context) (*dto.PaymentPlatformResponse, er
 
 func validatePaymentFee(mode uint, percent, amount int64) error {
 	if mode > 3 || percent < 0 || percent > 100 || amount < 0 {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidPaymentFee), "invalid payment fee configuration")
+		return xerr.Errorf(xerr.InvalidPaymentFee, "invalid payment fee configuration")
 	}
 	return nil
 }
 
+// paymentConfigResponse describes a saved method to the administrator, its
+// stored configuration decoded into JSON fields; the notify token stays out.
 func paymentConfigResponse(method *paymentModel.Payment) *dto.PaymentConfig {
-	resp := &dto.PaymentConfig{}
-	mapping.DeepCopy(resp, method)
 	var configMap map[string]any
 	_ = json.Unmarshal([]byte(method.Config), &configMap)
-	resp.Config = configMap
-	return resp
+	return &dto.PaymentConfig{
+		Id:          method.Id,
+		Name:        method.Name,
+		Platform:    method.Platform,
+		Description: method.Description,
+		Icon:        method.Icon,
+		Domain:      method.Domain,
+		Config:      configMap,
+		FeeMode:     method.FeeMode,
+		FeePercent:  method.FeePercent,
+		FeeAmount:   method.FeeAmount,
+		Sort:        method.Sort,
+		Enable:      method.Enable,
+	}
 }

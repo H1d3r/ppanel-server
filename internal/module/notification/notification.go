@@ -49,7 +49,7 @@ type Service interface {
 	// PublishTelegramCommands registers the command menu every user sees.
 	// The bot initialiser calls it once the client is ready, so the composer
 	// offers the commands instead of leaving users to guess them.
-	PublishTelegramCommands() error
+	PublishTelegramCommands(ctx context.Context) error
 	// SetupTelegramGroup validates the configured administrators' group
 	// (forum supergroup, bot manages topics), prepares the notification
 	// topic and publishes the group-scoped administrator menu. A zero group
@@ -122,6 +122,7 @@ type Deps struct {
 	AuditLogs     AuditLogs
 }
 
+// New builds the notification module from its dependencies.
 func New(deps Deps) Service {
 	return &service{deps: deps}
 }
@@ -181,19 +182,18 @@ func (s *service) HandleTelegramUpdate(ctx context.Context, update *models.Updat
 	}).HandleUpdate(ctx, update)
 }
 
-func (s *service) PublishTelegramCommands() error {
+func (s *service) PublishTelegramCommands(ctx context.Context) error {
 	bot := s.deps.Bot()
 	if bot == nil {
 		return errors.New("telegram bot is not configured")
 	}
-	// Called once the client is ready, outside any request.
 	return telegram.NewTelegramBotCommandRegistrar(bot).
-		SetCommands(context.Background(), 0, telegram.PublicCommands())
+		SetCommands(ctx, 0, telegram.PublicCommands())
 }
 
 // topicService assembles the per-call topic layer; the bot client is read
 // per call because re-initialisation replaces it.
-func (s *service) topicService(ctx context.Context) (*telegram.TopicService, telegram.TelegramMessenger, error) {
+func (s *service) topicService() (*telegram.TopicService, telegram.TelegramMessenger, error) {
 	group := s.deps.GroupChatID()
 	if group == 0 {
 		return nil, nil, errors.New("telegram admin group is not configured")
@@ -202,7 +202,7 @@ func (s *service) topicService(ctx context.Context) (*telegram.TopicService, tel
 	if bot == nil {
 		return nil, nil, errors.New("telegram bot is not configured")
 	}
-	topics := telegram.NewTopicService(ctx, telegram.NewTelegramTopicClient(bot), s.deps.Topics, group)
+	topics := telegram.NewTopicService(telegram.NewTelegramTopicClient(bot), s.deps.Topics, group)
 	return topics, telegram.NewTelegramBotMessenger(bot), nil
 }
 
@@ -218,11 +218,11 @@ func (s *service) SetupTelegramGroup(ctx context.Context) error {
 	if err := telegram.NewTelegramTopicClient(bot).ValidateAdminGroup(ctx, group); err != nil {
 		return err
 	}
-	topics, _, err := s.topicService(ctx)
+	topics, _, err := s.topicService()
 	if err != nil {
 		return err
 	}
-	if _, _, err := topics.Ensure(telegramtopic.KindNotify, 0, telegram.NotifyTopicTitle); err != nil {
+	if _, _, err := topics.Ensure(ctx, telegramtopic.KindNotify, 0, telegram.NotifyTopicTitle); err != nil {
 		return err
 	}
 	// The menu is a convenience: the commands work without it.
@@ -235,40 +235,40 @@ func (s *service) SetupTelegramGroup(ctx context.Context) error {
 }
 
 func (s *service) NotifyAdminsTelegram(ctx context.Context, text string) error {
-	topics, messenger, err := s.topicService(ctx)
+	topics, messenger, err := s.topicService()
 	if err != nil {
 		return err
 	}
-	topic, _, err := topics.Ensure(telegramtopic.KindNotify, 0, telegram.NotifyTopicTitle)
+	topic, _, err := topics.Ensure(ctx, telegramtopic.KindNotify, 0, telegram.NotifyTopicTitle)
 	if err != nil {
 		return err
 	}
-	_, err = topics.PostMarkdown(messenger, topic, text)
+	_, err = topics.PostMarkdown(ctx, messenger, topic, text)
 	return err
 }
 
 func (s *service) NotifyTicketCreated(ctx context.Context, t *ticket.Ticket) error {
-	topics, messenger, err := s.topicService(ctx)
+	topics, messenger, err := s.topicService()
 	if err != nil {
 		return err
 	}
-	return topics.TicketCreated(messenger, t, s.userLabel(ctx, t.UserId))
+	return topics.TicketCreated(ctx, messenger, t, s.userLabel(ctx, t.UserId))
 }
 
 func (s *service) NotifyTicketReplied(ctx context.Context, ticketID int64, from, content string) error {
-	topics, messenger, err := s.topicService(ctx)
+	topics, messenger, err := s.topicService()
 	if err != nil {
 		return err
 	}
-	return topics.TicketReplied(messenger, ticketID, from, content)
+	return topics.TicketReplied(ctx, messenger, ticketID, from, content)
 }
 
 func (s *service) NotifyTicketStatusChanged(ctx context.Context, ticketID int64, status uint8) error {
-	topics, _, err := s.topicService(ctx)
+	topics, _, err := s.topicService()
 	if err != nil {
 		return err
 	}
-	return topics.TicketStatusChanged(ticketID, status)
+	return topics.TicketStatusChanged(ctx, ticketID, status)
 }
 
 // userLabel names a user for staff-facing text: the email when bound, the

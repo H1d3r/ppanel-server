@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -40,5 +41,16 @@ func TestQueryDocumentDetailReturnsHiddenDocument(t *testing.T) {
 	}
 	if got.Id != row.Id || got.Content != "unpublished" || got.Show == nil || *got.Show {
 		t.Fatalf("detail = %+v, want the hidden document", got)
+	}
+}
+
+// A missing document is not found: the admin detail used to answer an empty
+// document with id 0 for it.
+func TestQueryDocumentDetailReportsMissingDocument(t *testing.T) {
+	db := openSupportTestDB(t, &document.Document{})
+
+	_, err := NewDocumentRepo(cache.NewConn(db, nil)).QueryDocumentDetail(context.Background(), 404)
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("QueryDocumentDetail of a missing document: %v, want gorm.ErrRecordNotFound", err)
 	}
 }

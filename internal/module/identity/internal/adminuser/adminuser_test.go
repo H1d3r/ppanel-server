@@ -11,33 +11,28 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/identity/internal/identitytest"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-// wallets is the billing wallet table the admin flows read. Moving money is
-// billing's; these tests leave the wallets as they are.
+// wallets is the billing port of the admin flows: the wallet table the admin
+// views read, and a record of the money edits the flows hand to billing,
+// which moves the money in its own transaction.
 type wallets struct {
-	repository.WalletRepo
-	rows map[int64]*walletEntity.Wallet
+	rows     map[int64]*walletEntity.Wallet
+	openings []walletEntity.Wallet
+	adjusts  []walletEntity.Wallet
+	// failEdits fails the money edits.
+	failEdits error
 }
 
-func (w *wallets) FindOneForUpdate(_ context.Context, userID int64) (*walletEntity.Wallet, error) {
-	row, ok := w.rows[userID]
-	if !ok {
-		row = &walletEntity.Wallet{UserId: userID}
-		w.rows[userID] = row
-	}
-	copied := *row
-	return &copied, nil
-}
+var _ Wallets = (*wallets)(nil)
 
 func (w *wallets) FindWallet(_ context.Context, userID int64) (*walletEntity.Wallet, error) {
 	return w.rows[userID], nil
 }
 
-func (w *wallets) FindWalletsByUserIds(_ context.Context, ids []int64) (map[int64]*walletEntity.Wallet, error) {
+func (w *wallets) FindWallets(_ context.Context, ids []int64) (map[int64]*walletEntity.Wallet, error) {
 	found := make(map[int64]*walletEntity.Wallet)
 	for _, id := range ids {
 		if row, ok := w.rows[id]; ok {
@@ -47,25 +42,15 @@ func (w *wallets) FindWalletsByUserIds(_ context.Context, ids []int64) (map[int6
 	return found, nil
 }
 
-// adminStore runs identity transactions on the real store and billing ones
-// on the wallet table above, with the real audit log.
-type adminStore struct {
-	*repository.GormStore
-	wallets *wallets
+func (w *wallets) OpenWallet(_ context.Context, opening walletEntity.Wallet) error {
+	w.openings = append(w.openings, opening)
+	return w.failEdits
 }
 
-func (s adminStore) InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error {
-	return fn(billingView{wallets: s.wallets, logs: s.Log()})
+func (w *wallets) AdjustWallet(_ context.Context, target walletEntity.Wallet) error {
+	w.adjusts = append(w.adjusts, target)
+	return w.failEdits
 }
-
-type billingView struct {
-	repository.BillingStore
-	wallets *wallets
-	logs    repository.LogRepo
-}
-
-func (v billingView) Wallet() repository.WalletRepo { return v.wallets }
-func (v billingView) Log() repository.LogRepo       { return v.logs }
 
 type fixture struct {
 	*identitytest.Env
@@ -81,7 +66,7 @@ func newFixture(t *testing.T) *fixture {
 	svc := NewService(Deps{
 		Users: env.Store.User(), UserAuths: env.Store.UserAuth(), Devices: env.Store.UserDevice(),
 		Cache: env.Store.UserCache(), Logs: env.Store.Log(), Wallet: w,
-		Store: adminStore{GormStore: env.Store, wallets: w}, Redis: env.Redis,
+		Store: env.Store, Redis: env.Redis,
 	})
 	return &fixture{Env: env, svc: svc, wallets: w}
 }
@@ -131,6 +116,9 @@ func TestCreateUserStoresThePhoneNumberInE164(t *testing.T) {
 	if identities := f.Identities(t, users[0].Id); len(identities) != 2 {
 		t.Fatalf("identities = %+v, want the phone number and the email", identities)
 	}
+	if len(f.wallets.openings) != 0 {
+		t.Fatalf("wallet openings = %+v, want none for an account without money", f.wallets.openings)
+	}
 
 	list, err := f.svc.GetUserList(context.Background(), &dto.GetUserListRequest{Page: 1, Size: 10})
 	if err != nil || len(list.List) != 1 {
@@ -161,17 +149,67 @@ func TestCreateUserRefusesTakenIdentifiers(t *testing.T) {
 	}
 }
 
+// The opening money is billing's: once the identity transaction created the
+// account, billing credits the new account's wallet in its own transaction.
+// A failure there leaves the uncredited account for the administrator to
+// adjust.
+func TestCreateUserCreditsTheOpeningWalletAfterTheAccount(t *testing.T) {
+	f := newFixture(t)
+	req := &dto.CreateUserRequest{Email: "rich@example.com", Password: "password-1", Balance: 500, GiftAmount: 200, Commission: 50}
+	if err := f.svc.CreateUser(context.Background(), req); err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	users := f.Users(t)
+	if len(users) != 1 {
+		t.Fatalf("accounts = %+v", users)
+	}
+	want := walletEntity.Wallet{UserId: users[0].Id, Balance: 500, GiftAmount: 200, Commission: 50}
+	if len(f.wallets.openings) != 1 || f.wallets.openings[0] != want {
+		t.Fatalf("wallet openings = %+v, want %+v", f.wallets.openings, want)
+	}
+
+	f.wallets.failEdits = errors.New("billing unavailable")
+	req.Email = "unlucky@example.com"
+	if err := f.svc.CreateUser(context.Background(), req); !errors.Is(err, f.wallets.failEdits) {
+		t.Fatalf("CreateUser() error = %v, want the billing failure", err)
+	}
+	if n := len(f.Users(t)); n != 2 {
+		t.Fatalf("accounts = %d, want the uncredited account kept", n)
+	}
+}
+
+// errUnavailable is the failure of an identity table that cannot be read.
+var errUnavailable = errors.New("database unavailable")
+
 // failingAuths is an identity table that cannot be read.
-type failingAuths struct{ repository.UserAuthRepo }
+type failingAuths struct{}
+
+var _ UserAuths = failingAuths{}
+
+func (failingAuths) FindUserAuthMethods(context.Context, int64) ([]*user.AuthMethods, error) {
+	return nil, errUnavailable
+}
 
 func (failingAuths) FindUserAuthMethodByOpenID(context.Context, string, string) (*user.AuthMethods, error) {
-	return &user.AuthMethods{}, errors.New("database unavailable")
+	return &user.AuthMethods{}, errUnavailable
+}
+
+func (failingAuths) FindUserAuthMethodByPlatform(context.Context, int64, string) (*user.AuthMethods, error) {
+	return nil, errUnavailable
+}
+
+func (failingAuths) UpdateUserAuthMethods(context.Context, *user.AuthMethods) error {
+	return errUnavailable
+}
+
+func (failingAuths) DeleteUserAuthMethods(context.Context, int64, string) error {
+	return errUnavailable
 }
 
 // A failed duplicate check is a database error, not a free identifier.
 func TestCreateUserReportsAFailedDuplicateCheck(t *testing.T) {
 	f := newFixture(t)
-	f.svc.deps.UserAuths = failingAuths{f.Store.UserAuth()}
+	f.svc.deps.UserAuths = failingAuths{}
 	err := f.svc.CreateUser(context.Background(), &dto.CreateUserRequest{TelephoneAreaCode: "86", Telephone: "13800138000"})
 	assertCode(t, err, xerr.DatabaseQueryError)
 	if n := len(f.Users(t)); n != 0 {
@@ -185,8 +223,11 @@ func TestUpdateUserBasicInfoReportsValidationCodes(t *testing.T) {
 	f := newFixture(t)
 	target := f.account(t, "email", "owner@example.com")
 
-	err := f.svc.UpdateUserBasicInfo(context.Background(), &dto.UpdateUserBasicInfoRequest{UserId: target.Id, Avatar: "not-an-image", Enable: true})
+	err := f.svc.UpdateUserBasicInfo(context.Background(), &dto.UpdateUserBasicInfoRequest{UserId: target.Id, Avatar: "not-an-image", Enable: true, Balance: 100})
 	assertCode(t, err, xerr.InvalidParams)
+	if len(f.wallets.adjusts) != 0 {
+		t.Fatalf("wallet adjustments = %+v, want none after a rejected edit", f.wallets.adjusts)
+	}
 
 	t.Setenv("PPANEL_MODE", "demo")
 	demoAdmin := f.account(t, "email", "admin@example.com")
@@ -214,8 +255,41 @@ func TestUpdateUserBasicInfoWritesTheProfile(t *testing.T) {
 	if stored.ReferCode != "RENAMED" || !password.MultiPasswordVerify(stored.Algo, stored.Salt, "new-password", stored.Password) {
 		t.Fatalf("stored = %+v", stored)
 	}
+	// The wallet amounts of the edit go to billing, which leaves an
+	// unchanged wallet alone.
+	if want := (walletEntity.Wallet{UserId: target.Id}); len(f.wallets.adjusts) != 1 || f.wallets.adjusts[0] != want {
+		t.Fatalf("wallet adjustments = %+v, want %+v", f.wallets.adjusts, want)
+	}
 	if rows := f.Logs(t, log.TypeBalance, target.Id); len(rows) != 0 {
-		t.Fatalf("balance audits = %d, want none for an unchanged wallet", len(rows))
+		t.Fatalf("balance audits = %d, want none in identity", len(rows))
+	}
+}
+
+// The money adjustment runs after the profile committed: a failed one keeps
+// the profile edit and reports a database update failure for the
+// administrator to retry.
+func TestUpdateUserBasicInfoAdjustsTheWalletAfterTheProfile(t *testing.T) {
+	f := newFixture(t)
+	target := f.account(t, "email", "owner@example.com")
+	f.wallets.failEdits = errors.New("billing unavailable")
+
+	err := f.svc.UpdateUserBasicInfo(context.Background(), &dto.UpdateUserBasicInfoRequest{
+		UserId: target.Id, ReferCode: "RENAMED", Enable: true, Balance: 900, GiftAmount: 30, Commission: 7,
+	})
+	assertCode(t, err, xerr.DatabaseUpdateError)
+	if !errors.Is(err, f.wallets.failEdits) {
+		t.Fatalf("error = %v, want the billing failure", err)
+	}
+	want := walletEntity.Wallet{UserId: target.Id, Balance: 900, GiftAmount: 30, Commission: 7}
+	if len(f.wallets.adjusts) != 1 || f.wallets.adjusts[0] != want {
+		t.Fatalf("wallet adjustments = %+v, want %+v", f.wallets.adjusts, want)
+	}
+	var stored user.User
+	if err := f.DB.First(&stored, target.Id).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ReferCode != "RENAMED" {
+		t.Fatalf("stored = %+v, want the committed profile edit", stored)
 	}
 }
 

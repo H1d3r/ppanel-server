@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
+// AppleLoginRedirect is the redirect that answers Apple's form post.
 type AppleLoginRedirect struct {
 	StatusCode int
 	Location   string

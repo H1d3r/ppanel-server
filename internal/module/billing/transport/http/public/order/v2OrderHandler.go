@@ -2,7 +2,7 @@ package order
 
 import (
 	"context"
-	stdErrors "errors"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,21 +11,19 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/sse"
 	"github.com/perfect-panel/server/internal/module/billing"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/httpx"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/redis/go-redis/v9"
 )
 
-// EventStreamDeps contains the dependencies of the V2 SSE endpoint. The
-// stream use case lives behind the billing facade; Redis and Store are
-// deprecated and ignored, kept so existing route wiring compiles.
+// EventStreamer is the part of the billing facade the V2 SSE endpoint uses.
+type EventStreamer interface {
+	V2StreamOrderEvents(ctx context.Context, req billing.V2EventStreamRequest, sink billing.V2EventSink) error
+}
+
+// EventStreamDeps contains the dependencies of the V2 SSE endpoint; the
+// stream use case lives behind the billing facade.
 type EventStreamDeps struct {
-	Billing billing.Service
-	// Deprecated: the billing module owns the stream's Redis wake-ups.
-	Redis *redis.Client
-	// Deprecated: the billing module reads the order events itself.
-	Store Store
+	Billing EventStreamer
 }
 
 // V2CreateAndCheckoutHandler combines order creation and checkout initiation.
@@ -45,7 +43,7 @@ func V2CreateAndCheckoutHandler(service billing.Service) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		idempotencyKey := strings.TrimSpace(string(ctx.GetHeader("Idempotency-Key")))
 		if !validIdempotencyKey(idempotencyKey) {
-			httpx.ParamErrorResult(ctx, stdErrors.New("Idempotency-Key must contain 16-128 printable ASCII characters"))
+			httpx.ParamErrorResult(ctx, errors.New("Idempotency-Key must contain 16-128 printable ASCII characters"))
 			return
 		}
 		var req dto.V2CreateOrderRequest
@@ -54,7 +52,7 @@ func V2CreateAndCheckoutHandler(service billing.Service) app.HandlerFunc {
 			return
 		}
 		resp, err := service.V2CreateAndCheckout(c, &req, idempotencyKey)
-		if stdErrors.Is(err, billing.ErrIdempotencyKeyReused) {
+		if errors.Is(err, billing.ErrIdempotencyKeyReused) {
 			ctx.JSON(http.StatusConflict, httpx.Error(xerr.InvalidParams, "IDEMPOTENCY_KEY_REUSED"))
 			return
 		}
@@ -161,7 +159,7 @@ func V2OrderEventsHandler(deps EventStreamDeps) app.HandlerFunc {
 		if err == nil || sink.writer != nil {
 			return
 		}
-		if stdErrors.Is(err, billing.ErrTooManyEventStreams) {
+		if errors.Is(err, billing.ErrTooManyEventStreams) {
 			ctx.JSON(http.StatusTooManyRequests, httpx.Error(xerr.TooManyRequests, "too many concurrent SSE connections"))
 			return
 		}
@@ -221,12 +219,4 @@ func requestedEventID(ctx *app.RequestContext) int64 {
 		return 0
 	}
 	return id
-}
-
-// Store is the persistence the SSE endpoint used before the stream moved
-// behind the billing facade.
-//
-// Deprecated: nothing reads it any more.
-type Store interface {
-	OrderEvent() repository.OrderEventRepo
 }

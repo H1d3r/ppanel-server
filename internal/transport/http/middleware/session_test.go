@@ -15,7 +15,6 @@ import (
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/requestctx"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -31,7 +30,9 @@ type sessionAccounts struct {
 	missing error
 }
 
-func (a sessionAccounts) FindOne(_ context.Context, id int64) (*user.User, error) {
+var _ SessionAccounts = sessionAccounts{}
+
+func (a sessionAccounts) FindUser(_ context.Context, id int64) (*user.User, error) {
 	if a.missing != nil {
 		return nil, a.missing
 	}
@@ -153,20 +154,14 @@ func TestRequireAdminAdmitsOnlyAdministrators(t *testing.T) {
 	}
 }
 
-type storeOfAccounts struct{}
-
-func (storeOfAccounts) User() repository.UserRepo             { return nil }
-func (storeOfAccounts) UserDevice() repository.UserDeviceRepo { return nil }
-
-// The deprecated Store field still resolves accounts.
-func TestAuthDepsFallsBackToTheStore(t *testing.T) {
-	var deps AuthDeps
-	if deps.accounts() != nil {
-		t.Fatal("empty deps resolved accounts")
-	}
-	deps.Store = storeOfAccounts{}
-	if deps.accounts() == nil {
-		t.Fatal("the store fallback was ignored")
+// A live session without the account lookups wired is refused, not
+// dereferenced.
+func TestAuthenticateRequestRefusesSessionsWithoutAccountLookups(t *testing.T) {
+	deps, rds := newSessionDeps(t, sessionAccounts{})
+	deps.Accounts = nil
+	signed := sessionToken(t, rds, usersession.Grant{UserID: 7})
+	if _, err := AuthenticateRequest(context.Background(), deps, signed); xerr.CodeOf(err) != xerr.ERROR {
+		t.Fatalf("error = %v, want ERROR", err)
 	}
 }
 

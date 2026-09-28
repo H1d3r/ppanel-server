@@ -1,3 +1,7 @@
+// Package repo holds the platform module's repository implementations: the
+// system settings, cached in Redis, the system log, the task bookkeeping and
+// the event inbox and outbox. The module facade exports them through
+// NewRepoBuilder.
 package repo
 
 import (
@@ -5,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/repository/kernel"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/module/platform/entity/system"
@@ -19,7 +23,7 @@ var (
 	cacheSystemKeyPrefix = "cache:System:key:"
 )
 
-var _ repository.SystemRepo = (*systemRepo)(nil)
+var _ kernel.SystemRepo = (*systemRepo)(nil)
 
 type systemRepo struct {
 	cache.CachedConn
@@ -28,7 +32,7 @@ type systemRepo struct {
 
 // NewSystemRepo builds the module-owned implementation over the shared
 // cached connection.
-func NewSystemRepo(conn cache.CachedConn) repository.SystemRepo {
+func NewSystemRepo(conn cache.CachedConn) kernel.SystemRepo {
 	return &systemRepo{
 		CachedConn: conn,
 		table:      "System",
@@ -80,7 +84,7 @@ func systemCategoryCacheKeys(category string) []string {
 func (m *systemRepo) FindOneByKey(ctx context.Context, key string) (*system.System, error) {
 	sys := new(system.System)
 	cacheKey := fmt.Sprintf("%s%v", cacheSystemKeyPrefix, key)
-	err := m.QueryCtx(ctx, sys, cacheKey, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, sys, cacheKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&system.System{}).Scopes(systemWhereKey(key)).First(v).Error
 	})
 	return sys, err
@@ -96,15 +100,13 @@ func (m *systemRepo) Insert(ctx context.Context, data *system.System) error {
 func (m *systemRepo) FindOne(ctx context.Context, id int64) (*system.System, error) {
 	SystemIdKey := fmt.Sprintf("%s%v", cacheSystemIdPrefix, id)
 	var resp system.System
-	err := m.QueryCtx(ctx, &resp, SystemIdKey, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, &resp, SystemIdKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&system.System{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *systemRepo) Update(ctx context.Context, data *system.System) error {
@@ -234,7 +236,7 @@ func (m *systemRepo) UpdateNodeMultiplierConfig(ctx context.Context, config stri
 
 func (m *systemRepo) FindNodeMultiplierConfig(ctx context.Context) (*system.System, error) {
 	var data system.System
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Scopes(systemWhereCategoryKey("server", "NodeMultiplierConfig")).Find(v).Error
 	})
 	return &data, err
@@ -254,7 +256,7 @@ func (m *systemRepo) GetLogConfig(ctx context.Context) ([]*system.System, error)
 // cacheKey; an empty cacheKey reads the database every time.
 func (m *systemRepo) categoryConfig(ctx context.Context, category, cacheKey string) ([]*system.System, error) {
 	var configs []*system.System
-	query := func(conn *gorm.DB, v interface{}) error {
+	query := func(conn *gorm.DB, v any) error {
 		return conn.Where("category = ?", category).Find(v).Error
 	}
 	var err error

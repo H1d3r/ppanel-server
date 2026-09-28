@@ -2,7 +2,6 @@ package authn
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
@@ -52,7 +51,7 @@ func (s *Service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginReq
 		}
 		if !password.MultiPasswordVerify(userInfo.Algo, userInfo.Salt, req.Password, userInfo.Password) {
 			recordLoginFailure(ctx, s.deps.Redis, userInfo.Id)
-			return nil, fmt.Errorf("wrong password: %w", xerr.NewErrCode(xerr.UserPasswordError))
+			return nil, xerr.Errorf(xerr.UserPasswordError, "wrong password")
 		}
 		clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
 		upgradePasswordAfterLogin(ctx, s.deps.Store.User(), userInfo, req.Password)
@@ -63,5 +62,5 @@ func (s *Service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginReq
 		}
 	}
 
-	return s.signIn(ctx, userInfo.Id, req.Identifier, req.LoginType)
+	return s.signIn(ctx, userInfo.Id, req.Identifier)
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 )
 
 // Purchase creates a pending order for a new subscription. The billing
@@ -38,7 +37,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 			return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "check subscriptions of user %d", u.Id)
 		}
 		if blocking {
-			return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.UserSubscribeExist), "user has subscription")
+			return nil, xerr.Errorf(xerr.UserSubscribeExist, "user has subscription")
 		}
 	}
 	plan, err := s.deps.Plans.FindOne(ctx, req.SubscribeId)
@@ -49,7 +48,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 		return nil, err
 	}
 	if plan.Inventory == 0 {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
+		return nil, xerr.Errorf(xerr.SubscribeOutOfStock, "subscribe out of stock")
 	}
 	if err := s.ensureQuota(ctx, u.Id, plan); err != nil {
 		return nil, err
@@ -60,7 +59,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 	}
 	if terms.Method == nil {
 		// A purchase is always paid with a method; zero names none.
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method is required")
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "payment method is required")
 	}
 	if err := ensureCouponUserLimit(ctx, s.deps.Orders, u.Id, terms.Coupon); err != nil {
 		return nil, err
@@ -125,7 +124,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PurchaseOrderRequest) (
 			logger.WithContext(ctx).Errorw("[Purchase] Close order after reservation failure failed", logger.Field("error", closeErr.Error()), logger.Field("orderNo", orderInfo.OrderNo))
 		}
 		if errors.Is(err, subscription.ErrOutOfStock) {
-			return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
+			return nil, xerr.Errorf(xerr.SubscribeOutOfStock, "subscribe out of stock")
 		}
 		return nil, xerr.Wrapf(err, xerr.ERROR, "reserve inventory")
 	}
@@ -143,7 +142,7 @@ func (s *Service) ensureQuota(ctx context.Context, userID int64, plan *subscribe
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "count subscriptions of user %d", userID)
 	}
 	if count >= plan.Quota {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.SubscribeQuotaLimit), "quota limit")
+		return xerr.Errorf(xerr.SubscribeQuotaLimit, "quota limit")
 	}
 	return nil
 }

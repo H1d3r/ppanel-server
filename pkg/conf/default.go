@@ -5,8 +5,9 @@ import (
 	"reflect"
 )
 
+// setDefaults sets each zero field of *v, nested structs included, to the
+// value of its `default` tag.
 func setDefaults(v any) {
-	//  Get the element of the pointer
 	val := reflect.ValueOf(v).Elem()
 	setDefaultsRecursive(val)
 }

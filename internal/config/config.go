@@ -1,3 +1,10 @@
+// Package config defines the server's configuration: Config, whose boot half
+// is read from the configuration file at start-up and whose runtime half
+// administrators edit in the system settings table; the decoding of stored
+// settings into those structs; the Redis keys several modules share; and the
+// Redis helpers of start-up and installation. The composition root, the
+// transports and the modules all read these definitions, so a setting has one
+// name and one default everywhere.
 package config
 
 import (
@@ -8,7 +15,19 @@ import (
 	"github.com/perfect-panel/server/pkg/trace"
 )
 
+// Config is the server's whole configuration: the boot settings, read from
+// the configuration file once at startup, and the runtime settings, which
+// the system settings table overrides at startup and whenever an
+// administrator changes them. The two halves are embedded, so their fields
+// read as the Config's own; in the file they share one level.
 type Config struct {
+	Boot    `yaml:",inline"`
+	Runtime `yaml:",inline"`
+}
+
+// Boot is the configuration fixed for the life of the process: the listener,
+// the connections and the secrets. Changing it takes a restart.
+type Boot struct {
 	Model         string              `yaml:"Model" default:"prod"`
 	Host          string              `yaml:"Host" default:"0.0.0.0"`
 	Port          int                 `yaml:"Port" default:"8080"`
@@ -22,26 +41,32 @@ type Config struct {
 	Database      orm.Config          `yaml:"Database"`
 	MySQL         *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
 	Redis         RedisConfig         `yaml:"Redis"`
-	Site          SiteConfig          `yaml:"Site"`
-	Node          NodeConfig          `yaml:"Node"`
-	Mobile        MobileConfig        `yaml:"Mobile"`
-	Email         EmailConfig         `yaml:"Email"`
-	Device        DeviceConfig        `yaml:"device"`
-	Verify        Verify              `yaml:"Verify"`
-	VerifyCode    VerifyCode          `yaml:"VerifyCode"`
-	Register      RegisterConfig      `yaml:"Register"`
-	Subscribe     SubscribeConfig     `yaml:"Subscribe"`
 	EdgeSubscribe EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
-	Invite        InviteConfig        `yaml:"Invite"`
-	Telegram      Telegram            `yaml:"Telegram"`
-	Log           Log                 `yaml:"Log"`
-	Currency      Currency            `yaml:"Currency"`
 	Administrator struct {
 		Email string `yaml:"Email" default:"admin@ppanel.dev"`
 		// Password seeds the first administrator. Left empty, a random one is
 		// generated and printed once at the first start.
 		Password string `yaml:"Password"`
 	} `yaml:"Administrator"`
+}
+
+// Runtime is the configuration an administrator edits while the server runs.
+// The runtime state publishes it as immutable snapshots; a reload replaces a
+// section from the system settings table.
+type Runtime struct {
+	Site       SiteConfig      `yaml:"Site"`
+	Node       NodeConfig      `yaml:"Node"`
+	Mobile     MobileConfig    `yaml:"Mobile"`
+	Email      EmailConfig     `yaml:"Email"`
+	Device     DeviceConfig    `yaml:"device"`
+	Verify     Verify          `yaml:"Verify"`
+	VerifyCode VerifyCode      `yaml:"VerifyCode"`
+	Register   RegisterConfig  `yaml:"Register"`
+	Subscribe  SubscribeConfig `yaml:"Subscribe"`
+	Invite     InviteConfig    `yaml:"Invite"`
+	Telegram   Telegram        `yaml:"Telegram"`
+	Log        Log             `yaml:"Log"`
+	Currency   Currency        `yaml:"Currency"`
 }
 
 type RedisConfig struct {
@@ -119,9 +144,10 @@ type EmailConfig struct {
 	ExpirationEmailTemplate    string `yaml:"expiration_email_template"`
 	MaintenanceEmailTemplate   string `yaml:"maintenance_email_template"`
 	TrafficExceedEmailTemplate string `yaml:"traffic_exceed_email_template"`
-	// Subjects pair with the templates above and hydrate from the email auth
-	// config by field name (tool.DeepCopy); empty means the queued fallback
-	// subject is used.
+	// Subjects pair with the templates above. They are copied from the email
+	// auth method config by field name (internal/infra/mapping), so the
+	// fields must keep the names they have there; empty means the queued
+	// fallback subject is used.
 	VerifyEmailSubject        string `yaml:"verify_email_subject"`
 	ExpirationEmailSubject    string `yaml:"expiration_email_subject"`
 	MaintenanceEmailSubject   string `yaml:"maintenance_email_subject"`
@@ -277,6 +303,9 @@ type File struct {
 	MySQL         *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
 	Redis         RedisConfig         `yaml:"Redis"`
 	EdgeSubscribe EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
+	// AppLocation survives the installation's rewrite of the file: the new
+	// database's session zone is set from it.
+	AppLocation string `yaml:"AppLocation" default:"Asia/Shanghai"`
 }
 
 func (c Config) DatabaseConfig() orm.Config {

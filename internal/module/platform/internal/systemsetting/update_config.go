@@ -5,7 +5,6 @@ import (
 	"reflect"
 
 	"github.com/perfect-panel/server/internal/config"
-	"github.com/perfect-panel/server/internal/repository"
 )
 
 type configFieldValue struct {
@@ -40,7 +39,7 @@ func configFields(data any, valueFn func(reflect.Value) string) []configFieldVal
 }
 
 func configFieldType(value reflect.Value) string {
-	if value.Kind() == reflect.Ptr {
+	if value.Kind() == reflect.Pointer {
 		value = reflect.New(value.Type().Elem()).Elem()
 	}
 	switch value.Kind() {
@@ -55,11 +54,12 @@ func configFieldType(value reflect.Value) string {
 	}
 }
 
+// updateConfigFields stores the fields of one settings category in a single
+// transaction.
 func updateConfigFields(ctx context.Context, deps Deps, category string, fields []configFieldValue) error {
-	return deps.Store.InPlatformTx(ctx, func(store repository.PlatformStore) error {
-		systemStore := store.System()
+	return deps.Store.InSettingsTx(ctx, func(settings SettingsWriter) error {
 		for _, field := range fields {
-			if err := systemStore.UpdateValueByCategoryKey(ctx, category, field.key, field.value, field.valueType); err != nil {
+			if err := settings.UpdateValueByCategoryKey(ctx, category, field.key, field.value, field.valueType); err != nil {
 				return err
 			}
 		}

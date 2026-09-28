@@ -11,23 +11,22 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestNotifyURLPrefersConfiguredHosts(t *testing.T) {
+func TestNotifyURLPrefersThePaymentDomain(t *testing.T) {
 	tests := []struct {
-		name   string
-		domain string
-		hosts  NotifyHosts
-		want   string
+		name     string
+		domain   string
+		siteHost string
+		want     string
 	}{
-		{"payment domain wins", "https://pay.example.test/", NotifyHosts{Host: "panel.example.test", SiteHost: "www.example.test"}, "https://pay.example.test"},
-		{"configured base path", "https://pay.example.test/custom/", NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/custom"},
-		{"config host fallback", "", NotifyHosts{Host: "panel.example.test/"}, "https://panel.example.test"},
-		{"config host with scheme and port", "", NotifyHosts{Host: "http://panel.example.test:8080"}, "http://panel.example.test:8080"},
-		{"bind address falls back to site host", "", NotifyHosts{Host: "0.0.0.0", SiteHost: "https://www.example.test/"}, "https://www.example.test"},
-		{"bare site host", "", NotifyHosts{SiteHost: "www.example.test"}, "https://www.example.test"},
+		{"payment domain wins", "https://pay.example.test/", "www.example.test", "https://pay.example.test"},
+		{"configured base path", "https://pay.example.test/custom/", "", "https://pay.example.test/custom"},
+		{"site host fallback", "", "www.example.test/", "https://www.example.test"},
+		{"site host with scheme and port", "", "http://panel.example.test:8080", "http://panel.example.test:8080"},
+		{"first of several site hosts", "", "https://www.example.test/\nwww.example.org", "https://www.example.test"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NotifyURL(&payment.Payment{Domain: tt.domain, Platform: "EPay", Token: "tok"}, tt.hosts)
+			got, err := NotifyURL(&payment.Payment{Domain: tt.domain, Platform: "EPay", Token: "tok"}, tt.siteHost)
 			if err != nil {
 				t.Fatalf("NotifyURL error = %v", err)
 			}
@@ -38,12 +37,13 @@ func TestNotifyURLPrefersConfiguredHosts(t *testing.T) {
 	}
 }
 
-// Without a payment domain or a reachable configured host there is no
-// trustworthy callback address; nothing request-derived may fill the gap.
+// Without a payment domain or a reachable site host there is no trustworthy
+// callback address; neither a listen address nor anything request-derived may
+// fill the gap.
 func TestNotifyURLFailsWithoutConfiguredHost(t *testing.T) {
 	for _, host := range []string{"", "0.0.0.0", "[::]:8080", "127.0.0.1:8080", "localhost", "ftp://panel.example.test", "https://user@panel.example.test", "https://panel.example.test/?x=1"} {
 		t.Run(host, func(t *testing.T) {
-			got, err := NotifyURL(&payment.Payment{Id: 3, Platform: "EPay", Token: "tok"}, NotifyHosts{Host: host})
+			got, err := NotifyURL(&payment.Payment{Id: 3, Platform: "EPay", Token: "tok"}, host)
 			if xerr.CodeOf(err) != xerr.PaymentNotifyURLNotConfigured || got != "" {
 				t.Fatalf("NotifyURL = (%q, %v), want PaymentNotifyURLNotConfigured", got, err)
 			}

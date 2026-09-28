@@ -2,6 +2,7 @@ package adminserver
 
 import (
 	"context"
+	"fmt"
 
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
@@ -9,51 +10,38 @@ import (
 	"github.com/perfect-panel/server/internal/module/network/internal/protocolmap"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type UpdateServerLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewUpdateServerLogic Update Server
-func newUpdateServerLogic(ctx context.Context, deps Deps) *UpdateServerLogic {
-	return &UpdateServerLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
-	nodeStore := l.deps.Store.Node()
-	data, err := nodeStore.FindOneServer(l.ctx, req.Id)
+// UpdateServer stores a server's settings and protocols and drops its
+// node-facing caches. A protocol keeps the stored values of the fields the
+// request left out, and its stored keys unless new ones are given.
+func (s *Service) UpdateServer(ctx context.Context, req *dto.UpdateServerRequest) error {
+	log := logger.WithContext(ctx)
+	nodeStore := s.deps.Store.Node()
+	data, err := nodeStore.FindOneServer(ctx, req.Id)
 	if err != nil {
-		l.Errorf("[UpdateServer] FindOneServer Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find server error: %v", err.Error())
+		log.Errorf("[UpdateServer] FindOneServer Error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find server error: %v", err.Error())
 	}
 	data.Name = req.Name
 	data.Country = req.Country
 	data.City = req.City
-	// only update address when it's  different
 	if req.Address != data.Address {
-		// query server ip location
-		result, err := geolocation.GetRegionByIp(req.Address)
+		// A new address is located again: the lookup's country and city
+		// replace the submitted ones unless it fails.
+		result, err := geolocation.GetRegionByIp(ctx, req.Address)
 		if err != nil {
-			l.Errorf("[UpdateServer] GetRegionByIp Error: %v", err.Error())
+			log.Errorf("[UpdateServer] GetRegionByIp Error: %v", err.Error())
 		} else {
 			data.City = result.City
 			data.Country = result.Country
 		}
-		// update address
 		data.Address = req.Address
 	}
 	existingProtocols, err := data.UnmarshalProtocols()
 	if err != nil {
-		l.Errorf("[UpdateServer] Unmarshal Protocols Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols unmarshal error"), "protocols unmarshal error: %v", err)
+		log.Errorf("[UpdateServer] Unmarshal Protocols Error: %v", err.Error())
+		return fmt.Errorf("protocols unmarshal error: %w: %w", err, xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols unmarshal error"))
 	}
 	existingKeys := protocolKeyLookup(existingProtocols)
 	existingServerKeys := serverKeyLookup(existingProtocols)
@@ -62,7 +50,7 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 	protocols := make([]node.Protocol, 0)
 	for index, item := range req.Protocols {
 		if item.Type == "" {
-			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols type is empty"), "protocols type is empty")
+			return fmt.Errorf("protocols type is empty: %w", xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols type is empty"))
 		}
 		protocol, err := protocolmap.FromDTO(item)
 		if err != nil {
@@ -71,33 +59,31 @@ func (l *UpdateServerLogic) UpdateServer(req *dto.UpdateServerRequest) error {
 		if existing, ok := existingProtocolLookup[normalizedProtocolType(item.Type)]; ok {
 			protocol, err = mergeMissingProtocolFields(protocol, existing, protocolFieldSetAt(req.ProtocolFieldSets, index))
 			if err != nil {
-				return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols merge error"), "protocols merge error: %v", err)
+				return fmt.Errorf("protocols merge error: %w: %w", err, xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols merge error"))
 			}
 		}
 		ensureGeneratedProtocolKey(&protocol, existingKeys)
 		ensureShadowsocks2022ServerKey(&protocol, existingServerKeys)
 		if err := ensureRealityProtocolKey(&protocol, existingRealityKeys); err != nil {
-			l.Errorf("[UpdateServer] Generate Reality Key Error: %v", err.Error())
-			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "generate reality key error: %v", err)
+			log.Errorf("[UpdateServer] Generate Reality Key Error: %v", err.Error())
+			return xerr.Wrapf(err, xerr.ERROR, "generate reality key error: %v", err)
 		}
 		ensureRealityProtocolDefaults(&protocol)
 		protocol, err = node.NormalizeProtocolForStorage(protocol)
 		if err != nil {
-			return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, err.Error()), "protocols normalize error: %v", err)
+			return fmt.Errorf("protocols normalize error: %w: %w", err, xerr.NewErrCodeMsg(xerr.InvalidParams, err.Error()))
 		}
 		protocols = append(protocols, protocol)
 	}
-	err = data.MarshalProtocols(protocols)
-	if err != nil {
-		l.Errorf("[UpdateServer] Marshal Protocols Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols marshal error"), "protocols marshal error: %v", err)
+	if err := data.MarshalProtocols(protocols); err != nil {
+		log.Errorf("[UpdateServer] Marshal Protocols Error: %v", err.Error())
+		return fmt.Errorf("protocols marshal error: %w: %w", err, xerr.NewErrCodeMsg(xerr.InvalidParams, "protocols marshal error"))
 	}
 
-	err = nodeStore.UpdateServer(l.ctx, data)
-	if err != nil {
-		l.Errorf("[UpdateServer] UpdateServer Error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "update server error: %v", err.Error())
+	if err := nodeStore.UpdateServer(ctx, data); err != nil {
+		log.Errorf("[UpdateServer] UpdateServer Error: %v", err.Error())
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update server error: %v", err.Error())
 	}
 
-	return nodeStore.ClearServerCache(l.ctx, req.Id)
+	return nodeStore.ClearServerCache(ctx, req.Id)
 }

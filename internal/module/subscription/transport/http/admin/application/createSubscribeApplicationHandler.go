@@ -1,3 +1,5 @@
+// Package application holds the admin HTTP handlers for the client
+// applications of subscription delivery and their template previews.
 package application
 
 import (

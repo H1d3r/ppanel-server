@@ -6,7 +6,6 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
-	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 )
 
 // The admin list shows the callback URL checkout actually gives the
@@ -17,16 +16,15 @@ func TestListPaymentNotifyURLs(t *testing.T) {
 		name     string
 		platform string
 		domain   string
-		hosts    gateway.NotifyHosts
+		siteHost string
 		want     string
 	}{
-		{"stripe domain", "Stripe", "https://pay.example.test/", gateway.NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/v1/notify/Stripe/test-token"},
-		{"cryptomus domain", "Cryptomus", "https://pay.example.test", gateway.NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/v1/notify/Cryptomus/test-token"},
-		{"configured base path", "EPay", "https://pay.example.test/custom/", gateway.NotifyHosts{Host: "panel.example.test"}, "https://pay.example.test/custom/v1/notify/EPay/test-token"},
-		{"host fallback", "EPay", "", gateway.NotifyHosts{Host: "panel.example.test/"}, "https://panel.example.test/v1/notify/EPay/test-token"},
-		{"listen address falls back to site host", "AlipayF2F", "", gateway.NotifyHosts{Host: "0.0.0.0", SiteHost: "www.example.test"}, "https://www.example.test/v1/notify/AlipayF2F/test-token"},
-		{"not configured", "EPay", "", gateway.NotifyHosts{Host: "0.0.0.0"}, ""},
-		{"balance has no callback", "balance", "https://pay.example.test", gateway.NotifyHosts{Host: "panel.example.test"}, ""},
+		{"stripe domain", "Stripe", "https://pay.example.test/", "panel.example.test", "https://pay.example.test/v1/notify/Stripe/test-token"},
+		{"cryptomus domain", "Cryptomus", "https://pay.example.test", "panel.example.test", "https://pay.example.test/v1/notify/Cryptomus/test-token"},
+		{"configured base path", "EPay", "https://pay.example.test/custom/", "panel.example.test", "https://pay.example.test/custom/v1/notify/EPay/test-token"},
+		{"site host fallback", "AlipayF2F", "", "www.example.test/", "https://www.example.test/v1/notify/AlipayF2F/test-token"},
+		{"not configured", "EPay", "", "", ""},
+		{"balance has no callback", "balance", "https://pay.example.test", "panel.example.test", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -34,8 +32,8 @@ func TestListPaymentNotifyURLs(t *testing.T) {
 			repo := newMemoryPayments(&payment.Payment{
 				Id: 1, Platform: tt.platform, Domain: tt.domain, Token: "test-token", Enable: &enabled,
 			})
-			hosts := tt.hosts
-			svc := NewService(Deps{Payments: repo, NotifyHosts: func() gateway.NotifyHosts { return hosts }})
+			siteHost := tt.siteHost
+			svc := NewService(Deps{Payments: repo, SiteHost: func() string { return siteHost }})
 			resp, err := svc.List(context.Background(), &dto.GetPaymentMethodListRequest{Page: 1, Size: 10})
 			if err != nil {
 				t.Fatal(err)

@@ -19,6 +19,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// The built-in sign-in methods; every other method is an OAuth provider
+// configured in the auth_method table.
 const (
 	MethodEmail  = identifier.Email
 	MethodMobile = identifier.Mobile
@@ -93,6 +95,8 @@ type ServicePolicy struct {
 
 var _ Policy = ServicePolicy{}
 
+// New builds the policy; without a VerifyTurnstile override it asks
+// Cloudflare.
 func New(deps Deps) ServicePolicy {
 	if deps.VerifyTurnstile == nil {
 		deps.VerifyTurnstile = verifyTurnstile
@@ -130,13 +134,13 @@ func (p ServicePolicy) EnsureMethodEnabled(ctx context.Context, method string) e
 			return nil
 		}
 	}
-	return fmt.Errorf("auth method %q is disabled: %w", method, xerr.NewErrCode(xerr.GetAuthenticatorError))
+	return xerr.Errorf(xerr.GetAuthenticatorError, "auth method %q is disabled", method)
 }
 
 // EnsureRegistrationOpen applies policies shared by every new-account path.
 func (p ServicePolicy) EnsureRegistrationOpen(ctx context.Context, method string) error {
 	if p.deps.Config().StopRegister {
-		return fmt.Errorf("registration is disabled: %w", xerr.NewErrCode(xerr.StopRegister))
+		return xerr.Errorf(xerr.StopRegister, "registration is disabled")
 	}
 	return p.EnsureMethodEnabled(ctx, method)
 }
@@ -162,7 +166,8 @@ func (p ServicePolicy) VerifyHuman(ctx context.Context, purpose Purpose, token s
 	meta, _ := requestmeta.From(ctx)
 	ok, err := p.deps.VerifyTurnstile(ctx, cfg.TurnstileSecret, token, meta.ClientIP)
 	if err != nil {
-		return fmt.Errorf("human verification failed: %v: %w", err, refused)
+		// The refusal comes first, so its code is the one the client gets.
+		return fmt.Errorf("human verification failed: %w: %w", refused, err)
 	}
 	if !ok {
 		return fmt.Errorf("human verification failed: %w", refused)
@@ -178,17 +183,17 @@ func (p ServicePolicy) TakeIPPermit(ctx context.Context) error {
 		return nil
 	}
 	if p.deps.Redis == nil || cfg.IpRegisterLimit <= 0 || cfg.IpRegisterLimitDuration <= 0 {
-		return fmt.Errorf("invalid IP registration limit configuration: %w", xerr.NewErrCode(xerr.ERROR))
+		return xerr.Errorf(xerr.ERROR, "invalid IP registration limit configuration")
 	}
 	meta, _ := requestmeta.From(ctx)
 	parsedIP := net.ParseIP(strings.TrimSpace(meta.ClientIP))
 	if parsedIP == nil {
-		return fmt.Errorf("invalid client IP: %w", xerr.NewErrCode(xerr.InvalidParams))
+		return xerr.Errorf(xerr.InvalidParams, "invalid client IP")
 	}
 
 	maxInt := int64(^uint(0) >> 1)
 	if cfg.IpRegisterLimit > maxInt || cfg.IpRegisterLimitDuration > maxInt/60 {
-		return fmt.Errorf("IP registration limit configuration is too large: %w", xerr.NewErrCode(xerr.ERROR))
+		return xerr.Errorf(xerr.ERROR, "IP registration limit configuration is too large")
 	}
 	limiter := ratelimit.NewPeriodLimit(
 		int(cfg.IpRegisterLimitDuration*60),
@@ -196,12 +201,12 @@ func (p ServicePolicy) TakeIPPermit(ctx context.Context) error {
 		p.deps.Redis,
 		config.RegisterIPLimitKeyPrefix,
 	)
-	permit, err := limiter.TakeCtx(ctx, parsedIP.String())
+	permit, err := limiter.Take(ctx, parsedIP.String())
 	if err != nil {
 		return xerr.Wrapf(err, xerr.ERROR, "check IP registration limit")
 	}
 	if !limiter.ParsePermitState(permit) {
-		return fmt.Errorf("registration limit exceeded for IP %s: %w", parsedIP.String(), xerr.NewErrCode(xerr.TooManyRequests))
+		return xerr.Errorf(xerr.TooManyRequests, "registration limit exceeded for IP %s", parsedIP.String())
 	}
 	return nil
 }

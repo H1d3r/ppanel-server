@@ -3,6 +3,7 @@ package serverapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"uuid"
@@ -43,17 +44,22 @@ func TestCachedPlaceholderKeepsUUIDAndETag(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := &dto.GetServerUserListRequest{ServerId: 1, Protocol: "vless"}
-	server.Set(fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, req.ServerId, req.Protocol), string(payload))
+	if err := server.Set(fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, req.ServerId, req.Protocol), string(payload)); err != nil {
+		t.Fatal(err)
+	}
 	// No repositories are provided: a cache hit must not rebuild the list.
+	service := NewService(Deps{Redis: client})
+	etag := httpx.GenerateETag(payload)
 	for range 2 {
-		logic := newGetServerUserListLogic(context.Background(), Deps{Redis: client}, RequestMeta{})
-		resp, err := logic.GetServerUserList(req)
+		resp, meta, err := service.GetServerUserList(context.Background(), req, RequestMeta{})
 		if err != nil || len(resp.Users) != 1 || resp.Users[0].UUID != placeholder.UUID {
 			t.Fatalf("cached user list changed: %+v, %v", resp, err)
 		}
+		if meta.Headers["ETag"] != etag {
+			t.Fatalf("cached user list ETag = %q, want %q", meta.Headers["ETag"], etag)
+		}
 	}
-	logic := newGetServerUserListLogic(context.Background(), Deps{Redis: client}, RequestMeta{IfNoneMatch: httpx.GenerateETag(payload)})
-	if resp, err := logic.GetServerUserList(req); resp != nil || err != xerr.StatusNotModified {
+	if resp, _, err := service.GetServerUserList(context.Background(), req, RequestMeta{IfNoneMatch: etag}); resp != nil || !errors.Is(err, xerr.ErrNotModified) {
 		t.Fatalf("cached ETag no longer returns not-modified: %+v, %v", resp, err)
 	}
 }

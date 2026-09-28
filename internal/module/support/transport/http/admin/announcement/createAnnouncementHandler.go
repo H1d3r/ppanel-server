@@ -1,3 +1,5 @@
+// Package announcement holds the Hertz handlers of the admin announcement
+// management.
 package announcement
 
 import (

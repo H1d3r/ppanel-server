@@ -8,7 +8,6 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 func TestBuildHTTPResultSuccess(t *testing.T) {
@@ -35,7 +34,7 @@ func TestBuildHTTPResultSuccess(t *testing.T) {
 }
 
 func TestBuildHTTPResultCodeError(t *testing.T) {
-	err := errors.Wrap(xerr.NewErrCode(xerr.InvalidParams), "wrapped")
+	err := xerr.Errorf(xerr.InvalidParams, "wrapped")
 
 	result := BuildHTTPResult(nil, err)
 

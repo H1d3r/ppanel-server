@@ -48,7 +48,7 @@ func (m *orderRepo) OrderUserCountsByBucket(ctx context.Context, isNew bool, sin
 		Users int64
 	}
 	var rows []row
-	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &rows, func(conn *gorm.DB, v any) error {
 		dateExpr := orm.DateBucketExpr(conn, "created_at", bucket)
 		q := conn.Model(&order.Order{}).
 			Select(fmt.Sprintf("%s AS date, COUNT(DISTINCT user_id) AS users", dateExpr)).
@@ -98,33 +98,29 @@ func (m *orderRepo) Insert(ctx context.Context, data *order.Order) error {
 
 func (m *orderRepo) FindOne(ctx context.Context, id int64) (*order.Order, error) {
 	var resp order.Order
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *orderRepo) FindOneByOrderNo(ctx context.Context, orderNo string) (*order.Order, error) {
 	var resp order.Order
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *orderRepo) FindOneByIdempotencyKey(ctx context.Context, key string) (*order.Order, error) {
 	var resp order.Order
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).Where("idempotency_key = ?", key).First(&resp).Error
 	})
 	if err != nil {
@@ -135,18 +131,16 @@ func (m *orderRepo) FindOneByIdempotencyKey(ctx context.Context, key string) (*o
 
 func (m *orderRepo) FindOneByOrderNoForUpdate(ctx context.Context, orderNo string) (*order.Order, error) {
 	var resp order.Order
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Model(&order.Order{}).
 			Where("order_no = ?", orderNo).
 			First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *orderRepo) Update(ctx context.Context, data *order.Order) error {
@@ -192,7 +186,7 @@ func (m *orderRepo) Delete(ctx context.Context, id int64) error {
 
 func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coupon string) (int64, error) {
 	var count int64
-	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
 			Where("user_id = ? AND coupon = ? AND status IN ?", userID, coupon, statusList(order.CouponUseStatuses())).
 			Count(&count).Error
@@ -204,7 +198,7 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 // before its account exists; guest orders carry no user until activation.
 func (m *orderRepo) CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error) {
 	var count int64
-	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
 			Where("user_id = ? AND status = ? AND guest_auth_type = ? AND guest_identifier = ?", 0, order.StatusPending, authType, identifier).
 			Count(&count).Error
@@ -212,12 +206,13 @@ func (m *orderRepo) CountPendingGuestOrders(ctx context.Context, authType, ident
 	return count, err
 }
 
-// QueryOrderListByPage Query order list by page
+// QueryOrderListByPage pages the orders matching the filters, newest first,
+// with their payment methods.
 func (m *orderRepo) QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error) {
 	var list []*order.Details
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		conn = conn.Model(&order.Order{})
 		conn = applyOrderListFilters(conn, status, user, subscribe, search)
 		if err := conn.Count(&total).Error; err != nil {
@@ -366,7 +361,7 @@ func (m *orderRepo) SetCommission(ctx context.Context, orderNo string, amount in
 
 func (m *orderRepo) HasCommissionedOrder(ctx context.Context, userID int64, exceptOrderNo string) (bool, error) {
 	var count int64
-	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
 			Where("user_id = ? AND commission > 0 AND order_no <> ?", userID, exceptOrderNo).
 			Count(&count).Error
@@ -376,7 +371,7 @@ func (m *orderRepo) HasCommissionedOrder(ctx context.Context, userID int64, exce
 
 func (m *orderRepo) CountPendingByPaymentID(ctx context.Context, paymentID int64) (int64, error) {
 	var count int64
-	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, value interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, value any) error {
 		return conn.Model(&order.Order{}).
 			Where("payment_id = ? AND status = ?", paymentID, order.StatusPending).
 			Count(&count).Error
@@ -424,7 +419,7 @@ func (m *orderRepo) QueryOrdersByStatusAfterID(ctx context.Context, status uint8
 		limit = 1000
 	}
 	var orders []*order.Order
-	err := m.QueryNoCacheCtx(ctx, &orders, func(conn *gorm.DB, value interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &orders, func(conn *gorm.DB, value any) error {
 		return conn.Model(&order.Order{}).
 			Where("status = ? AND id > ?", status, afterID).
 			Order("id ASC").
@@ -434,10 +429,10 @@ func (m *orderRepo) QueryOrdersByStatusAfterID(ctx context.Context, status uint8
 	return orders, err
 }
 
-// FindOneDetailsByOrderNo Find order details by order number
+// FindOneDetailsByOrderNo reads an order with its payment method.
 func (m *orderRepo) FindOneDetailsByOrderNo(ctx context.Context, orderNo string) (*order.Details, error) {
 	var orderInfo order.Details
-	err := m.QueryNoCacheCtx(ctx, &orderInfo, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &orderInfo, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).Preload("Payment").First(v).Error
 	})
 	return &orderInfo, err
@@ -445,7 +440,7 @@ func (m *orderRepo) FindOneDetailsByOrderNo(ctx context.Context, orderNo string)
 
 func (m *orderRepo) FindOneDetails(ctx context.Context, id int64) (*order.Details, error) {
 	var orderInfo order.Details
-	err := m.QueryNoCacheCtx(ctx, &orderInfo, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &orderInfo, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
 			Where("id = ?", id).
 			Preload("SubOrders").
@@ -458,7 +453,7 @@ func (m *orderRepo) QueryMonthlyOrders(ctx context.Context, date time.Time) (ord
 	firstDay := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
 	lastDay := firstDay.AddDate(0, 1, 0).Add(-time.Nanosecond)
 	var result order.OrdersTotal
-	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
 			Where("status IN ? AND created_at BETWEEN ? AND ? AND method != ?", settledStatuses(), firstDay, lastDay, "balance").
 			Select(
@@ -480,12 +475,13 @@ func appDayStart(date time.Time) time.Time {
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 }
 
-// QueryDateOrders Query orders by date
+// QueryDateOrders totals the settled gateway orders of date's day in the
+// application timezone.
 func (m *orderRepo) QueryDateOrders(ctx context.Context, date time.Time) (order.OrdersTotal, error) {
 	start := appDayStart(date)
 	end := start.AddDate(0, 0, 1)
 	var result order.OrdersTotal
-	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
 			Where("status IN ? AND created_at >= ? AND created_at < ? AND method != ?", settledStatuses(), start, end, "balance").
 			Select(
@@ -508,7 +504,7 @@ func (m *orderRepo) QueryDailyReport(ctx context.Context, date time.Time) (*orde
 	settled := settledStatuses()
 
 	report := &order.DailyReport{Date: start}
-	err := m.QueryNoCacheCtx(ctx, report, func(conn *gorm.DB, _ interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, report, func(conn *gorm.DB, _ any) error {
 		var totals struct {
 			Orders int64
 			Amount int64
@@ -547,7 +543,7 @@ func (m *orderRepo) QueryDailyReport(ctx context.Context, date time.Time) (*orde
 func (m *orderRepo) QueryTotalOrders(ctx context.Context) (order.OrdersTotal, error) {
 	var result order.OrdersTotal
 
-	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, _ interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, _ any) error {
 		return conn.Model(&order.Order{}).
 			Select(`
 				SUM(amount) AS amount_total,
@@ -567,7 +563,7 @@ func (m *orderRepo) QueryMonthlyUserCounts(ctx context.Context, date time.Time) 
 
 	var counts order.UserCounts
 
-	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ any) error {
 		return conn.Model(&order.Order{}).
 			Select(`
 				COUNT(DISTINCT CASE WHEN is_new THEN user_id END) AS new_users,
@@ -587,7 +583,7 @@ func (m *orderRepo) QueryDateUserCounts(ctx context.Context, date time.Time) (in
 
 	var counts order.UserCounts
 
-	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ any) error {
 		return conn.Model(&order.Order{}).
 			Select(`
 				COUNT(DISTINCT CASE WHEN is_new THEN user_id END) AS new_users,
@@ -604,7 +600,7 @@ func (m *orderRepo) QueryDateUserCounts(ctx context.Context, date time.Time) (in
 func (m *orderRepo) QueryTotalUserCounts(ctx context.Context) (int64, int64, error) {
 	var counts order.UserCounts
 
-	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ any) error {
 		return conn.Model(&order.Order{}).
 			Where("status IN ? AND method != ?", settledStatuses(), "balance").
 			Select(`
@@ -619,7 +615,7 @@ func (m *orderRepo) QueryTotalUserCounts(ctx context.Context) (int64, int64, err
 
 func (m *orderRepo) IsUserEligibleForNewOrder(ctx context.Context, userID int64) (bool, error) {
 	var count int64
-	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, nil, func(conn *gorm.DB, _ any) error {
 		return conn.Model(&order.Order{}).
 			Where("user_id = ? AND status IN ?", userID, settledStatuses()).
 			Count(&count).Error
@@ -627,11 +623,12 @@ func (m *orderRepo) IsUserEligibleForNewOrder(ctx context.Context, userID int64)
 	return count == 0, err
 }
 
-// QueryDailyOrdersList 查询当月每日订单统计
+// QueryDailyOrdersList totals the settled gateway orders of each day of
+// date's month up to and including date's day, in the application timezone.
 func (m *orderRepo) QueryDailyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error) {
 	var results []order.OrdersTotalWithDate
 
-	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v any) error {
 		today := appDayStart(date)
 		firstDay := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, today.Location())
 		nextDay := today.AddDate(0, 0, 1)
@@ -653,11 +650,12 @@ func (m *orderRepo) QueryDailyOrdersList(ctx context.Context, date time.Time) ([
 	return results, err
 }
 
-// QueryMonthlyOrdersList 查询过去 6 个月订单统计（包含当前月）
+// QueryMonthlyOrdersList totals the settled gateway orders of each of the six
+// months up to and including date's month.
 func (m *orderRepo) QueryMonthlyOrdersList(ctx context.Context, date time.Time) ([]order.OrdersTotalWithDate, error) {
 	var results []order.OrdersTotalWithDate
 
-	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v any) error {
 		start := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location()).AddDate(0, -5, 0)
 		end := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location()).AddDate(0, 1, 0)
 		dateExpr := orm.DateBucketExpr(conn, "created_at", "month")

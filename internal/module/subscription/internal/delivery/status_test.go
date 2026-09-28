@@ -18,7 +18,7 @@ type deliveryNodeRepo struct {
 
 var _ NodeLister = (*deliveryNodeRepo)(nil)
 
-func (r *deliveryNodeRepo) ListNodesByScope(context.Context, []int64, []string, *bool, bool) ([]*node.Node, error) {
+func (r *deliveryNodeRepo) ListEnabledNodesByScope(context.Context, []int64, []string) ([]*node.Node, error) {
 	r.calls++
 	return []*node.Node{{Id: 5, Name: "real", Address: "node.example.com", Port: 443, Protocol: "vless"}}, nil
 }
@@ -52,9 +52,9 @@ func TestGetServersWithholdsNodesFromDeductedAndStoppedSubscriptions(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			nodes := &deliveryNodeRepo{}
-			logic := newSubscribeLogic(context.Background(), Deps{Nodes: nodes}, RequestMeta{})
+			svc := NewService(Deps{Nodes: nodes})
 			sub := tt.sub
-			servers, err := logic.getServers(&sub, plan)
+			servers, err := svc.getServers(context.Background(), "", &sub, plan)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
@@ -36,13 +35,13 @@ func (s *Service) UserLogin(ctx context.Context, req *dto.UserLoginRequest) (res
 	userInfo, err := s.deps.Store.User().FindOneByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("no account has this email: %w", xerr.NewErrCode(xerr.UserNotExist))
+			return nil, xerr.Errorf(xerr.UserNotExist, "no account has this email")
 		}
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user by email")
 	}
 	attempt.Identify(userInfo.Id)
 	if userInfo.DeletedAt.Valid {
-		return nil, fmt.Errorf("user %d is deleted: %w", userInfo.Id, xerr.NewErrCode(xerr.UserNotExist))
+		return nil, xerr.Errorf(xerr.UserNotExist, "user %d is deleted", userInfo.Id)
 	}
 
 	if err := ensureLoginAllowed(ctx, s.deps.Redis, userInfo.Id); err != nil {
@@ -50,7 +49,7 @@ func (s *Service) UserLogin(ctx context.Context, req *dto.UserLoginRequest) (res
 	}
 	if !password.MultiPasswordVerify(userInfo.Algo, userInfo.Salt, req.Password, userInfo.Password) {
 		recordLoginFailure(ctx, s.deps.Redis, userInfo.Id)
-		return nil, fmt.Errorf("wrong password: %w", xerr.NewErrCode(xerr.UserPasswordError))
+		return nil, xerr.Errorf(xerr.UserPasswordError, "wrong password")
 	}
 	clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
 	// The account state is only revealed to the owner of the password.
@@ -59,5 +58,5 @@ func (s *Service) UserLogin(ctx context.Context, req *dto.UserLoginRequest) (res
 	}
 	upgradePasswordAfterLogin(ctx, s.deps.Store.User(), userInfo, req.Password)
 
-	return s.signIn(ctx, userInfo.Id, req.Identifier, req.LoginType)
+	return s.signIn(ctx, userInfo.Id, req.Identifier)
 }

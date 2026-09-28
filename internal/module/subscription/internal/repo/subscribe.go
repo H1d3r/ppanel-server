@@ -119,12 +119,10 @@ func (m *subscribeRepo) FindOne(ctx context.Context, id int64) (*subscribe.Subsc
 	err := m.QueryCtx(ctx, &resp, subscribeIdKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&subscribe.Subscribe{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe) error {

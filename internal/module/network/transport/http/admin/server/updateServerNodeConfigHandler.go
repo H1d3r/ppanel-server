@@ -10,6 +10,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// ServerNodeConfigUpdater is the part of the network facade
+// UpdateServerNodeConfigHandler calls.
+type ServerNodeConfigUpdater interface {
+	UpdateServerNodeConfig(ctx context.Context, req *dto.UpdateServerNodeConfigRequest) error
+}
+
+var _ ServerNodeConfigUpdater = network.Service(nil)
+
 // UpdateServerNodeConfigHandler documents Update Server Node Config.
 //
 // @Summary Update Server Node Config
@@ -20,7 +28,7 @@ import (
 // @Param request body dto.UpdateServerNodeConfigRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/admin/server/node_config/update [post]
-func UpdateServerNodeConfigHandler(service network.Service) app.HandlerFunc {
+func UpdateServerNodeConfigHandler(service ServerNodeConfigUpdater) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.UpdateServerNodeConfigRequest
 		if err := httpx.ShouldBind(ctx, &req); err != nil {

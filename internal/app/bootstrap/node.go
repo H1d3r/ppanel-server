@@ -7,7 +7,6 @@ import (
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/module/network"
 	"github.com/perfect-panel/server/internal/module/platform/entity/system"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -20,9 +19,9 @@ const nodeMultiplierKey = "NodeMultiplierConfig"
 // Node loads the node settings and the traffic multiplier. Everything is read
 // before anything is published, so a failed load keeps the previous node
 // configuration and multiplier manager.
-func Node(ctx *Dependencies) error {
+func Node(ctx context.Context, deps *Dependencies) error {
 	logger.Debug("Node config initialization")
-	rows, err := ctx.Store.System().GetNodeConfig(context.Background())
+	rows, err := deps.Settings.GetNodeConfig(ctx)
 	if err != nil {
 		return wrapf(err, xerr.DatabaseQueryError, "read %s settings", categoryNode)
 	}
@@ -32,14 +31,14 @@ func Node(ctx *Dependencies) error {
 		return wrapf(err, xerr.ERROR, "decode the node settings")
 	}
 
-	nodeMultiplierData, err := ctx.Store.System().FindNodeMultiplierConfig(context.Background())
+	nodeMultiplierData, err := deps.Settings.FindNodeMultiplierConfig(ctx)
 	if err != nil {
 		return wrapf(err, xerr.DatabaseQueryError, "read the %s setting", nodeMultiplierKey)
 	}
 	if nodeMultiplierData == nil || nodeMultiplierData.Id == 0 {
 		// First start: seed an empty multiplier table and keep the manager
 		// the process already has.
-		if err := ctx.Store.System().Insert(context.Background(), &system.System{
+		if err := deps.Settings.Insert(ctx, &system.System{
 			Key:      nodeMultiplierKey,
 			Value:    "[]",
 			Type:     "string",
@@ -48,19 +47,19 @@ func Node(ctx *Dependencies) error {
 		}); err != nil {
 			return wrapf(err, xerr.DatabaseInsertError, "create the %s setting", nodeMultiplierKey)
 		}
-		ctx.updateConfig(func(current *config.Config) { current.Node = c })
+		deps.updateRuntime(func(current *config.Runtime) { current.Node = c })
 		return nil
 	}
 
 	var periods []network.MultiplierPeriod
 	if err := json.Unmarshal([]byte(nodeMultiplierData.Value), &periods); err != nil {
 		// Kept lenient as before: unreadable periods apply no multiplier.
-		logger.Errorw("[Node] the node multiplier setting is not valid JSON, applying no multiplier",
+		logger.WithContext(ctx).Errorw("[Node] the node multiplier setting is not valid JSON, applying no multiplier",
 			logger.Field("key", nodeMultiplierKey), logger.Field("error", err.Error()), logger.Field("value", nodeMultiplierData.Value))
 	}
-	ctx.updateConfig(func(current *config.Config) { current.Node = c })
-	if ctx.SetNodeMultiplierManager != nil {
-		ctx.SetNodeMultiplierManager(network.NewMultiplierManager(periods))
+	deps.updateRuntime(func(current *config.Runtime) { current.Node = c })
+	if deps.SetNodeMultiplierManager != nil {
+		deps.SetNodeMultiplierManager(network.NewMultiplierManager(periods))
 	}
 	return nil
 }
@@ -82,13 +81,13 @@ const nodeSecretLength = 32
 // rotated: every node was configured with that secret, so rotating it here would
 // silently cut them off. The operator rotates it from the admin panel and
 // reconfigures the nodes in the same window.
-func NodeSecret(svcCtx *Dependencies) error {
+func NodeSecret(ctx context.Context, deps *Dependencies) error {
 	logger.Debug("Node secret initialization")
 	// The read and the write share a transaction so the read goes to the
 	// database instead of Redis; GetNodeConfig is a cached query, and the write
 	// below does not invalidate that cache.
-	err := svcCtx.Store.InPlatformTx(context.Background(), func(store repository.PlatformStore) error {
-		configs, err := store.System().GetNodeConfig(context.Background())
+	err := deps.SettingsTx.InSettingsTx(ctx, func(settings NodeSettings) error {
+		configs, err := settings.GetNodeConfig(ctx)
 		if err != nil {
 			return wrapf(err, xerr.DatabaseQueryError, "read %s settings", categoryNode)
 		}
@@ -99,17 +98,17 @@ func NodeSecret(svcCtx *Dependencies) error {
 		switch storedSettingValue(configs, nodeSecretKey) {
 		case "":
 			secret := random.KeyNew(nodeSecretLength, 1)
-			if err := store.System().UpdateValueByCategoryKey(context.Background(), categoryNode, nodeSecretKey, secret); err != nil {
+			if err := settings.UpdateValueByCategoryKey(ctx, categoryNode, nodeSecretKey, secret); err != nil {
 				return wrapf(err, xerr.DatabaseUpdateError, "store the generated node secret")
 			}
-			logger.Info("[NodeSecret] generated a random node secret, read it from the admin panel to configure nodes")
+			logger.WithContext(ctx).Info("[NodeSecret] generated a random node secret, read it from the admin panel to configure nodes")
 		case LegacyDefaultNodeSecret:
-			logger.Error("[NodeSecret] the node secret is still the well-known default, rotate it from the admin panel and reconfigure every node")
+			logger.WithContext(ctx).Error("[NodeSecret] the node secret is still the well-known default, rotate it from the admin panel and reconfigure every node")
 		}
 		return nil
 	})
 	if err != nil {
-		logger.Errorf("[NodeSecret] provision error: %v", err.Error())
+		logger.WithContext(ctx).Errorf("[NodeSecret] provision error: %v", err.Error())
 		return err
 	}
 	return nil

@@ -11,41 +11,29 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
-type ServerPushStatusLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewServerPushStatusLogic Push server status
-func newServerPushStatusLogic(ctx context.Context, deps Deps) *ServerPushStatusLogic {
-	return &ServerPushStatusLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *ServerPushStatusLogic) ServerPushStatus(req *dto.ServerPushStatusRequest) error {
-	// Find server info
-	serverInfo, err := l.deps.Store.Node().FindOneServer(l.ctx, req.ServerId)
+// ServerPushStatus records a server's status report and heartbeat. A changed
+// certificate pin the node reports for its protocol is stored too, and the
+// server's caches that carry the old pin are dropped.
+func (s *Service) ServerPushStatus(ctx context.Context, req *dto.ServerPushStatusRequest) error {
+	log := logger.WithContext(ctx)
+	serverInfo, err := s.deps.Servers.FindOneServer(ctx, req.ServerId)
 	if err != nil || serverInfo.Id <= 0 {
-		l.Errorw("[PushOnlineUsers] FindOne error", logger.Field("error", err))
+		log.Errorw("[ServerPushStatus] FindOne error", logger.Field("error", err))
 		return errors.New("server not found")
 	}
-	err = l.deps.Store.Node().UpdateStatusCache(l.ctx, req.ServerId, &node.Status{
+	err = s.deps.Status.UpdateStatusCache(ctx, req.ServerId, &node.Status{
 		Cpu:       req.Cpu,
 		Mem:       req.Mem,
 		Disk:      req.Disk,
 		UpdatedAt: req.UpdatedAt,
 	})
 	if err != nil {
-		l.Errorw("[ServerPushStatus] UpdateNodeStatus error", logger.Field("error", err))
+		log.Errorw("[ServerPushStatus] UpdateNodeStatus error", logger.Field("error", err))
 		return errors.New("update node status failed")
 	}
 	now := timeutil.Now()
-	if err := trafficagg.New(trafficagg.Deps{Store: l.deps.Store, Redis: l.deps.Redis}).RecordServerReport(l.ctx, req.ServerId, now); err != nil {
-		l.Errorw("[ServerPushStatus] RecordServerReport error", logger.Field("error", err))
+	if err := trafficagg.New(trafficagg.Deps{Redis: s.deps.Redis}).RecordServerReport(ctx, req.ServerId, now); err != nil {
+		log.Errorw("[ServerPushStatus] RecordServerReport error", logger.Field("error", err))
 		return errors.New("update node report time failed")
 	}
 
@@ -56,15 +44,15 @@ func (l *ServerPushStatusLogic) ServerPushStatus(req *dto.ServerPushStatusReques
 	if req.CertPinSHA256 != "" {
 		certPinChanged, err = serverInfo.ApplyReportedCertPin(req.Protocol, req.CertPinSHA256)
 		if err != nil {
-			l.Errorw("[ServerPushStatus] ApplyReportedCertPin error", logger.Field("error", err))
+			log.Errorw("[ServerPushStatus] ApplyReportedCertPin error", logger.Field("error", err))
 			certPinChanged = false
 		}
 	}
 
 	if certPinChanged {
-		updated, updateErr := l.deps.Store.Node().UpdateServerProtocolsIfCurrent(l.ctx, serverInfo.Id, currentProtocols, serverInfo.Protocols)
+		updated, updateErr := s.deps.Status.UpdateServerProtocolsIfCurrent(ctx, serverInfo.Id, currentProtocols, serverInfo.Protocols)
 		if updateErr != nil {
-			l.Errorw("[ServerPushStatus] UpdateServerProtocols error", logger.Field("error", updateErr))
+			log.Errorw("[ServerPushStatus] UpdateServerProtocols error", logger.Field("error", updateErr))
 			return errors.New("update node certificate metadata failed")
 		}
 		if !updated {
@@ -73,8 +61,8 @@ func (l *ServerPushStatusLogic) ServerPushStatus(req *dto.ServerPushStatusReques
 			// the fresh value instead of overwriting that change.
 			return nil
 		}
-		if err := l.deps.Store.Node().ClearServerCache(l.ctx, req.ServerId); err != nil {
-			l.Errorw("[ServerPushStatus] ClearServerCache error", logger.Field("error", err))
+		if err := s.deps.Status.ClearServerCache(ctx, req.ServerId); err != nil {
+			log.Errorw("[ServerPushStatus] ClearServerCache error", logger.Field("error", err))
 		}
 	}
 

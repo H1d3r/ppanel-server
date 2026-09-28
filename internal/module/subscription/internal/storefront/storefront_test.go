@@ -24,11 +24,8 @@ type planNodes struct {
 
 var _ NodeLister = (*planNodes)(nil)
 
-func (p *planNodes) ListNodesByScope(_ context.Context, nodeIDs []int64, tags []string, enabled *bool, preload bool) ([]*node.Node, error) {
+func (p *planNodes) ListEnabledNodesByScope(_ context.Context, nodeIDs []int64, tags []string) ([]*node.Node, error) {
 	p.calls++
-	if enabled == nil || !*enabled || !preload {
-		return nil, errors.New("the storefront lists enabled nodes with their server")
-	}
 	if len(nodeIDs) == 0 && len(tags) == 0 {
 		return nil, errors.New("an empty scope lists every node")
 	}

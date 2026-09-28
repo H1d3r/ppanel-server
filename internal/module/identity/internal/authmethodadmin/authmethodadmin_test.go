@@ -3,6 +3,7 @@ package authmethodadmin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -16,6 +17,7 @@ type fixture struct {
 	*identitytest.Env
 	svc       *Service
 	reloaded  []string
+	reloadErr error
 	senderCfg Snapshot
 }
 
@@ -27,7 +29,7 @@ func newFixture(t *testing.T) *fixture {
 	f.svc = NewService(Deps{
 		Auths:        env.Store.Auth(),
 		Config:       func() Snapshot { return f.senderCfg },
-		Reinitialize: func(subsystem string) { f.reloaded = append(f.reloaded, subsystem) },
+		Reinitialize: func(subsystem string) error { f.reloaded = append(f.reloaded, subsystem); return f.reloadErr },
 	})
 	for _, method := range []string{"email", "mobile", "device", "github"} {
 		env.EnableMethod(t, method, "{}")
@@ -83,6 +85,21 @@ func TestUpdateAuthMethodConfigRefusesConfigsThatDoNotDecode(t *testing.T) {
 	}
 }
 
+// A sender reload that fails reaches the administrator; the configuration
+// is stored all the same.
+func TestUpdateAuthMethodConfigReportsAFailedReload(t *testing.T) {
+	f := newFixture(t)
+	f.reloadErr = errors.New("reload failed")
+	_, err := f.svc.UpdateAuthMethodConfig(context.Background(), f.request(t, "mobile", map[string]any{"platform": "twilio"}))
+	if !errors.Is(err, f.reloadErr) {
+		t.Fatalf("UpdateAuthMethodConfig() = %v, want the reload failure", err)
+	}
+	var stored auth.MobileAuthConfig
+	if err := json.Unmarshal([]byte(f.stored(t, "mobile")), &stored); err != nil || stored.Platform != "twilio" {
+		t.Fatalf("stored = %+v (%v), want the new configuration", stored, err)
+	}
+}
+
 func TestUpdateAuthMethodConfigStoresAndReloads(t *testing.T) {
 	f := newFixture(t)
 	resp, err := f.svc.UpdateAuthMethodConfig(context.Background(), f.request(t, "mobile",
@@ -129,6 +146,69 @@ func TestUpdateAuthMethodConfigWithoutConfigResetsTheDefaults(t *testing.T) {
 	}
 	if stored.VerifyEmailTemplate == "" || stored.VerifyEmailSubject == "" {
 		t.Fatalf("stored = %+v, want the default templates", stored)
+	}
+}
+
+// An update with a configuration sets the method's switch; a reset to the
+// defaults leaves the stored switch as it is.
+func TestUpdateAuthMethodConfigSetsTheSwitchWithAConfiguration(t *testing.T) {
+	f := newFixture(t)
+	storedSwitch := func() bool {
+		t.Helper()
+		var row auth.Auth
+		if err := f.DB.Where("method = ?", "github").First(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		return row.Enabled != nil && *row.Enabled
+	}
+	off, on := false, true
+
+	req := f.request(t, "github", map[string]any{"client_id": "github-id"})
+	req.Enabled = &off
+	resp, err := f.svc.UpdateAuthMethodConfig(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Enabled || storedSwitch() {
+		t.Fatalf("switch = %t (stored %t), want the method disabled", resp.Enabled, storedSwitch())
+	}
+
+	reset := f.request(t, "github", nil)
+	reset.Enabled = &on
+	resp, err = f.svc.UpdateAuthMethodConfig(context.Background(), reset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Enabled || storedSwitch() {
+		t.Fatalf("switch after the reset = %t (stored %t), want the stored switch kept", resp.Enabled, storedSwitch())
+	}
+	if got := f.stored(t, "github"); got != new(auth.GithubAuthConfig).Marshal() {
+		t.Fatalf("github config = %s, want the defaults", got)
+	}
+}
+
+// The method names the row: an id of another row is refused rather than
+// overwriting that method, and an update without a switch keeps the stored
+// one instead of clearing it.
+func TestUpdateAuthMethodConfigKeepsTheRowAndItsSwitch(t *testing.T) {
+	f := newFixture(t)
+	mobile := f.request(t, "mobile", nil)
+	wrongRow := f.request(t, "github", map[string]any{"client_id": "github-id"})
+	wrongRow.Id = mobile.Id
+	_, err := f.svc.UpdateAuthMethodConfig(context.Background(), wrongRow)
+	assertCode(t, err, xerr.InvalidParams)
+	if got := f.stored(t, "mobile"); got == `{"client_id":"github-id"}` {
+		t.Fatalf("the mobile row took the github config: %s", got)
+	}
+
+	before := f.request(t, "github", nil).Enabled
+	noSwitch := f.request(t, "github", map[string]any{"client_id": "github-id"})
+	noSwitch.Id, noSwitch.Enabled = 0, nil
+	if _, err := f.svc.UpdateAuthMethodConfig(context.Background(), noSwitch); err != nil {
+		t.Fatalf("an update without an id or a switch = %v", err)
+	}
+	if after := f.request(t, "github", nil).Enabled; after == nil || before == nil || *after != *before {
+		t.Fatalf("switch = %v, want the stored %v kept", after, before)
 	}
 }
 

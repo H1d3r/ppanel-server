@@ -1,3 +1,5 @@
+// Package alibabacloud sends text messages through Alibaba Cloud SMS,
+// which fills a template approved on the provider's side.
 package alibabacloud
 
 import (
@@ -20,6 +22,7 @@ const defaultEndpoint = "dysmsapi.ap-southeast-1.aliyuncs.com"
 // caller's context sets no earlier deadline.
 const requestTimeout = 10 * time.Second
 
+// Config is the stored provider configuration.
 type Config struct {
 	Access       string `json:"access"`
 	Secret       string `json:"secret"`
@@ -28,6 +31,7 @@ type Config struct {
 	TemplateCode string `json:"template_code"`
 }
 
+// Client sends through one Alibaba Cloud account.
 type Client struct {
 	config Config
 	client *dysmsapi.Client

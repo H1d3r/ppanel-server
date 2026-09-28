@@ -1,3 +1,5 @@
+// Package subscribe holds the subscription module's plan entities: the plans
+// (the subscribe table) and their groups (subscribe_group).
 package subscribe
 
 import (
@@ -109,7 +111,7 @@ func (Group) TableName() string {
 
 const MaxSubscribePageSize = 100
 
-// FilterParams subscribe 列表过滤参数
+// FilterParams filters and pages the plan list.
 type FilterParams struct {
 	Page            int      // Page Number
 	Size            int      // Page Size

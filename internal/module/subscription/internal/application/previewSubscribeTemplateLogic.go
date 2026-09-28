@@ -2,55 +2,39 @@ package application
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/render"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type PreviewSubscribeTemplateLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
+// previewNodeLimit bounds the nodes a template preview renders.
+const previewNodeLimit = 1000
 
-// Preview Template
-func newPreviewSubscribeTemplateLogic(ctx context.Context, deps Deps) *PreviewSubscribeTemplateLogic {
-	return &PreviewSubscribeTemplateLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *PreviewSubscribeTemplateLogic) PreviewSubscribeTemplate(req *dto.PreviewSubscribeTemplateRequest) (resp *dto.PreviewSubscribeTemplateResponse, err error) {
-	enable := true
-	_, servers, err := l.deps.Nodes.FilterNodeList(l.ctx, &node.FilterNodeParams{
-		Page:    1,
-		Size:    1000,
-		Preload: true,
-		Enabled: &enable,
-	})
+// PreviewSubscribeTemplate renders the application's template over the
+// enabled nodes for a sample subscriber.
+func (s *Service) PreviewSubscribeTemplate(ctx context.Context, req *dto.PreviewSubscribeTemplateRequest) (*dto.PreviewSubscribeTemplateResponse, error) {
+	log := logger.WithContext(ctx)
+	servers, err := s.deps.Nodes.ListEnabledNodes(ctx, previewNodeLimit)
 	if err != nil {
-		l.Errorf("[PreviewSubscribeTemplateLogic] FindAllServer error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindAllServer error: %v", err.Error())
+		log.Errorf("[PreviewSubscribeTemplateLogic] FindAllServer error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list the enabled nodes")
 	}
 
-	data, err := l.deps.Clients.FindOne(l.ctx, req.Id)
+	data, err := s.deps.Clients.FindOne(ctx, req.Id)
 	if err != nil {
-		l.Errorf("[PreviewSubscribeTemplateLogic] FindOne error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneClient error: %v", err.Error())
+		log.Errorf("[PreviewSubscribeTemplateLogic] FindOne error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "FindOneClient error: %v", err.Error())
 	}
 
 	// Preview renders with the application's own defaults so it matches what a
 	// client receives when its subscription URL carries no params of its own.
 	defaultParams, err := data.DefaultParamValues()
 	if err != nil {
-		l.Errorf("[PreviewSubscribeTemplateLogic] Ignoring malformed default params %q: %v", data.DefaultParams, err)
+		log.Errorf("[PreviewSubscribeTemplateLogic] Ignoring malformed default params %q: %v", data.DefaultParams, err)
 	}
 
 	sub := render.NewAdapter(data.SubscribeTemplate, render.WithServers(servers),
@@ -67,16 +51,17 @@ func (l *PreviewSubscribeTemplateLogic) PreviewSubscribeTemplate(req *dto.Previe
 			Traffic:      1000,
 			SubscribeURL: "https://example.com/subscribe",
 		}))
-	// Get client config
+	// The response carries the renderer's message: it tells the administrator
+	// what is wrong with the template.
 	a, err := sub.Client()
 	if err != nil {
-		l.Errorf("[PreviewSubscribeTemplateLogic] Client error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrMsg(err.Error()), "Client error: %v", err.Error())
+		log.Errorf("[PreviewSubscribeTemplateLogic] Client error: %v", err.Error())
+		return nil, fmt.Errorf("client error: %v: %w", err.Error(), xerr.NewErrMsg(err.Error()))
 	}
 	bytes, err := a.Build()
 	if err != nil {
-		l.Errorf("[PreviewSubscribeTemplateLogic] Build error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrMsg(err.Error()), "Build error: %v", err.Error())
+		log.Errorf("[PreviewSubscribeTemplateLogic] Build error: %v", err.Error())
+		return nil, fmt.Errorf("build error: %v: %w", err.Error(), xerr.NewErrMsg(err.Error()))
 	}
 	return &dto.PreviewSubscribeTemplateResponse{
 		Template: string(bytes),

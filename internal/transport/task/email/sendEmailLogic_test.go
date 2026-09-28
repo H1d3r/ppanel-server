@@ -2,15 +2,18 @@ package email
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/hibiken/asynq"
+	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
 )
 
 // The queued literal is only the fallback: an operator-configured subject
 // wins and renders against the same data as the body.
 func TestResolveSubjectPrefersConfiguredTemplate(t *testing.T) {
-	data := map[string]interface{}{"SiteName": "示例站"}
+	data := map[string]any{"SiteName": "示例站"}
 
 	got := resolveSubject(context.Background(), "【{{.SiteName}}】订阅已到期", "Subscription Expired", data)
 	if got != "【示例站】订阅已到期" {
@@ -38,14 +41,14 @@ func TestRenderEmailTemplateReportsParseErrors(t *testing.T) {
 	if _, err := renderEmailTemplate("body", "{{.Broken", nil); err == nil {
 		t.Fatal("parse error was swallowed")
 	}
-	rendered, err := renderEmailTemplate("body", "Hello {{.Name}}", map[string]interface{}{"Name": "User"})
+	rendered, err := renderEmailTemplate("body", "Hello {{.Name}}", map[string]any{"Name": "User"})
 	if err != nil || rendered != "Hello User" {
 		t.Fatalf("rendered = %q, err = %v", rendered, err)
 	}
 }
 
 func TestEmailLogContentRedactsVerificationCode(t *testing.T) {
-	content := map[string]interface{}{"Code": "123456", "SiteName": "Example"}
+	content := map[string]any{"Code": "123456", "SiteName": "Example"}
 
 	redacted := emailLogContent(taskqueue.EmailTypeVerify, content)
 	if redacted["redacted"] != true {
@@ -60,9 +63,37 @@ func TestEmailLogContentRedactsVerificationCode(t *testing.T) {
 }
 
 func TestEmailLogContentRedactsNonVerificationContent(t *testing.T) {
-	content := map[string]interface{}{"message": "maintenance"}
+	content := map[string]any{"message": "maintenance"}
 
 	if got := emailLogContent(taskqueue.EmailTypeMaintenance, content); got["redacted"] != true || got["email_type"] != taskqueue.EmailTypeMaintenance {
 		t.Fatalf("non-verification log content = %#v", got)
+	}
+}
+
+// A verification payload without its code purpose is dropped: the unchecked
+// conversion it used to go through panicked, and the task was retried until
+// asynq gave up.
+func TestProcessTaskDropsAVerificationWithoutItsPurpose(t *testing.T) {
+	handler := NewSendEmailHandler(Dependencies{
+		Email: func() config.EmailConfig {
+			return config.EmailConfig{Platform: "smtp", PlatformConfig: `{"host":"127.0.0.1","port":2525,"from":"noreply@example.com"}`}
+		},
+		SiteName: func() string { return "Perfect Panel" },
+	})
+	for name, content := range map[string]map[string]any{
+		"no purpose":        {"Code": "123456"},
+		"purpose as string": {"Type": "1", "Code": "123456"},
+		"no content":        nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload, err := json.Marshal(taskqueue.SendEmailPayload{Type: taskqueue.EmailTypeVerify, Email: "user@example.com", Content: content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Logs is nil: a message log written for the payload would panic.
+			if err := handler.ProcessTask(context.Background(), asynq.NewTask(taskqueue.ForthwithSendEmail, payload)); err != nil {
+				t.Fatalf("ProcessTask = %v, want the payload dropped", err)
+			}
+		})
 	}
 }

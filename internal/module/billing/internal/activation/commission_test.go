@@ -2,6 +2,7 @@ package activation
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -129,7 +130,7 @@ func TestFinalizeOrderRequiresPaidOrder(t *testing.T) {
 	if got := f.h.ReloadOrder("F").Status; got != order.StatusFinished {
 		t.Fatalf("status = %d, want finished", got)
 	}
-	if err := f.svc.FinalizeOrder(context.Background(), "F"); err != ErrInvalidOrderStatus {
+	if err := f.svc.FinalizeOrder(context.Background(), "F"); !errors.Is(err, ErrInvalidOrderStatus) {
 		t.Fatalf("second finalize = %v, want ErrInvalidOrderStatus", err)
 	}
 }

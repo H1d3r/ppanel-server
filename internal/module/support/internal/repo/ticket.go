@@ -1,3 +1,6 @@
+// Package repo holds the support module's repository implementations:
+// tickets, announcements, ads and documents, each cached in Redis. The module
+// facade exports them through NewRepoBuilder.
 package repo
 
 import (
@@ -64,16 +67,14 @@ func (m *ticketRepo) Insert(ctx context.Context, data *ticket.Ticket) error {
 
 func (m *ticketRepo) FindOne(ctx context.Context, id int64) (*ticket.Ticket, error) {
 	var resp ticket.Ticket
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 
 		return conn.Model(&ticket.Ticket{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *ticketRepo) Update(ctx context.Context, data *ticket.Ticket) error {
@@ -106,7 +107,7 @@ func (m *ticketRepo) Delete(ctx context.Context, id int64) error {
 // QueryTicketDetail returns the ticket details.
 func (m *ticketRepo) QueryTicketDetail(ctx context.Context, id int64) (*ticket.Details, error) {
 	var data *ticket.Details
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&ticket.Ticket{}).Where("id = ?", id).Preload("Follows", func(db *gorm.DB) *gorm.DB {
 			return db.Order("created_at ASC, id ASC")
 		}).First(v).Error
@@ -127,7 +128,7 @@ func (m *ticketRepo) QueryTicketList(ctx context.Context, page, size int, userId
 	var data []*ticket.Ticket
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		query := conn.Model(&ticket.Ticket{})
 		if userId > 0 {
 			query = query.Where("user_id = ?", userId)
@@ -160,7 +161,7 @@ func (m *ticketRepo) UpdateTicketStatus(ctx context.Context, id, userId int64, s
 // QueryWaitReplyTotal returns the total number of tickets that are waiting for a reply.
 func (m *ticketRepo) QueryWaitReplyTotal(ctx context.Context) (int64, error) {
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return conn.Model(&ticket.Ticket{}).Where("status = ?", ticket.Pending).Count(&total).Error
 	})
 	return total, err

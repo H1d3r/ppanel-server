@@ -17,8 +17,8 @@ pre-commit:
     - group:
         parallel: true
         jobs:
-          # Like CI, only lines changed since the last commit are linted until
-          # the existing code is lint clean.
+          # Only the lines the commit changes are linted, to keep the hook
+          # quick; CI lints the whole tree.
           - name: golangci-lint
             run: make -s lint-new
           - name: go-vet

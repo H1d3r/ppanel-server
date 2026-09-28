@@ -1,3 +1,5 @@
+// Package coupon holds the billing domain's coupon entity: a discount code
+// with its validity window, usage limits and the plans it applies to.
 package coupon
 
 import "time"

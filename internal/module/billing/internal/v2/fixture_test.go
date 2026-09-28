@@ -72,10 +72,10 @@ func newV2Fixture(t *testing.T, opts v2Options) *v2Fixture {
 	}
 	f.portal = portal.NewService(portal.Deps{
 		Orders: portalOrders, Coupons: h.Store.Coupon(), Payments: h.Store.Payment(), UserAuths: h.Store.UserAuth(),
-		Plans: h.Store.Subscribe(), Tx: h.Store, UserCache: h.Store.UserCache(), Inventory: subscription.NewInventory(h.Store),
+		Plans: h.Store.Subscribe(), Tx: h.Store, UserCache: &billingtest.UserCache{}, Inventory: subscription.NewInventory(h.Store),
 		Sessions: h.Redis, Queue: f.queue, GuestCheckoutCache: h.Redis, ExchangeRate: f.rates, Gateways: opts.gateways,
 		Config: portal.Config{
-			Host: "panel.example.test", SiteName: func() string { return "Panel" }, CurrencyUnit: currency,
+			SiteHost: func() string { return "panel.example.test" }, SiteName: func() string { return "Panel" }, CurrencyUnit: currency,
 			JwtSecret: "v2-secret", JwtExpire: 3600,
 		},
 	})

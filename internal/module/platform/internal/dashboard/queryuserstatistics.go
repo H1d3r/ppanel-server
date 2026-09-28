@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
+	"github.com/perfect-panel/server/internal/module/platform/internal/readmodel"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
@@ -64,7 +64,7 @@ func (s *Service) QueryUserStatistics(ctx context.Context) (*dto.UserStatisticsR
 	return resp, nil
 }
 
-func userBreakdown(periods []user.UserStatisticsWithDate) []dto.UserStatistics {
+func userBreakdown(periods []readmodel.UserStatisticsWithDate) []dto.UserStatistics {
 	list := make([]dto.UserStatistics, len(periods))
 	for i, period := range periods {
 		list[i] = dto.UserStatistics{
@@ -77,34 +77,21 @@ func userBreakdown(periods []user.UserStatisticsWithDate) []dto.UserStatistics {
 	return list
 }
 
+// mockUserStatistics is the demo deployment's canned user statistics.
 func mockUserStatistics() *dto.UserStatisticsResponse {
 	now := timeutil.Now()
 
-	// Generate daily user statistics for the current month (from 1st to current date)
-	monthlyList := make([]dto.UserStatistics, 7)
-	for i := 0; i < 7; i++ {
-		dayDate := now.AddDate(0, 0, -(6 - i))
-		baseRegister := int64(18 + ((6 - i) * 3) + ((6-i)%3)*8)
-		monthlyList[i] = dto.UserStatistics{
-			Date:              dayDate.Format("2006-01-02"),
-			Register:          baseRegister,
-			NewOrderUsers:     int64(float64(baseRegister) * 0.65),
-			RenewalOrderUsers: int64(float64(baseRegister) * 0.35),
-		}
-	}
-
-	// Generate monthly user statistics for the past 6 months (oldest first)
-	allList := make([]dto.UserStatistics, 6)
-	for i := 0; i < 6; i++ {
-		monthDate := now.AddDate(0, -(5 - i), 0)
-		baseRegister := int64(1800 + ((5 - i) * 200) + ((5-i)%2)*500)
-		allList[i] = dto.UserStatistics{
-			Date:              monthDate.Format("2006-01"),
-			Register:          baseRegister,
-			NewOrderUsers:     int64(float64(baseRegister) * 0.65),
-			RenewalOrderUsers: int64(float64(baseRegister) * 0.35),
-		}
-	}
+	monthlyList, allList := demoSeries(now,
+		func(ago int) int64 { return int64(18 + ago*3 + (ago%3)*8) },
+		func(ago int) int64 { return int64(1800 + ago*200 + (ago%2)*500) },
+		func(date string, registered int64) dto.UserStatistics {
+			return dto.UserStatistics{
+				Date:              date,
+				Register:          registered,
+				NewOrderUsers:     int64(float64(registered) * 0.65),
+				RenewalOrderUsers: int64(float64(registered) * 0.35),
+			}
+		})
 
 	return &dto.UserStatisticsResponse{
 		Today: dto.UserStatistics{
@@ -118,11 +105,10 @@ func mockUserStatistics() *dto.UserStatisticsResponse {
 			RenewalOrderUsers: 300,
 			List:              monthlyList,
 		},
+		// The all-time period does not use the paying-user counts.
 		All: dto.UserStatistics{
-			Register:          18888,
-			NewOrderUsers:     0, // This field is not used in All statistics
-			RenewalOrderUsers: 0, // This field is not used in All statistics
-			List:              allList,
+			Register: 18888,
+			List:     allList,
 		},
 	}
 }

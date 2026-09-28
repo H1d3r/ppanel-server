@@ -11,18 +11,21 @@ import (
 	"github.com/forgoer/openssl"
 )
 
-// Encrypt 传入 []byte，返回 []byte 类型的加密数据
+// Encrypt encrypts plainText for the device transport with AES-256-CBC and
+// PKCS#7 padding. It returns the base64 ciphertext and the nonce, the current
+// time in hexadecimal nanoseconds. The IV is derived from the nonce and the
+// key instead of being sent, so the receiver needs the nonce to decrypt; the
+// envelope carries it as its time.
 func Encrypt(plainText []byte, keyStr string) (string, string, error) {
-	//get time
 	nonce := fmt.Sprintf("%x", time.Now().UnixNano())
 	key := generateKey(keyStr)
 	iv := generateIv(nonce, keyStr)
 	dst, err := openssl.AesCBCEncrypt(plainText, key, iv, openssl.PKCS7_PADDING)
-	// 返回加密后的数据（包括 IV）
 	return base64.StdEncoding.EncodeToString(dst), nonce, err
 }
 
-// Decrypt 传入 []byte 类型的加密数据，返回解密后的 []byte 明文数据
+// Decrypt reverses Encrypt: cipherText is the base64 ciphertext and ivStr the
+// nonce Encrypt returned with it.
 func Decrypt(cipherText string, keyStr string, ivStr string) (string, error) {
 	decode, err := base64.StdEncoding.DecodeString(cipherText)
 	if err != nil {
@@ -34,12 +37,16 @@ func Decrypt(cipherText string, keyStr string, ivStr string) (string, error) {
 	return string(dst), err
 }
 
-// 生成密钥（哈希处理后保持为固定大小）
+// generateKey hashes key with SHA-256, so a secret of any length yields the
+// 32-byte key AES-256 needs.
 func generateKey(key string) []byte {
 	hash := sha256.Sum256([]byte(key))
-	return hash[:32] // AES-256 需要 32 字节密钥
+	return hash[:32]
 }
 
+// generateIv derives the IV from the nonce iv and the key: the SHA-256 of
+// hex(MD5(iv)) followed by the key, of which CBC uses the first 16 bytes. The
+// device clients derive it the same way, so it must not change.
 func generateIv(iv, key string) []byte {
 	h := md5.New()
 	h.Write([]byte(iv))

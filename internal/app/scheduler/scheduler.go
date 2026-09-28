@@ -1,3 +1,7 @@
+// Package scheduler enqueues the periodic tasks on their schedules, in the
+// application's time zone. Every replica runs a scheduler; a tick's task id
+// names its slot, so the replicas' enqueues of one slot collapse into one
+// task.
 package scheduler
 
 import (
@@ -101,6 +105,7 @@ func newService(redisOpt asynq.RedisConnOpt, location *time.Location) *Service {
 	}
 }
 
+// Start registers the periodic tasks and blocks until Stop.
 func (m *Service) Start() {
 	m.mu.Lock()
 	if m.stopped {
@@ -118,6 +123,8 @@ func (m *Service) Start() {
 	<-m.done
 }
 
+// Stop stops the schedule, waits for an enqueue in flight and closes the
+// queue client.
 func (m *Service) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
@@ -44,16 +43,16 @@ func (s *Service) UserRegister(ctx context.Context, req *dto.UserRegisterRequest
 	existing, err := s.deps.Store.User().FindOneByEmail(ctx, email)
 	switch {
 	case err == nil && existing.DeletedAt.Valid:
-		return nil, fmt.Errorf("the email belongs to a deleted account: %w", xerr.NewErrCode(xerr.UserDisabled))
+		return nil, xerr.Errorf(xerr.UserDisabled, "the email belongs to a deleted account")
 	case err == nil:
-		return nil, fmt.Errorf("the email is registered: %w", xerr.NewErrCode(xerr.UserExist))
+		return nil, xerr.Errorf(xerr.UserExist, "the email is registered")
 	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user by email")
 	}
 	// One inbox must not open many accounts (and trials): "a.b+x@gmail.com"
 	// reaches the mailbox of an existing "ab@gmail.com".
 	if _, err := s.deps.Store.UserAuth().FindEmailAlias(ctx, email); err == nil {
-		return nil, fmt.Errorf("the email reaches the mailbox of an existing account: %w", xerr.NewErrCode(xerr.UserExist))
+		return nil, xerr.Errorf(xerr.UserExist, "the email reaches the mailbox of an existing account")
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find email aliases")
 	}
@@ -82,11 +81,11 @@ func (s *Service) UserRegister(ctx context.Context, req *dto.UserRegisterRequest
 	}, identifier.Email); err != nil {
 		return nil, err
 	}
-	return s.signInRegistered(ctx, newUser.Id, identifier.Email, req.Identifier, req.LoginType)
+	return s.signInRegistered(ctx, newUser.Id, identifier.Email, req.Identifier)
 }
 
 // signInRegistered signs a newly registered account in, auditing the sign-in.
-func (s *Service) signInRegistered(ctx context.Context, userID int64, method, deviceIdentifier, loginType string) (resp *dto.LoginResponse, err error) {
+func (s *Service) signInRegistered(ctx context.Context, userID int64, method, deviceIdentifier string) (resp *dto.LoginResponse, err error) {
 	attempt := account.NewAttempt(s.deps.Store.Log(), method)
 	attempt.Identify(userID)
 	defer func() {
@@ -94,7 +93,7 @@ func (s *Service) signInRegistered(ctx context.Context, userID int64, method, de
 			resp = nil
 		}
 	}()
-	return s.signIn(ctx, userID, deviceIdentifier, loginType)
+	return s.signIn(ctx, userID, deviceIdentifier)
 }
 
 // resolveReferer returns the account whose invite code a registration
@@ -102,7 +101,7 @@ func (s *Service) signInRegistered(ctx context.Context, userID int64, method, de
 func (s *Service) resolveReferer(ctx context.Context, invite string) (*user.User, error) {
 	if invite == "" {
 		if s.deps.Config().InviteForced {
-			return nil, fmt.Errorf("invite code is required: %w", xerr.NewErrCode(xerr.InviteCodeError))
+			return nil, xerr.Errorf(xerr.InviteCodeError, "invite code is required")
 		}
 		return nil, nil
 	}

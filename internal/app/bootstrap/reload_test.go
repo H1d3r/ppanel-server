@@ -13,7 +13,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/network"
 	"github.com/perfect-panel/server/internal/module/platform/entity/system"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 )
 
@@ -22,13 +21,17 @@ var errStoreDown = errors.New("store unavailable")
 // memSystem serves stored settings from memory. A category listed in fail
 // answers with errStoreDown.
 type memSystem struct {
-	repository.SystemRepo
 	settings      map[string][]*system.System
 	fail          map[string]bool
 	multiplier    *system.System
 	multiplierErr error
 	updates       map[string]string
 }
+
+var (
+	_ Settings     = (*memSystem)(nil)
+	_ NodeSettings = (*memSystem)(nil)
+)
 
 func (r *memSystem) read(category string) ([]*system.System, error) {
 	if r.fail[category] {
@@ -83,43 +86,45 @@ func (r *memSystem) UpdateValueByCategoryKey(_ context.Context, category, key, v
 	return nil
 }
 
-// memAuth serves auth methods from memory; a method listed in fail answers
-// with errStoreDown.
+// memAuth serves the stored auth-method settings from memory, as the
+// identity facade does; a method listed in fail answers with errStoreDown.
 type memAuth struct {
-	repository.AuthRepo
 	methods map[string]*auth.Auth
 	fail    map[string]bool
 }
 
-func (r *memAuth) FindOneByMethod(_ context.Context, method string) (*auth.Auth, error) {
+var _ LoginMethods = (*memAuth)(nil)
+
+func (r *memAuth) FindLoginMethod(_ context.Context, method string) (*auth.Auth, error) {
 	if r.fail[method] {
 		return nil, errStoreDown
 	}
 	return r.methods[method], nil
 }
 
+// memStore is the stored state the loaders read: the platform settings in
+// system, served to the transaction as well, and in auth the identity-owned
+// auth-method settings behind LoginMethods. txErr fails the transaction.
 type memStore struct {
-	repository.Store
 	system *memSystem
 	auth   *memAuth
 	txErr  error
 }
 
-func (s *memStore) System() repository.SystemRepo { return s.system }
-func (s *memStore) Auth() repository.AuthRepo     { return s.auth }
-func (s *memStore) InPlatformTx(_ context.Context, fn func(repository.PlatformStore) error) error {
+var _ SettingsTransactor = (*memStore)(nil)
+
+func (s *memStore) InSettingsTx(_ context.Context, fn func(NodeSettings) error) error {
 	if s.txErr != nil {
 		return s.txErr
 	}
-	return fn(platformView{system: s.system})
+	return fn(s.system)
 }
 
-type platformView struct {
-	repository.PlatformStore
-	system repository.SystemRepo
+// settingsDeps are the dependencies of the loaders that read only the stored
+// settings.
+func (s *memStore) settingsDeps() *Dependencies {
+	return &Dependencies{Settings: s.system, SettingsTx: s}
 }
-
-func (v platformView) System() repository.SystemRepo { return v.system }
 
 func setting(category, key, value, typ string) *system.System {
 	return &system.System{Category: category, Key: key, Value: value, Type: typ}
@@ -171,10 +176,12 @@ type runtimeHarness struct {
 func newHarness(store *memStore, initial config.Config) (*Dependencies, *runtimeHarness) {
 	h := &runtimeHarness{config: initial}
 	deps := &Dependencies{
-		Config:       func() config.Config { return h.config },
-		UpdateConfig: func(update func(*config.Config)) { update(&h.config) },
-		Store:        store,
-		ExchangeRate: billing.NewCurrencyRateCache(1),
+		Config:        func() config.Config { return h.config },
+		UpdateRuntime: func(update func(*config.Runtime)) { update(&h.config.Runtime) },
+		Settings:      store.system,
+		SettingsTx:    store,
+		LoginMethods:  store.auth,
+		ExchangeRate:  billing.NewCurrencyRateCache(1),
 		SetNodeMultiplierManager: func(*network.MultiplierManager) {
 			h.managerSettings++
 		},
@@ -182,10 +189,14 @@ func newHarness(store *memStore, initial config.Config) (*Dependencies, *runtime
 	return deps, h
 }
 
-// changedSections names the top-level config sections that differ.
+// changedSections names the runtime sections that differ between before and
+// after, and "Boot" when a boot setting does.
 func changedSections(before, after config.Config) []string {
 	var changed []string
-	b, a := reflect.ValueOf(before), reflect.ValueOf(after)
+	if !reflect.DeepEqual(before.Boot, after.Boot) {
+		changed = append(changed, "Boot")
+	}
+	b, a := reflect.ValueOf(before.Runtime), reflect.ValueOf(after.Runtime)
 	for i := 0; i < b.NumField(); i++ {
 		if !reflect.DeepEqual(b.Field(i).Interface(), a.Field(i).Interface()) {
 			changed = append(changed, b.Type().Field(i).Name)
@@ -220,10 +231,10 @@ func TestReloadDispatchesTheNamesAdminHandlersSend(t *testing.T) {
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {
-			before := config.Config{Telegram: staleTelegram}
+			before := config.Config{Runtime: config.Runtime{Telegram: staleTelegram}}
 			deps, h := newHarness(healthyStore(), before)
 
-			if err := Reload(deps, Subsystem(name)); err != nil {
+			if err := Reload(context.Background(), deps, Subsystem(name)); err != nil {
 				t.Fatalf("Reload(%q) = %v", name, err)
 			}
 			if got := changedSections(before, h.config); !reflect.DeepEqual(got, want) {
@@ -237,10 +248,10 @@ func TestReloadDispatchesTheNamesAdminHandlersSend(t *testing.T) {
 // nothing.
 func TestReloadRejectsUnknownSubsystems(t *testing.T) {
 	logs := logtest.NewCollector(t)
-	before := config.Config{Telegram: staleTelegram}
+	before := config.Config{Runtime: config.Runtime{Telegram: staleTelegram}}
 	deps, h := newHarness(healthyStore(), before)
 
-	err := Reload(deps, Subsystem("sites"))
+	err := Reload(context.Background(), deps, Subsystem("sites"))
 
 	if !errors.Is(err, ErrUnknownSubsystem) || !strings.Contains(err.Error(), `"sites"`) {
 		t.Fatalf("Reload(sites) = %v, want ErrUnknownSubsystem naming it", err)
@@ -278,14 +289,14 @@ func TestReloadKeepsThePreviousConfigurationWhenTheStoreFails(t *testing.T) {
 			logs := logtest.NewCollector(t)
 			store := healthyStore()
 			deps, h := newHarness(store, config.Config{})
-			if err := loadSubsystems(deps, startupOrder); err != nil {
+			if err := loadSubsystems(context.Background(), deps, startupOrder); err != nil {
 				t.Fatalf("healthy load failed: %v", err)
 			}
 			h.config.Telegram = staleTelegram
 			previous := h.config
 			fail(store)
 
-			err := Reload(deps, subsystem)
+			err := Reload(context.Background(), deps, subsystem)
 
 			if !errors.Is(err, errStoreDown) {
 				t.Fatalf("Reload(%s) = %v, want the store error", subsystem, err)
@@ -308,7 +319,7 @@ func TestVerifyReloadIsAllOrNothing(t *testing.T) {
 	store.system.fail[categoryVerifyCode] = true
 	deps, h := newHarness(store, config.Config{})
 
-	if err := Reload(deps, SubsystemVerify); !errors.Is(err, errStoreDown) {
+	if err := Reload(context.Background(), deps, SubsystemVerify); !errors.Is(err, errStoreDown) {
 		t.Fatalf("Reload(verify) = %v, want the store error", err)
 	}
 	if h.config.Verify.LoginVerify {
@@ -333,13 +344,13 @@ func TestNodeReloadRejectsMalformedSettings(t *testing.T) {
 			logtest.Discard(t)
 			store := healthyStore()
 			deps, h := newHarness(store, config.Config{})
-			if err := Reload(deps, SubsystemNode); err != nil {
+			if err := Reload(context.Background(), deps, SubsystemNode); err != nil {
 				t.Fatalf("healthy node reload failed: %v", err)
 			}
 			previous, managers := h.config, h.managerSettings
 			corrupt(store)
 
-			if err := Reload(deps, SubsystemNode); err == nil {
+			if err := Reload(context.Background(), deps, SubsystemNode); err == nil {
 				t.Fatal("Reload(node) accepted malformed settings")
 			}
 			if changed := changedSections(previous, h.config); len(changed) != 0 || h.managerSettings != managers {
@@ -355,12 +366,12 @@ func TestDeviceReloadRejectsAnUndecodableConfig(t *testing.T) {
 	logtest.Discard(t)
 	store := healthyStore()
 	deps, h := newHarness(store, config.Config{})
-	if err := Reload(deps, SubsystemDevice); err != nil || !h.config.Device.EnableSecurity {
+	if err := Reload(context.Background(), deps, SubsystemDevice); err != nil || !h.config.Device.EnableSecurity {
 		t.Fatalf("healthy device reload: err=%v config=%+v", err, h.config.Device)
 	}
 	store.auth.methods["device"].Config = `{"enable_security":`
 
-	if err := Reload(deps, SubsystemDevice); err == nil {
+	if err := Reload(context.Background(), deps, SubsystemDevice); err == nil {
 		t.Fatal("Reload(device) accepted an undecodable config")
 	}
 	if !h.config.Device.EnableSecurity || h.config.Device.SecuritySecret != "device-secret" {
@@ -381,7 +392,7 @@ func TestAuthMethodsWithoutAnEnabledFlagLoadAsDisabled(t *testing.T) {
 		store.auth.methods[string(subsystem)].Enabled = nil
 		deps, h := newHarness(store, config.Config{})
 
-		if err := Reload(deps, subsystem); err != nil {
+		if err := Reload(context.Background(), deps, subsystem); err != nil {
 			t.Fatalf("Reload(%s) = %v", subsystem, err)
 		}
 		if isEnabled(h.config) {
@@ -398,7 +409,7 @@ func TestStartupStopsAtTheFirstFailingSubsystem(t *testing.T) {
 	store.system.fail[categoryInvite] = true
 	deps, h := newHarness(store, config.Config{})
 
-	err := loadSubsystems(deps, startupOrder)
+	err := loadSubsystems(context.Background(), deps, startupOrder)
 
 	if !errors.Is(err, errStoreDown) || !strings.Contains(err.Error(), "invite") {
 		t.Fatalf("startup error = %v, want the invite read failure", err)
@@ -416,7 +427,7 @@ func TestNodeSecretProvisioning(t *testing.T) {
 	t.Run("generates a missing secret", func(t *testing.T) {
 		store := healthyStore()
 		store.system.settings[categoryNode] = []*system.System{setting(categoryNode, "NodeSecret", "", "string")}
-		if err := NodeSecret(&Dependencies{Store: store}); err != nil {
+		if err := NodeSecret(context.Background(), store.settingsDeps()); err != nil {
 			t.Fatalf("NodeSecret() = %v", err)
 		}
 		if got := store.system.updates["server.NodeSecret"]; len(got) != nodeSecretLength {
@@ -428,7 +439,7 @@ func TestNodeSecretProvisioning(t *testing.T) {
 	t.Run("keeps a secret stored under another type", func(t *testing.T) {
 		store := healthyStore()
 		store.system.settings[categoryNode] = []*system.System{setting(categoryNode, "NodeSecret", "configured-secret", "bool")}
-		if err := NodeSecret(&Dependencies{Store: store}); err != nil {
+		if err := NodeSecret(context.Background(), store.settingsDeps()); err != nil {
 			t.Fatalf("NodeSecret() = %v", err)
 		}
 		if len(store.system.updates) != 0 {
@@ -438,7 +449,7 @@ func TestNodeSecretProvisioning(t *testing.T) {
 	t.Run("returns store errors instead of panicking", func(t *testing.T) {
 		store := healthyStore()
 		store.txErr = errStoreDown
-		if err := NodeSecret(&Dependencies{Store: store}); !errors.Is(err, errStoreDown) {
+		if err := NodeSecret(context.Background(), store.settingsDeps()); !errors.Is(err, errStoreDown) {
 			t.Fatalf("NodeSecret() = %v, want the store error", err)
 		}
 	})

@@ -1,3 +1,5 @@
+// Package payment holds the HTTP handler listing the payment methods a
+// signed-in user can pay with.
 package payment
 
 import (

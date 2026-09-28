@@ -22,7 +22,6 @@ import (
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // EmailRecipientReader is the marketing subdomain's port onto the identity
@@ -59,6 +58,8 @@ type emailTaskError struct {
 	Time  int64  `json:"time"`
 }
 
+// Service runs the marketing tasks for the support facade: it records each
+// task and hands its execution to the task queue.
 type Service struct {
 	tasks      repository.TaskRepo
 	recipients EmailRecipientReader
@@ -67,6 +68,8 @@ type Service struct {
 	stopper    BatchEmailStopper
 }
 
+// NewService builds the marketing service; stopper, which interrupts a
+// running campaign at once, may be nil.
 func NewService(tasks repository.TaskRepo, recipients EmailRecipientReader, selector SubscriptionSelector, queue Queue, stopper BatchEmailStopper) *Service {
 	return &Service{tasks: tasks, recipients: recipients, selector: selector, queue: queue, stopper: stopper}
 }
@@ -87,11 +90,11 @@ func (s *Service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateB
 		return xerr.NewErrCode(xerr.DatabaseQueryError)
 	}
 
-	// 邮箱地址去重
 	emails = slicesx.RemoveDuplicateElements(emails...)
 
+	// The additional addresses are sent to as well; they do not replace the
+	// selected recipients.
 	var additionalEmails []string
-	// 追加额外的邮箱地址（不覆盖）
 	if req.Additional != "" {
 		additionalEmails, err = normalizeAdditionalEmails(req.Additional)
 		if err != nil {
@@ -103,7 +106,9 @@ func (s *Service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateB
 		return xerr.NewErrMsg("No email addresses found for the campaign")
 	}
 
-	scheduledAt := timeutil.Now().Add(10 * time.Second) // 默认延迟10秒执行,防止任务创建和执行时间过于接近
+	// An unscheduled campaign runs ten seconds from now, so its execution
+	// does not start too close to its creation.
+	scheduledAt := timeutil.Now().Add(10 * time.Second)
 	if req.Scheduled != 0 {
 		scheduledAt = time.Unix(req.Scheduled, 0)
 		if scheduledAt.Before(timeutil.Now()) {
@@ -125,7 +130,7 @@ func (s *Service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateB
 	}
 	scopeBytes, err := scopeInfo.Marshal()
 	if err != nil {
-		return errors.Wrap(err, "marshal email task scope")
+		return fmt.Errorf("marshal email task scope: %w", err)
 	}
 
 	taskContent := task.EmailContent{
@@ -134,7 +139,7 @@ func (s *Service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateB
 	}
 	contentBytes, err := taskContent.Marshal()
 	if err != nil {
-		return errors.Wrap(err, "marshal email task content")
+		return fmt.Errorf("marshal email task content: %w", err)
 	}
 
 	var total uint64
@@ -267,7 +272,7 @@ func (s *Service) GetBatchSendEmailTaskList(ctx context.Context, req *dto.GetBat
 		if entries := errorsByTask[t.Id]; len(entries) > 0 {
 			encoded, marshalErr := json.Marshal(entries)
 			if marshalErr != nil {
-				return nil, errors.Wrap(marshalErr, "marshal email task errors")
+				return nil, fmt.Errorf("marshal email task errors: %w", marshalErr)
 			}
 			errorText = string(encoded)
 		}
@@ -317,7 +322,7 @@ func (s *Service) GetBatchSendEmailTaskStatus(ctx context.Context, req *dto.GetB
 		}
 		encoded, marshalErr := json.Marshal(entries)
 		if marshalErr != nil {
-			return nil, errors.Wrap(marshalErr, "marshal email task errors")
+			return nil, fmt.Errorf("marshal email task errors: %w", marshalErr)
 		}
 		errorText = string(encoded)
 	}
@@ -344,7 +349,7 @@ func (s *Service) StopBatchSendEmailTask(ctx context.Context, req *dto.StopBatch
 	if s.stopper != nil {
 		s.stopper.StopBatchEmail(req.Id)
 	} else {
-		logger.Error("[StopBatchSendEmailTaskLogic] email worker manager is nil, cannot stop task")
+		logger.WithContext(ctx).Error("[StopBatchSendEmailTask] email worker manager is nil, cannot stop task")
 	}
 	return nil
 }
@@ -362,10 +367,10 @@ func (s *Service) CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskR
 	})
 	if err != nil {
 		log.Errorf("[CreateQuotaTask] find subscribers error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find subscribers error")
+		return xerr.Errorf(xerr.DatabaseQueryError, "find subscribers error")
 	}
 	if len(subIds) == 0 {
-		return errors.Wrapf(xerr.NewErrMsg("No subscribers found"), "no subscribers found")
+		return fmt.Errorf("no subscribers found: %w", xerr.NewErrMsg("No subscribers found"))
 	}
 
 	metadata, _ := requestmeta.From(ctx)
@@ -379,7 +384,7 @@ func (s *Service) CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskR
 	}
 	scopeBytes, err := scopeInfo.Marshal()
 	if err != nil {
-		return errors.Wrap(err, "marshal quota task scope")
+		return fmt.Errorf("marshal quota task scope: %w", err)
 	}
 	contentInfo := task.QuotaContent{
 		ResetTraffic: req.ResetTraffic,
@@ -389,7 +394,7 @@ func (s *Service) CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskR
 	}
 	contentBytes, err := contentInfo.Marshal()
 	if err != nil {
-		return errors.Wrap(err, "marshal quota task content")
+		return fmt.Errorf("marshal quota task content: %w", err)
 	}
 
 	newTask := &task.Task{
@@ -404,13 +409,13 @@ func (s *Service) CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskR
 
 	if err := s.tasks.Insert(ctx, newTask); err != nil {
 		log.Errorf("[CreateQuotaTask] create task error: %v", err.Error())
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "create task error")
+		return xerr.Errorf(xerr.DatabaseInsertError, "create task error")
 	}
 
 	if err := s.queue.EnqueueQuota(ctx, newTask.Id); err != nil {
 		log.Errorf("[CreateQuotaTask] enqueue task error: %v", err.Error())
 		s.markTaskEnqueueFailed(ctx, newTask, fmt.Sprintf("enqueue quota task: %v", err))
-		return errors.Wrapf(xerr.NewErrCode(xerr.QueueEnqueueError), "enqueue task error")
+		return xerr.Errorf(xerr.QueueEnqueueError, "enqueue task error")
 	}
 	logger.Infof("[CreateQuotaTask] Successfully created task with ID: %d", newTask.Id)
 	return nil
@@ -439,7 +444,8 @@ func (s *Service) QueryQuotaTaskList(ctx context.Context, req *dto.QueryQuotaTas
 		return nil, xerr.NewErrCode(xerr.DatabaseQueryError)
 	}
 
-	var list []dto.QuotaTask
+	// No task is an empty list, not null, as in the campaign list.
+	list := make([]dto.QuotaTask, 0, len(data))
 	for _, item := range data {
 		var scopeInfo task.QuotaScope
 		if err = scopeInfo.Unmarshal([]byte(item.Scope)); err != nil {
@@ -495,23 +501,6 @@ func (s *Service) QueryQuotaTaskPreCount(ctx context.Context, req *dto.QueryQuot
 		return nil, xerr.NewErrCode(xerr.DatabaseQueryError)
 	}
 	return &dto.QueryQuotaTaskPreCountResponse{Count: count}, nil
-}
-
-func (s *Service) QueryQuotaTaskStatus(ctx context.Context, req *dto.QueryQuotaTaskStatusRequest) (*dto.QueryQuotaTaskStatusResponse, error) {
-	if req == nil || req.Id <= 0 {
-		return nil, xerr.NewErrMsg("invalid task id")
-	}
-	data, err := s.tasks.FindOneByType(ctx, req.Id, task.TypeQuota)
-	if err != nil {
-		logger.WithContext(ctx).Errorf("[QueryQuotaTaskStatus] failed to get quota task: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), " failed to get quota task: %v", err.Error())
-	}
-	return &dto.QueryQuotaTaskStatusResponse{
-		Status:  uint8(data.Status),
-		Current: int64(data.Current),
-		Total:   int64(data.Total),
-		Errors:  data.Errors,
-	}, nil
 }
 
 func (s *Service) markTaskEnqueueFailed(ctx context.Context, data *task.Task, reason string) {

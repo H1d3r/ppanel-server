@@ -39,7 +39,7 @@ func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 	// Each code costs the operator money; outside the configured countries a
 	// script could pump premium-rate numbers.
 	if cfg.MobileWhitelistEnabled && !areaCodeAllowed(req.TelephoneAreaCode, cfg.MobileWhitelist) {
-		return nil, fmt.Errorf("area code %q is not allowed: %w", req.TelephoneAreaCode, xerr.NewErrCode(xerr.TelephoneError))
+		return nil, xerr.Errorf(xerr.TelephoneError, "area code %q is not allowed", req.TelephoneAreaCode)
 	}
 	phoneNumber, err := identifier.FormatToE164(req.TelephoneAreaCode, req.Telephone)
 	if err != nil {
@@ -52,33 +52,33 @@ func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 		interval = 60
 	}
 	limiter := ratelimit.NewPeriodLimit(int(interval), 1, s.deps.Redis, fmt.Sprintf("%smobile:%s:", config.SendIntervalKeyPrefix, verifyType))
-	permit, err := limiter.Take(phoneNumber)
+	permit, err := limiter.Take(ctx, phoneNumber)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "take the send interval permit")
 	}
 	if !limiter.ParsePermitState(permit) {
-		return nil, fmt.Errorf("send sms too many requests: %w", xerr.NewErrCode(xerr.TooManyRequests))
+		return nil, xerr.Errorf(xerr.TooManyRequests, "send sms too many requests")
 	}
 	dailyLimit := cfg.VerifyCodeLimit
 	if dailyLimit <= 0 {
 		dailyLimit = 15
 	}
 	dailyLimiter := ratelimit.NewPeriodLimit(86400, int(dailyLimit), s.deps.Redis, config.SendCountLimitKeyPrefix, ratelimit.Align())
-	permit, err = dailyLimiter.Take(fmt.Sprintf("%s:%s:%s", "mobile", verifyType, phoneNumber))
+	permit, err = dailyLimiter.Take(ctx, fmt.Sprintf("%s:%s:%s", "mobile", verifyType, phoneNumber))
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "take the daily send permit")
 	}
 	if !dailyLimiter.ParsePermitState(permit) {
-		return nil, fmt.Errorf("this account has reached the limit of sending times today: %w", xerr.NewErrCode(xerr.TodaySendCountExceedsLimit))
+		return nil, xerr.Errorf(xerr.TodaySendCountExceedsLimit, "this account has reached the limit of sending times today")
 	}
 	m, err := s.deps.Store.UserAuth().FindUserAuthMethodByOpenID(ctx, identifier.Mobile, phoneNumber)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find mobile identity")
 	}
 	if verifyType == auth.Register && m.Id > 0 {
-		return nil, fmt.Errorf("mobile already bound: %w", xerr.NewErrCode(xerr.UserExist))
+		return nil, xerr.Errorf(xerr.UserExist, "mobile already bound")
 	} else if verifyType == auth.Security && m.Id == 0 {
-		return nil, fmt.Errorf("mobile not bound: %w", xerr.NewErrCode(xerr.UserNotExist))
+		return nil, xerr.Errorf(xerr.UserNotExist, "mobile not bound")
 	}
 
 	metadata, _ := requestmeta.From(ctx)

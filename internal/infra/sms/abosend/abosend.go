@@ -1,3 +1,4 @@
+// Package abosend sends text messages through the Abosend HTTP API.
 package abosend
 
 import (
@@ -13,11 +14,13 @@ import (
 	"github.com/perfect-panel/server/pkg/random"
 )
 
+// BaseURL is the API domain of a configuration that names none.
 const BaseURL = "https://smsapi.abosend.com"
 
 // maxResponseBytes bounds how much of a provider response is read.
 const maxResponseBytes = 1 << 20
 
+// Config is the stored provider configuration.
 type Config struct {
 	ApiDomain string `json:"api_domain"`
 	Access    string `json:"access"`
@@ -25,6 +28,7 @@ type Config struct {
 	Template  string `json:"template"`
 }
 
+// Client sends through one Abosend account.
 type Client struct {
 	config  Config
 	baseURL string

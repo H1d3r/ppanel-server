@@ -3,36 +3,21 @@ package application
 import (
 	"context"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
-	"github.com/perfect-panel/server/internal/module/platform/entity/client"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/client"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type CreateSubscribeApplicationLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewCreateSubscribeApplicationLogic Create subscribe application
-func newCreateSubscribeApplicationLogic(ctx context.Context, deps Deps) *CreateSubscribeApplicationLogic {
-	return &CreateSubscribeApplicationLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *CreateSubscribeApplicationLogic) CreateSubscribeApplication(req *dto.CreateSubscribeApplicationRequest) (resp *dto.SubscribeApplication, err error) {
-	var link client.DownloadLink
-	mapping.DeepCopy(&link, req.DownloadLink)
+// CreateSubscribeApplication stores a client application and returns it as
+// stored, with the download links as the request gave them.
+func (s *Service) CreateSubscribeApplication(ctx context.Context, req *dto.CreateSubscribeApplicationRequest) (*dto.SubscribeApplication, error) {
+	log := logger.WithContext(ctx)
+	link := client.DownloadLink(req.DownloadLink)
 	linkData, err := link.Marshal()
 	if err != nil {
-		l.Errorf("Failed to marshal download link: %v", err)
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.ERROR), " Failed to marshal download link")
+		log.Errorf("Failed to marshal download link: %v", err)
+		return nil, xerr.Errorf(xerr.ERROR, " Failed to marshal download link")
 	}
 	data := &client.SubscribeApplication{
 		Name:              req.Name,
@@ -47,15 +32,11 @@ func (l *CreateSubscribeApplicationLogic) CreateSubscribeApplication(req *dto.Cr
 		DownloadLink:      string(linkData),
 	}
 
-	err = l.deps.Clients.Insert(l.ctx, data)
-	if err != nil {
-		l.Errorf("Failed to create subscribe application: %v", err)
-		return nil, errors.Wrap(xerr.NewErrCode(xerr.DatabaseInsertError), "Failed to create subscribe application")
+	if err := s.deps.Clients.Insert(ctx, data); err != nil {
+		log.Errorf("Failed to create subscribe application: %v", err)
+		return nil, xerr.Errorf(xerr.DatabaseInsertError, "Failed to create subscribe application")
 	}
 
-	resp = &dto.SubscribeApplication{}
-	mapping.DeepCopy(resp, data)
-	resp.DownloadLink = req.DownloadLink
-
-	return
+	resp := applicationView(data, req.DownloadLink)
+	return &resp, nil
 }

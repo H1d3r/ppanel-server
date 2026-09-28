@@ -1,27 +1,8 @@
 package systemsetting
 
-import (
-	"context"
+import "context"
 
-	"github.com/perfect-panel/server/pkg/logger"
-)
-
-type SettingTelegramBotLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewSettingTelegramBotLogic setting telegram bot
-func newSettingTelegramBotLogic(ctx context.Context, deps Deps) *SettingTelegramBotLogic {
-	return &SettingTelegramBotLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *SettingTelegramBotLogic) SettingTelegramBot() error {
-	l.deps.reinit("telegram")
-	return nil
+// SettingTelegramBot reloads the Telegram bot from its stored settings.
+func (s *Service) SettingTelegramBot(_ context.Context) error {
+	return s.deps.reinit("telegram")
 }

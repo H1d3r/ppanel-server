@@ -12,6 +12,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// ServerUpdater is the part of the network facade UpdateServerHandler
+// calls.
+type ServerUpdater interface {
+	UpdateServer(ctx context.Context, req *dto.UpdateServerRequest) error
+}
+
+var _ ServerUpdater = network.Service(nil)
+
 // UpdateServerHandler documents Update Server.
 //
 // @Summary Update Server
@@ -22,7 +30,7 @@ import (
 // @Param request body dto.UpdateServerRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/admin/server/update [post]
-func UpdateServerHandler(service network.Service) app.HandlerFunc {
+func UpdateServerHandler(service ServerUpdater) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.UpdateServerRequest
 		if err := httpx.ShouldBind(ctx, &req); err != nil {

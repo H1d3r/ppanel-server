@@ -1,3 +1,9 @@
+// Package devicesocket keeps the WebSocket connections of signed-in client
+// devices. It tracks the sockets each user holds, caps how many one user may
+// keep open, answers heartbeats and drops silent sockets, and lets the
+// application push to or kick a device. It knows users and devices only by
+// their IDs: the online, offline and kick callbacks leave recording presence
+// and ending sessions to the application, which owns the accounts.
 package devicesocket
 
 import (
@@ -285,7 +291,7 @@ func (dm *DeviceManager) StartHeartbeatCheck() {
 func (dm *DeviceManager) checkHeartbeats() {
 	now := time.Now()
 
-	dm.userDevices.Range(func(userID, val interface{}) bool {
+	dm.userDevices.Range(func(userID, val any) bool {
 		uid := userID.(int64)
 
 		mu := dm.getUserMutex(uid)
@@ -355,7 +361,7 @@ func (dm *DeviceManager) SendToDevice(userID int64, deviceID string, message str
 // Broadcast sends a message to all devices
 func (dm *DeviceManager) Broadcast(message string) {
 	go func(message string) {
-		dm.userDevices.Range(func(userID, val interface{}) bool {
+		dm.userDevices.Range(func(userID, val any) bool {
 			for _, d := range dm.snapshotDevices(userID.(int64)) {
 				_ = d.write(message)
 			}
@@ -371,7 +377,7 @@ func (dm *DeviceManager) Shutdown(ctx context.Context) {
 	dm.Stop()
 	logger.Info("shutting down all device websocket connections")
 
-	dm.userDevices.Range(func(userID, val interface{}) bool {
+	dm.userDevices.Range(func(userID, val any) bool {
 		uid := userID.(int64)
 		for _, d := range dm.snapshotDevices(uid) {
 			dm.removeDevice(uid, d)

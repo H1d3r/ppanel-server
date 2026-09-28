@@ -29,11 +29,11 @@ Makefile 执行与 CI 相同的检查。所需的 Go 工具（goimports、golang
 
 | 命令 | 作用 |
 |---|---|
-| `make check` | 格式检查、`go vet`、对改动行运行 golangci-lint、单元测试。推送前请运行。 |
+| `make check` | 格式检查、`go vet`、golangci-lint、单元测试。推送前请运行。 |
 | `make fmt` / `make fmt-check` | 改写 / 检查格式（`gofmt` 与 `goimports`）。 |
 | `make vet` | `go vet ./...` |
-| `make lint-new LINT_BASE=origin/dev` | golangci-lint，只报告 `LINT_BASE`（默认 `HEAD`，即未提交的改动）之后改动的行。在存量代码清理完之前，CI 以这种方式检查 PR。 |
-| `make lint` | 对整个代码树运行 golangci-lint。 |
+| `make lint` | 对整个代码树运行 golangci-lint，与 CI 一致：有任何问题都会失败。 |
+| `make lint-new LINT_BASE=origin/dev` | golangci-lint，只报告 `LINT_BASE`（默认 `HEAD`，即未提交的改动）之后改动的行；pre-commit 钩子用它做快速检查。 |
 | `make test` / `make test-race` | 单元测试，可选开启竞态检测。 |
 | `make vulncheck` | 用 govulncheck 检查可达的已知漏洞。 |
 | `make proto` / `make proto-check` | 重新生成 `api/**/*.pb.go` / 提交的文件与生成结果不一致时失败。需要 `PATH` 上有 protoc 21.12（显示为 `libprotoc 3.21.12`）；protoc-gen-go 按 `go.mod` 要求的版本构建。 |

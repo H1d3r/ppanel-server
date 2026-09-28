@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 	"github.com/perfect-panel/server/pkg/httpx"
@@ -20,7 +19,7 @@ import (
 // @Param request body dto.CurrencyConfig true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/admin/system/currency_config [put]
-func UpdateCurrencyConfigHandler(service platform.Service) app.HandlerFunc {
+func UpdateCurrencyConfigHandler(service Settings) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.CurrencyConfig
 		if err := httpx.ShouldBind(c, &req); err != nil {

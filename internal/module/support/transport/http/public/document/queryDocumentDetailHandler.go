@@ -1,3 +1,4 @@
+// Package document holds the Hertz handlers of the help documents users read.
 package document
 
 import (

@@ -144,7 +144,7 @@ func (g *cryptomusGateway) Reconcile(ctx context.Context, req CloseRequest) (Rec
 		// Even an explicit payment-not-found answer cannot close a started
 		// checkout: invoice creation may still be in flight after a timeout,
 		// before its UUID was persisted locally.
-		return Reconciliation{}, fmt.Errorf("cannot safely expire Cryptomus order %s: %v: %w", o.OrderNo, err, ErrUnconfirmed)
+		return Reconciliation{}, fmt.Errorf("cannot safely expire Cryptomus order %s: %w: %w", o.OrderNo, err, ErrUnconfirmed)
 	}
 	// Validate identity and the immutable amount before trusting any state,
 	// including a cancellation that would release stock and wallet credit.

@@ -1,3 +1,7 @@
+// Package token signs and parses the HS256 JSON Web Tokens the server hands
+// out: the session tokens of package usersession and billing's order event
+// tickets. It checks only the signature and the expiry; what a token grants
+// is for the package that issued it to decide.
 package token
 
 import (
@@ -35,7 +39,7 @@ func NewJwtToken(secretKey string, iat, seconds int64, opt ...Option) (string, e
 
 // ParseJwtToken Parse jwt token and return claims.
 func ParseJwtToken(tokenString, secretKey string) (jwt.MapClaims, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 		return []byte(secretKey), nil
 	})
 	if err != nil {

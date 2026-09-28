@@ -19,7 +19,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -43,7 +42,7 @@ func NewService(orders settle.Orders, queue settle.Queue, gateways *gateway.Regi
 func (s *Service) Notify(ctx context.Context, n gateway.Notification) error {
 	method, ok := ctx.Value(requestctx.CtxKeyPayment).(*payment.Payment)
 	if !ok {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.ERROR), "payment config not found")
+		return xerr.Errorf(xerr.ERROR, "payment config not found")
 	}
 	if err := s.notify(ctx, method, n); err != nil {
 		logger.WithContext(ctx).Errorw("[PaymentNotify] Callback rejected",
@@ -67,7 +66,7 @@ func (s *Service) notify(ctx context.Context, method *payment.Payment, n gateway
 	}
 	orderInfo, err := s.orders.FindOneByOrderNo(ctx, notice.OrderNo)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not exist: %v", notice.OrderNo)
+		return xerr.Errorf(xerr.OrderNotExist, "order not exist: %v", notice.OrderNo)
 	}
 	if err != nil {
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", notice.OrderNo)

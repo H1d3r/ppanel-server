@@ -8,32 +8,18 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type QueryUserBalanceLogLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewQueryUserBalanceLogLogic Query User Balance Log
-func newQueryUserBalanceLogLogic(ctx context.Context, deps Deps) *QueryUserBalanceLogLogic {
-	return &QueryUserBalanceLogLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *QueryUserBalanceLogLogic) QueryUserBalanceLog() (resp *dto.QueryUserBalanceLogListResponse, err error) {
-	u, ok := user.FromContext(l.ctx)
+// QueryUserBalanceLog lists the current user's latest 100 balance movements.
+// An entry whose content cannot be decoded is logged and left out.
+func (s *Service) QueryUserBalanceLog(ctx context.Context) (*dto.QueryUserBalanceLogListResponse, error) {
+	u, ok := user.FromContext(ctx)
 	if !ok {
-		logger.Error("current user is not found in context")
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		logger.WithContext(ctx).Error("current user is not found in context")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "Invalid Access")
 	}
 
-	data, total, err := l.deps.Logs.FilterSystemLog(l.ctx, &log.FilterParams{
+	data, total, err := s.deps.Logs.FilterSystemLog(ctx, &log.FilterParams{
 		Page:     1,
 		Size:     100,
 		Type:     log.TypeBalance.Uint8(),
@@ -46,8 +32,8 @@ func (l *QueryUserBalanceLogLogic) QueryUserBalanceLog() (resp *dto.QueryUserBal
 	list := make([]dto.BillingBalanceLogSnapshot, 0)
 	for _, datum := range data {
 		var content log.Balance
-		if err = content.Unmarshal([]byte(datum.Content)); err != nil {
-			l.Errorf("[QueryUserBalanceLog] unmarshal balance log content failed: %v", err.Error())
+		if err := content.Unmarshal([]byte(datum.Content)); err != nil {
+			logger.WithContext(ctx).Errorf("[QueryUserBalanceLog] unmarshal balance log content failed: %v", err.Error())
 			continue
 		}
 		list = append(list, dto.BillingBalanceLogSnapshot{

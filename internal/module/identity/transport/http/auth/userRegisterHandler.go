@@ -10,6 +10,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// UserRegisterService is the part of the identity facade UserRegisterHandler
+// calls.
+type UserRegisterService interface {
+	UserRegister(ctx context.Context, req *dto.UserRegisterRequest) (*dto.LoginResponse, error)
+}
+
+var _ UserRegisterService = identity.Service(nil)
+
 // UserRegisterHandler documents registers a user..
 //
 // @Summary registers a user.
@@ -19,7 +27,7 @@ import (
 // @Param request body dto.UserRegisterRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/register [post]
-func UserRegisterHandler(service identity.Service) app.HandlerFunc {
+func UserRegisterHandler(service UserRegisterService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.UserRegisterRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

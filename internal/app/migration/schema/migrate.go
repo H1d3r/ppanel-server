@@ -1,3 +1,6 @@
+// Package schema migrates the database schema with the SQL migrations of both
+// dialects embedded in the binary, and seeds the first administrator of a
+// fresh installation.
 package schema
 
 import (
@@ -16,6 +19,8 @@ import (
 
 //go:embed database/mysql/*.sql database/postgres/*.sql
 var sqlFiles embed.FS
+
+// NoChange is the error Up returns when the schema is already current.
 var NoChange = migrate.ErrNoChange
 
 // pgxScheme selects golang-migrate's pgx/v5 database driver. PostgreSQL

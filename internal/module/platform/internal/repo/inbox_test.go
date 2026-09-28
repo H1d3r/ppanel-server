@@ -4,9 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/perfect-panel/server/internal/repository"
-
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
+	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )

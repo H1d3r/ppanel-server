@@ -1,3 +1,8 @@
+// Package trafficagg is the network module's traffic pipeline. Node reports
+// accumulate in per-minute Redis buckets; a scheduled flush bills each bucket
+// to the subscriptions' usage and writes the traffic log, retrying a failed
+// bucket until it moves to the dead letters. The flush also persists the
+// servers' latest report times.
 package trafficagg
 
 import (
@@ -12,7 +17,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 	trafficEntity "github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	"github.com/perfect-panel/server/internal/module/subscription"
-	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/redis/go-redis/v9"
@@ -49,12 +53,16 @@ const (
 // overflow.
 const MaxReportedTraffic int64 = 10 << 40
 
+// UserTraffic is one entry of a node's traffic report: the bytes one
+// subscription used since the previous report.
 type UserTraffic struct {
 	SID      int64
 	Upload   int64
 	Download int64
 }
 
+// Aggregator is the traffic pipeline: it collects the node reports and
+// flushes them to the usage counters and the traffic log.
 type Aggregator struct {
 	deps Deps
 }
@@ -71,21 +79,15 @@ type trafficDelta struct {
 	Download    int64
 }
 
-// Store exposes network persistence and subscription reads. Usage writes are
-// performed by the injected subscription service, not this store.
-type Store interface {
-	Inbox() repository.InboxRepo
-	Node() repository.NodeRepo
-	UserSubscription() repository.UserSubscriptionRepo
-	InNetworkTx(context.Context, func(repository.NetworkStore) error) error
-}
-
 // Deps declares the network pipeline's collaborators. Queue adapters receive
-// this pipeline through the network facade.
+// this pipeline through the network facade. Usage writes are performed by
+// the injected subscription service, not the store.
 type Deps struct {
 	Store Store
 	Usage subscription.TrafficUsage
 	Redis *redis.Client
+	// Subscriptions reads the owners of the subscriptions a bucket charges.
+	Subscriptions SubscriptionReader
 	// TrafficReportThreshold reads the runtime-mutable minimum report size;
 	// nil means no minimum.
 	TrafficReportThreshold func() int64
@@ -98,10 +100,12 @@ type Deps struct {
 	ServedSubscriptions func(ctx context.Context, serverID int64, protocol string) (map[int64]struct{}, error)
 }
 
+// New returns the pipeline over deps.
 func New(deps Deps) *Aggregator {
 	return &Aggregator{deps: deps}
 }
 
+// AddReport adds a server's traffic report for a protocol, received now.
 func (a *Aggregator) AddReport(ctx context.Context, serverInfo *node.Server, protocol string, logs []UserTraffic) error {
 	return a.AddReportAt(ctx, serverInfo, protocol, logs, timeutil.Now())
 }
@@ -119,6 +123,10 @@ func (a *Aggregator) RecordServerReport(ctx context.Context, serverID int64, rep
 	return a.deps.Redis.HSet(ctx, serverLastReportedKey, strconv.FormatInt(serverID, 10), strconv.FormatInt(reportedAt.UnixMilli(), 10)).Err()
 }
 
+// AddReportAt records the report as the server's heartbeat and adds its
+// entries, scaled by the protocol ratio and the multiplier in effect, to the
+// bucket of now's minute. An entry that is invalid, at most the report
+// threshold, or for a subscription the server does not serve is dropped.
 func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, protocol string, logs []UserTraffic, now time.Time) error {
 	if a == nil || a.deps.Redis == nil {
 		return errors.New("traffic aggregator is not initialized")
@@ -168,10 +176,8 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 	}
 	// Entries are checked one by one: an invalid or foreign entry is dropped
 	// and logged without costing the rest of the report.
-	var (
-		served            map[int64]struct{}
-		invalid, unserved droppedEntries
-	)
+	var invalid, unserved droppedEntries
+	scope := servedScope{resolve: a.deps.ServedSubscriptions}
 	reported := make(map[int64]int64, len(logs))
 	trafficOps := 0
 	for _, item := range logs {
@@ -186,27 +192,21 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 		if total <= threshold {
 			continue
 		}
-		if a.deps.ServedSubscriptions != nil {
-			if served == nil {
-				if served, err = a.deps.ServedSubscriptions(ctx, serverInfo.Id, protocol); err != nil {
-					// Nothing can be attributed without the scope; the
-					// heartbeat is still recorded.
-					if _, execErr := pipe.Exec(ctx); execErr != nil {
-						logger.WithContext(ctx).Error("[TrafficAggregator] Record server report failed",
-							logger.Field("server_id", serverInfo.Id),
-							logger.Field("error", execErr.Error()),
-						)
-					}
-					return fmt.Errorf("resolve served subscriptions: %w", err)
-				}
-				if served == nil {
-					served = map[int64]struct{}{}
-				}
+		serves, err := scope.serves(ctx, serverInfo.Id, protocol, item.SID)
+		if err != nil {
+			// Nothing can be attributed without the scope; the heartbeat is
+			// still recorded.
+			if _, execErr := pipe.Exec(ctx); execErr != nil {
+				logger.WithContext(ctx).Error("[TrafficAggregator] Record server report failed",
+					logger.Field("server_id", serverInfo.Id),
+					logger.Field("error", execErr.Error()),
+				)
 			}
-			if _, ok := served[item.SID]; !ok {
-				unserved.add(item.SID)
-				continue
-			}
+			return fmt.Errorf("resolve served subscriptions: %w", err)
+		}
+		if !serves {
+			unserved.add(item.SID)
+			continue
 		}
 		// Repeated entries for one subscription share the per-report bound.
 		if reported[item.SID] > MaxReportedTraffic-total {
@@ -220,24 +220,7 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 		pipe.HIncrBy(ctx, bucketKey, trafficField(serverInfo.Id, item.SID, trafficFieldUpload), upload)
 		trafficOps++
 	}
-	if invalid.count > 0 {
-		logger.WithContext(ctx).Error("[TrafficAggregator] Dropped invalid traffic entries",
-			logger.Field("server_id", serverInfo.Id),
-			logger.Field("protocol", protocol),
-			logger.Field("count", invalid.count),
-			logger.Field("sids", invalid.sids),
-		)
-	}
-	if unserved.count > 0 {
-		// A few are expected around a user-list refresh (a subscription that
-		// just expired or moved plans); many point at a misbehaving node.
-		logger.WithContext(ctx).Info("[TrafficAggregator] Dropped traffic for subscriptions the server does not serve",
-			logger.Field("server_id", serverInfo.Id),
-			logger.Field("protocol", protocol),
-			logger.Field("count", unserved.count),
-			logger.Field("sids", unserved.sids),
-		)
-	}
+	logDropped(ctx, serverInfo.Id, protocol, invalid, unserved)
 
 	if trafficOps > 0 {
 		pipe.Expire(ctx, bucketKey, bucketTTL)
@@ -251,6 +234,55 @@ func (a *Aggregator) AddReportAt(ctx context.Context, serverInfo *node.Server, p
 	return err
 }
 
+// servedScope resolves, at most once per report, the subscriptions a server
+// serves over a protocol; without a resolver every subscription is served.
+type servedScope struct {
+	resolve  func(ctx context.Context, serverID int64, protocol string) (map[int64]struct{}, error)
+	served   map[int64]struct{}
+	resolved bool
+}
+
+func (s *servedScope) serves(ctx context.Context, serverID int64, protocol string, sid int64) (bool, error) {
+	if s.resolve == nil {
+		return true, nil
+	}
+	if !s.resolved {
+		served, err := s.resolve(ctx, serverID, protocol)
+		if err != nil {
+			return false, err
+		}
+		s.served, s.resolved = served, true
+	}
+	_, ok := s.served[sid]
+	return ok, nil
+}
+
+// logDropped reports the entries a traffic report lost: invalid ones are
+// errors; a few unserved ones are expected around a user-list refresh (a
+// subscription that just expired or moved plans), many point at a
+// misbehaving node.
+func logDropped(ctx context.Context, serverID int64, protocol string, invalid, unserved droppedEntries) {
+	if invalid.count > 0 {
+		logger.WithContext(ctx).Error("[TrafficAggregator] Dropped invalid traffic entries",
+			logger.Field("server_id", serverID),
+			logger.Field("protocol", protocol),
+			logger.Field("count", invalid.count),
+			logger.Field("sids", invalid.sids),
+		)
+	}
+	if unserved.count > 0 {
+		logger.WithContext(ctx).Info("[TrafficAggregator] Dropped traffic for subscriptions the server does not serve",
+			logger.Field("server_id", serverID),
+			logger.Field("protocol", protocol),
+			logger.Field("count", unserved.count),
+			logger.Field("sids", unserved.sids),
+		)
+	}
+}
+
+// FlushDueBuckets flushes every bucket of a minute before now's, then the
+// servers' report times. A failing bucket does not stop the others; the
+// failures are returned together.
 func (a *Aggregator) FlushDueBuckets(ctx context.Context, now time.Time) error {
 	if a == nil || a.deps.Redis == nil {
 		return errors.New("traffic aggregator is not initialized")
@@ -287,6 +319,8 @@ func (a *Aggregator) FlushDueBuckets(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+// FlushServerReports persists the servers' latest report times and drops
+// those that did not change meanwhile from Redis.
 func (a *Aggregator) FlushServerReports(ctx context.Context) error {
 	values, err := a.deps.Redis.HGetAll(ctx, serverLastReportedKey).Result()
 	if err != nil {
@@ -297,7 +331,7 @@ func (a *Aggregator) FlushServerReports(ctx context.Context) error {
 	}
 
 	reports := make(map[int64]time.Time, len(values))
-	args := make([]interface{}, 0, len(values)*2)
+	args := make([]any, 0, len(values)*2)
 	for field, value := range values {
 		serverID, parseErr := strconv.ParseInt(field, 10, 64)
 		if parseErr != nil || serverID <= 0 {
@@ -314,7 +348,7 @@ func (a *Aggregator) FlushServerReports(ctx context.Context) error {
 		return nil
 	}
 
-	if err := a.deps.Store.Node().BatchUpdateServerLastReportedAt(ctx, reports); err != nil {
+	if err := a.deps.Store.BatchUpdateServerLastReportedAt(ctx, reports); err != nil {
 		return err
 	}
 	return redis.NewScript(conditionalHDelLua).Run(ctx, a.deps.Redis, []string{serverLastReportedKey}, args...).Err()
@@ -322,11 +356,14 @@ func (a *Aggregator) FlushServerReports(ctx context.Context) error {
 
 func (a *Aggregator) flushBucket(ctx context.Context, suffix string) error {
 	if _, err := parseBucketTime(suffix); err != nil {
+		// A key that names no bucket can never be flushed: drop it from the
+		// index rather than retry it forever.
+		logger.WithContext(ctx).Errorw("[TrafficAggregator] dropping a malformed bucket", logger.Field("suffix", suffix), logger.Field("error", err.Error()))
 		pipe := a.deps.Redis.Pipeline()
 		pipe.ZRem(ctx, bucketIndexKey, suffix)
 		pipe.Del(ctx, bucketFailureKey(suffix))
-		_, _ = pipe.Exec(ctx)
-		return nil
+		_, dropErr := pipe.Exec(ctx)
+		return dropErr
 	}
 
 	aggregateKey := bucketPrefix + suffix
@@ -434,7 +471,7 @@ func (a *Aggregator) moveBucketToDeadLetter(ctx context.Context, suffix, process
 	}
 	metaKey := deadLetterMetaKey(deadLetterKey)
 	pipe := a.deps.Redis.Pipeline()
-	pipe.HSet(ctx, metaKey, map[string]interface{}{
+	pipe.HSet(ctx, metaKey, map[string]any{
 		"bucket":         suffix,
 		"source_key":     processingKey,
 		"deadletter_key": deadLetterKey,
@@ -505,7 +542,10 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 		subscribeIDs = append(subscribeIDs, delta.SubscribeId)
 	}
 
-	subs, err := a.deps.Store.UserSubscription().FindSubscribesByIds(ctx, subscribeIDs)
+	if a.deps.Subscriptions == nil {
+		return errors.New("subscription reads are not configured")
+	}
+	subs, err := a.deps.Subscriptions.SubscriptionsByIDs(ctx, subscribeIDs)
 	if err != nil {
 		return err
 	}
@@ -572,11 +612,11 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 	if processed {
 		return nil
 	}
-	return a.deps.Store.InNetworkTx(ctx, func(store repository.NetworkStore) error {
-		if err := store.TrafficLog().InsertBatch(ctx, logs, defaultTrafficBatchSize); err != nil {
+	return a.deps.Store.InTrafficLogTx(ctx, func(tx TrafficLogTx) error {
+		if err := tx.InsertTrafficLogs(ctx, logs, defaultTrafficBatchSize); err != nil {
 			return err
 		}
-		return store.Inbox().Insert(ctx, networkTrafficBucketConsumer, suffix, "")
+		return tx.InsertInboxRecord(ctx, networkTrafficBucketConsumer, suffix)
 	})
 }
 
@@ -584,7 +624,7 @@ func (a *Aggregator) persistBucket(ctx context.Context, suffix string, deltas []
 const networkTrafficBucketConsumer = "network.traffic_bucket"
 
 func (a *Aggregator) bucketProcessed(ctx context.Context, consumer, suffix string) (bool, error) {
-	mark, err := a.deps.Store.Inbox().Find(ctx, consumer, suffix)
+	mark, err := a.deps.Store.FindInboxRecord(ctx, consumer, suffix)
 	if err != nil {
 		return false, err
 	}

@@ -1,3 +1,8 @@
+// Package password hashes account passwords with argon2id and checks sign-in
+// attempts against the stored hash. It also checks the older formats,
+// PPanel's own PBKDF2 and the md5, sha256 and bcrypt hashes of accounts
+// imported from other panels, so those users can still sign in and have their
+// hash upgraded to argon2id.
 package password
 
 import (
@@ -70,8 +75,8 @@ func EncodePassWord(str string) string {
 
 // UserColumns returns the user-row columns that store plain as a fresh
 // argon2id hash, for column-scoped updates.
-func UserColumns(plain string) map[string]interface{} {
-	return map[string]interface{}{
+func UserColumns(plain string) map[string]any {
+	return map[string]any{
 		"password": EncodePassWord(plain),
 		"algo":     PasswordAlgoArgon2id,
 		"salt":     "",

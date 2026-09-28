@@ -3,7 +3,6 @@ package profile
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
@@ -22,11 +21,11 @@ func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallb
 	}
 	current, ok := user.FromContext(ctx)
 	if !ok {
-		return fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return xerr.Errorf(xerr.InvalidAccess, "no signed-in user")
 	}
 	fields, ok := req.Callback.(map[string]any)
 	if !ok {
-		return fmt.Errorf("OAuth callback must be an object: %w", xerr.NewErrCode(xerr.InvalidParams))
+		return xerr.Errorf(xerr.InvalidParams, "OAuth callback must be an object")
 	}
 	identity, err := s.deps.OAuth.Identify(ctx, req.Method, fields)
 	if err != nil {
@@ -38,12 +37,12 @@ func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallb
 	case err == nil && holder.UserId == current.Id:
 		return nil
 	case err == nil:
-		return fmt.Errorf("the %s identity belongs to another account: %w", req.Method, xerr.NewErrCode(xerr.UserExist))
+		return xerr.Errorf(xerr.UserExist, "the %s identity belongs to another account", req.Method)
 	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find %s identity", req.Method)
 	}
 	if _, err := s.deps.UserAuth.FindUserAuthMethodByPlatform(ctx, current.Id, req.Method); err == nil {
-		return fmt.Errorf("the account already has a %s identity: %w", req.Method, xerr.NewErrCode(xerr.UserExist))
+		return xerr.Errorf(xerr.UserExist, "the account already has a %s identity", req.Method)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find the account's %s identity", req.Method)
 	}

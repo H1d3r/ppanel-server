@@ -1,3 +1,8 @@
+// Package identifier normalizes and validates the identifiers accounts sign
+// in with: email addresses, phone numbers and device identifiers. Every
+// module stores and looks up identifiers in the canonical form this package
+// produces, so one address cannot become two accounts by being spelled two
+// ways.
 package identifier
 
 import (

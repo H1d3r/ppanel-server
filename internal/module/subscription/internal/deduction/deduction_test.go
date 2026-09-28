@@ -1,6 +1,7 @@
 package deduction
 
 import (
+	"errors"
 	"math/rand"
 	"testing"
 	"time"
@@ -136,7 +137,7 @@ func TestSubscribe_Validate(t *testing.T) {
 				t.Errorf("Subscribe.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if tt.errType != nil && err != tt.errType {
+			if tt.errType != nil && !errors.Is(err, tt.errType) {
 				t.Errorf("Subscribe.Validate() error = %v, want %v", err, tt.errType)
 			}
 		})
@@ -147,7 +148,7 @@ func TestOrder_Validate(t *testing.T) {
 	if err := (&Order{Amount: 0}).Validate(); err != nil {
 		t.Fatalf("zero amount must be valid, got %v", err)
 	}
-	if err := (&Order{Amount: -1000}).Validate(); err != ErrInvalidAmount {
+	if err := (&Order{Amount: -1000}).Validate(); !errors.Is(err, ErrInvalidAmount) {
 		t.Fatalf("negative amount error = %v, want %v", err, ErrInvalidAmount)
 	}
 }

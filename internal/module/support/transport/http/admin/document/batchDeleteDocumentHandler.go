@@ -1,3 +1,5 @@
+// Package document holds the Hertz handlers of the admin help document
+// management.
 package document
 
 import (

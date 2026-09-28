@@ -8,7 +8,6 @@ import (
 	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -24,7 +23,7 @@ type MethodFinder interface {
 func LookupMethod(ctx context.Context, methods MethodFinder, id int64) (*paymentEntity.Payment, error) {
 	method, err := methods.FindOne(ctx, id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method %d does not exist", id)
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "payment method %d does not exist", id)
 	}
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find payment method %d", id)
@@ -38,7 +37,7 @@ func LookupMethod(ctx context.Context, methods MethodFinder, id int64) (*payment
 // EnsureAvailable rejects a payment method a buyer may not use.
 func EnsureAvailable(method *paymentEntity.Payment) error {
 	if method == nil || method.Enable == nil || !*method.Enable || payment.ParsePlatform(method.Platform) == payment.UNSUPPORTED {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method is unavailable")
+		return xerr.Errorf(xerr.PaymentMethodNotFound, "payment method is unavailable")
 	}
 	return nil
 }

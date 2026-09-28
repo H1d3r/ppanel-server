@@ -10,6 +10,14 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// TelephoneUserRegisterService is the part of the identity facade
+// TelephoneUserRegisterHandler calls.
+type TelephoneUserRegisterService interface {
+	TelephoneUserRegister(ctx context.Context, req *dto.TelephoneRegisterRequest) (*dto.LoginResponse, error)
+}
+
+var _ TelephoneUserRegisterService = identity.Service(nil)
+
 // TelephoneUserRegisterHandler documents User Telephone register.
 //
 // @Summary User Telephone register
@@ -19,7 +27,7 @@ import (
 // @Param request body dto.TelephoneRegisterRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/register/telephone [post]
-func TelephoneUserRegisterHandler(service identity.Service) app.HandlerFunc {
+func TelephoneUserRegisterHandler(service TelephoneUserRegisterService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.TelephoneRegisterRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

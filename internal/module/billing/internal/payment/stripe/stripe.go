@@ -1,3 +1,6 @@
+// Package stripe implements the Stripe payment protocol: payment intents and
+// their payment sheets, customers, webhook endpoints and signed webhook
+// events.
 package stripe
 
 import (

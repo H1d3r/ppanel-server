@@ -3,9 +3,7 @@ package authmethodadmin
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
-	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -21,10 +19,16 @@ func (s *Service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAut
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find auth method %q", req.Method)
 	}
 
-	mapping.DeepCopy(method, req)
+	// The method names the row; an id the request carries must be that row's,
+	// or the save would overwrite another method. A request without a
+	// configuration resets the configuration to the defaults and leaves the
+	// switch as stored; one without a switch keeps it too.
+	if req.Id != 0 && req.Id != method.Id {
+		return nil, xerr.Errorf(xerr.InvalidParams, "auth method %d is not %q", req.Id, req.Method)
+	}
 	if req.Config != nil {
 		if _, ok := req.Config.(map[string]any); !ok {
-			return nil, fmt.Errorf("the %s config must be an object: %w", req.Method, xerr.NewErrCode(xerr.InvalidParams))
+			return nil, xerr.Errorf(xerr.InvalidParams, "the %s config must be an object", req.Method)
 		}
 		config, err := decodeMethodConfig(req.Method, req.Config)
 		if err != nil {
@@ -35,6 +39,9 @@ func (s *Service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAut
 			return nil, xerr.Wrapf(err, xerr.ERROR, "marshal %s config", req.Method)
 		}
 		method.Config = string(bytes)
+		if req.Enabled != nil {
+			method.Enabled = req.Enabled
+		}
 	} else {
 		method.Config = initializePlatformConfig(req.Method)
 	}
@@ -42,18 +49,17 @@ func (s *Service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAut
 		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update auth method %q", req.Method)
 	}
 
-	resp := new(dto.AuthMethodConfig)
-	mapping.DeepCopy(resp, method)
-	if method.Config != "" {
-		if err := json.Unmarshal([]byte(method.Config), &resp.Config); err != nil {
-			return nil, xerr.Wrapf(err, xerr.ERROR, "decode stored %s config", req.Method)
-		}
+	resp, err := methodConfig(method)
+	if err != nil {
+		return nil, err
 	}
 	// The email, mobile and device settings are also held by the runtime
 	// configuration, which reloads them.
 	switch method.Method {
 	case "email", "mobile", "device":
-		s.deps.Reinitialize(method.Method)
+		if err := s.deps.Reinitialize(method.Method); err != nil {
+			return nil, xerr.Wrapf(err, xerr.ERROR, "the %s settings are saved but could not be applied", method.Method)
+		}
 	}
 	return resp, nil
 }
@@ -84,10 +90,10 @@ func decodeMethodConfig(method string, config any) (any, error) {
 			return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid device config")
 		}
 		if deviceConfig.OnlyRealDevice && !deviceConfig.EnableSecurity {
-			return nil, fmt.Errorf("only_real_device requires enable_security: %w", xerr.NewErrCode(xerr.InvalidParams))
+			return nil, xerr.Errorf(xerr.InvalidParams, "only_real_device requires enable_security")
 		}
 		if deviceConfig.EnableSecurity && deviceConfig.SecuritySecret == "" {
-			return nil, fmt.Errorf("device security secret is required: %w", xerr.NewErrCode(xerr.InvalidParams))
+			return nil, xerr.Errorf(xerr.InvalidParams, "device security secret is required")
 		}
 		return deviceConfig, nil
 	default:

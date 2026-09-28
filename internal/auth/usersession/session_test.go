@@ -14,7 +14,7 @@ func TestRevokeInvalidatesEarlierSessionsOnly(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
 
-	legacy := map[string]interface{}{"UserId": float64(1)}
+	legacy := map[string]any{"UserId": float64(1)}
 	if err := Check(legacy, ""); err != nil {
 		t.Fatalf("token from before epochs rejected for a never-revoked user: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestRevokeInvalidatesEarlierSessionsOnly(t *testing.T) {
 	if again, _ := AcquireEpoch(ctx, client, 1); again != first {
 		t.Fatalf("second session got epoch %q, want the shared %q", again, first)
 	}
-	issued := map[string]interface{}{EpochClaim: first}
+	issued := map[string]any{EpochClaim: first}
 	if err := Check(issued, first); err != nil {
 		t.Fatalf("current session rejected: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestRevokeInvalidatesEarlierSessionsOnly(t *testing.T) {
 		t.Fatal("a session issued before the revocation is still valid")
 	}
 	next, _ := AcquireEpoch(ctx, client, 1)
-	if next != current || Check(map[string]interface{}{EpochClaim: next}, current) != nil {
+	if next != current || Check(map[string]any{EpochClaim: next}, current) != nil {
 		t.Fatal("a session issued after the revocation is not valid")
 	}
 	if other, _ := AcquireEpoch(ctx, client, 2); other == current {
@@ -54,7 +54,7 @@ func TestRevokeInvalidatesEarlierSessionsOnly(t *testing.T) {
 
 	// An evicted epoch fails tokens that carry one closed.
 	rdb.Del(Key(1))
-	if Check(map[string]interface{}{EpochClaim: next}, "") == nil {
+	if Check(map[string]any{EpochClaim: next}, "") == nil {
 		t.Fatal("token accepted after its epoch was evicted")
 	}
 }

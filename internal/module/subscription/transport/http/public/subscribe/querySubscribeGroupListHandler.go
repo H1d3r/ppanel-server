@@ -1,3 +1,5 @@
+// Package subscribe holds the public HTTP handlers for the plan storefront
+// and the owner's subscription nodes.
 package subscribe
 
 import (

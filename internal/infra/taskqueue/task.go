@@ -1,12 +1,12 @@
 package taskqueue
 
 const (
-	// ScheduledBatchSendEmail scheduled batch send email
+	// ScheduledBatchSendEmail runs a batch email task.
 	ScheduledBatchSendEmail = "scheduled:email:batch"
 
-	// ForthwithQuotaTask create quota task immediately
+	// ForthwithQuotaTask runs a quota task right away.
 	ForthwithQuotaTask = "forthwith:quota:task"
 
-	// SchedulerExchangeRate fetch exchange rate task
+	// SchedulerExchangeRate refreshes the currency exchange rates.
 	SchedulerExchangeRate = "scheduler:exchange:rate"
 )

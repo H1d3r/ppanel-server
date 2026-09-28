@@ -1,3 +1,7 @@
+// Package sms sends text messages, verification codes above all, through
+// the provider the administrators configure. The providers live in the
+// subpackages; Sender hides which one is in force and renders the message
+// template for the providers that take a finished text.
 package sms
 
 import (
@@ -37,10 +41,6 @@ func CodeMessage(area, mobile, code string) Message {
 type Sender interface {
 	// Send delivers msg; ctx bounds the provider call.
 	Send(ctx context.Context, msg Message) error
-	// SendCode sends a verification code.
-	//
-	// Deprecated: use Send with CodeMessage, which honours a context.
-	SendCode(area, mobile, code string) error
 }
 
 // httpClient is the one HTTP client the providers send through, so their
@@ -77,10 +77,6 @@ func (s *sender) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 	return s.text.SendText(ctx, msg.Area, msg.Mobile, text)
-}
-
-func (s *sender) SendCode(area, mobile, code string) error {
-	return s.Send(context.Background(), CodeMessage(area, mobile, code))
 }
 
 // render fills a text template with params. A template that fails to parse

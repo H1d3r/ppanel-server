@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -48,7 +48,7 @@ func NormalizeGuestIdentity(authType, value string) (string, string, error) {
 	case identifier.Mobile:
 		number := strings.TrimPrefix(strings.TrimSpace(value), "+")
 		if number == "" || !identifier.CheckPhone(number) {
-			return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid guest mobile number")
+			return "", "", xerr.Errorf(xerr.InvalidParams, "invalid guest mobile number")
 		}
 		e164, err := identifier.FormatToE164("", number)
 		if err != nil {
@@ -56,7 +56,7 @@ func NormalizeGuestIdentity(authType, value string) (string, string, error) {
 		}
 		return identifier.Mobile, e164, nil
 	default:
-		return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "unsupported guest auth type")
+		return "", "", xerr.Errorf(xerr.InvalidParams, "unsupported guest auth type")
 	}
 }
 
@@ -71,7 +71,7 @@ func (s *Service) verifyGuestHuman(ctx context.Context, token string) error {
 		return nil
 	}
 	if strings.TrimSpace(token) == "" || strings.TrimSpace(policy.Secret) == "" {
-		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed")
+		return xerr.Errorf(xerr.TooManyRequests, "guest purchase verification failed")
 	}
 	verify := s.deps.VerifyTurnstile
 	if verify == nil {
@@ -83,7 +83,7 @@ func (s *Service) verifyGuestHuman(ctx context.Context, token string) error {
 		return xerr.Wrapf(err, xerr.TooManyRequests, "guest purchase verification failed")
 	}
 	if !ok {
-		return errors.Wrap(xerr.NewErrCode(xerr.TooManyRequests), "guest purchase verification failed")
+		return xerr.Errorf(xerr.TooManyRequests, "guest purchase verification failed")
 	}
 	return nil
 }
@@ -109,7 +109,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user auth")
 	}
 	if userAuth != nil && userAuth.UserId != 0 {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserExist), "user already exists")
+		return nil, xerr.Errorf(xerr.UserExist, "user already exists")
 	}
 	// The cap is best effort under concurrent requests for one identity;
 	// the Turnstile check is the rate control.
@@ -118,27 +118,27 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "count pending guest orders")
 	}
 	if pending >= maxPendingGuestOrders {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.TooManyRequests), "too many pending guest orders")
+		return nil, xerr.Errorf(xerr.TooManyRequests, "too many pending guest orders")
 	}
 	plan, err := s.deps.Plans.FindOne(ctx, req.SubscribeId)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find subscribe %d", req.SubscribeId)
 	}
 	if plan.Inventory == 0 {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
+		return nil, xerr.Errorf(xerr.SubscribeOutOfStock, "subscribe out of stock")
 	}
 	if plan.Sell == nil || !*plan.Sell {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "subscribe not sell")
+		return nil, xerr.Errorf(xerr.ERROR, "subscribe not sell")
 	}
 	terms, err := checkout.ResolvePlanTerms(ctx, s.deps.Coupons, s.deps.Payments, plan, req.Quantity, req.Coupon, req.Payment)
 	if err != nil {
 		return nil, err
 	}
 	if terms.Method == nil {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "payment method is required")
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "payment method is required")
 	}
 	if gateway.IsBalance(terms.Method) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance error")
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "balance error")
 	}
 	checkoutToken := ordercontext.GuestCheckoutToken(ctx)
 	if checkoutToken == "" {
@@ -179,7 +179,7 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	if err := s.deps.Inventory.Reserve(ctx, orderInfo.OrderNo, plan.Id); err != nil {
 		s.closeUnreservedOrder(ctx, orderInfo)
 		if errors.Is(err, subscription.ErrOutOfStock) {
-			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
+			return nil, xerr.Errorf(xerr.SubscribeOutOfStock, "subscribe out of stock")
 		}
 		return nil, xerr.Wrapf(err, xerr.ERROR, "reserve inventory")
 	}

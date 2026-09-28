@@ -202,7 +202,8 @@ func TestDefaultParametersFollowTheLocation(t *testing.T) {
 	if DefaultMySQLQuery("") != DefaultMySQLConfig || DefaultMySQLQuery(DefaultLocation) != DefaultMySQLConfig {
 		t.Fatalf("default MySQL parameters changed: %q", DefaultMySQLQuery(""))
 	}
-	if DefaultPostgresQuery("") != DefaultPostgresConfig || DefaultPostgresQuery(DefaultLocation) != DefaultPostgresConfig {
+	const defaultPostgresQuery = "sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel"
+	if DefaultPostgresQuery("") != defaultPostgresQuery || DefaultPostgresQuery(DefaultLocation) != defaultPostgresQuery {
 		t.Fatalf("default PostgreSQL parameters changed: %q", DefaultPostgresQuery(""))
 	}
 	if legacyMySQLQuery("") != legacyDefaultMySQLConfig {
@@ -310,7 +311,7 @@ func TestConnectPostgresWithIANAZone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get PostgreSQL connection pool: %v", err)
 	}
-	defer sqlDB.Close()
+	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -1,3 +1,10 @@
+// Package xerr is the error model of the API. A CodeError carries one of
+// the numeric codes of errCode.go and a message, which is all a client
+// learns of a failure: a response carries the code and message of the first
+// CodeError in the error chain, never the rest of the error text. Wrapf and
+// Errorf attach a code while keeping the underlying error reachable for
+// errors.Is and errors.As and for the log (Detail). Clients switch on the
+// numeric values, so existing codes never change.
 package xerr
 
 import (
@@ -6,10 +13,7 @@ import (
 	"strings"
 )
 
-/**
-General common fixed error
-*/
-
+// CodeError is an error with a client-facing code and message.
 type CodeError struct {
 	errCode uint32
 	errMsg  string
@@ -17,7 +21,9 @@ type CodeError struct {
 	cause error
 }
 
-var StatusNotModified = errors.New("304 Not Modified")
+// ErrNotModified reports that the client's cached copy is current: the
+// handler answers 304 Not Modified instead of a body.
+var ErrNotModified = errors.New("304 Not Modified")
 
 // GetErrCode returns the error code displayed to the front end
 func (e *CodeError) GetErrCode() uint32 {
@@ -29,6 +35,7 @@ func (e *CodeError) GetErrMsg() string {
 	return e.errMsg
 }
 
+// Error formats the code and its message, for logs.
 func (e *CodeError) Error() string {
 	return fmt.Sprintf("ErrCode:%d，ErrMsg:%s", e.errCode, e.errMsg)
 }
@@ -39,13 +46,18 @@ func (e *CodeError) Unwrap() error {
 	return e.cause
 }
 
+// NewErrCodeMsg returns an error with errCode and a message of its own,
+// which the client receives in place of the code's usual message.
 func NewErrCodeMsg(errCode uint32, errMsg string) *CodeError {
 	return &CodeError{errCode: errCode, errMsg: errMsg}
 }
+
+// NewErrCode returns an error with errCode and the code's message.
 func NewErrCode(errCode uint32) *CodeError {
 	return &CodeError{errCode: errCode, errMsg: MapErrMsg(errCode)}
 }
 
+// NewErrMsg returns an ERROR with errMsg as the message the client receives.
 func NewErrMsg(errMsg string) *CodeError {
 	return &CodeError{errCode: ERROR, errMsg: errMsg}
 }
@@ -104,14 +116,16 @@ func Detail(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		coded, ok := e.(*CodeError)
-		if !ok || coded.cause == nil {
-			continue
+	// Each pass finds the next code in the chain and continues below it.
+	for e := err; e != nil; {
+		var coded *CodeError
+		if !errors.As(e, &coded) || coded.cause == nil {
+			break
 		}
 		if cause := coded.cause.Error(); !strings.Contains(msg, cause) {
 			msg += " (cause: " + cause + ")"
 		}
+		e = coded.cause
 	}
 	return msg
 }

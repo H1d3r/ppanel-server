@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
+// ErrorInfo is one failed delivery of a campaign, as the task records it.
 type ErrorInfo struct {
 	Error string `json:"error"`
 	Email string `json:"email"`
@@ -28,12 +29,17 @@ type DailyLimitReached struct {
 	NextAt time.Time
 }
 
+// ErrTaskNotActive stops a worker whose task an administrator cancelled or
+// another run finished; the queue shell treats it as done, not failed.
 var ErrTaskNotActive = errors.New("batch email task is no longer active")
 
 func (e *DailyLimitReached) Error() string {
 	return fmt.Sprintf("batch email daily limit reached; resume at %s", e.NextAt.Format(time.RFC3339))
 }
 
+// Worker sends one campaign to its recipients, one at a time, recording the
+// progress and every failure on the task so a later run resumes after the
+// last recipient sent.
 type Worker struct {
 	id       int64
 	tasks    TaskStore
@@ -43,13 +49,16 @@ type Worker struct {
 	platform string
 }
 
+// WorkerOption configures a Worker.
 type WorkerOption func(*Worker)
 
+// MessageLogStore is the message log a worker audits each delivery in.
 type MessageLogStore interface {
 	Insert(ctx context.Context, data *logEntity.SystemLog) error
 	Update(ctx context.Context, data *logEntity.SystemLog) error
 }
 
+// WithMessageLogs audits each delivery in logs under the provider platform.
 func WithMessageLogs(logs MessageLogStore, platform string) WorkerOption {
 	return func(worker *Worker) {
 		worker.logs = logs
@@ -57,6 +66,7 @@ func WithMessageLogs(logs MessageLogStore, platform string) WorkerOption {
 	}
 }
 
+// NewWorker builds the worker of task id; ctx bounds the run.
 func NewWorker(ctx context.Context, id int64, tasks TaskStore, sender mail.Sender, options ...WorkerOption) *Worker {
 	worker := &Worker{id: id, tasks: tasks, ctx: ctx, sender: sender}
 	for _, option := range options {
@@ -67,151 +77,193 @@ func NewWorker(ctx context.Context, id int64, tasks TaskStore, sender mail.Sende
 	return worker
 }
 
+// GetID returns the id of the task the worker runs.
 func (w *Worker) GetID() int64 { return w.id }
+
+// batchRun is one run of a batch-email task: the task row, what it sends to
+// whom, and the failures recorded so far.
+type batchRun struct {
+	task       *task.Task
+	scope      task.EmailScope
+	content    task.EmailContent
+	recipients []string
+	interval   time.Duration
+	failures   []ErrorInfo
+}
 
 // Start processes a batch-email task until completion or cancellation.
 func (w *Worker) Start() error {
+	run, err := w.prepare()
+	if err != nil || run == nil {
+		return err
+	}
+	for index := int(run.task.Current); index < len(run.recipients); index++ {
+		if err := w.sendNext(run, index); err != nil {
+			return err
+		}
+	}
+	return w.complete(run)
+}
+
+// prepare loads the task and marks it in progress. It returns no run when
+// the task is already terminal, and records a task that cannot run (a corrupt
+// scope or content, no recipients) as failed.
+func (w *Worker) prepare() (*batchRun, error) {
 	taskInfo, err := w.tasks.FindOneByType(w.ctx, w.id, task.TypeEmail)
 	if err != nil {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to find task"), logger.Field("error", err.Error()), logger.Field("task_id", w.id))
-		return err
+		return nil, err
 	}
 	w.restoreRequestMetadata(taskInfo.Scope)
-	if taskInfo.Status == task.StatusCompleted || taskInfo.Status == task.StatusFailed || taskInfo.Status == task.StatusCancelled || taskInfo.Status == task.StatusEnqueueFailed {
+	switch taskInfo.Status {
+	case task.StatusCompleted, task.StatusFailed, task.StatusCancelled, task.StatusEnqueueFailed:
 		logger.WithContext(w.ctx).Info("Batch Send Email", logger.Field("message", "Task is already terminal"), logger.Field("task_id", w.id), logger.Field("status", taskInfo.Status))
-		return nil
+		return nil, nil
 	}
 
-	var scope task.EmailScope
-	if err := json.Unmarshal([]byte(taskInfo.Scope), &scope); err != nil {
+	run := &batchRun{task: taskInfo, interval: time.Second}
+	if err := json.Unmarshal([]byte(taskInfo.Scope), &run.scope); err != nil {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to parse task scope"), logger.Field("error", err.Error()), logger.Field("task_id", w.id))
-		return w.failTask(taskInfo, fmt.Errorf("parse task scope: %w", err))
+		return nil, w.failTask(taskInfo, fmt.Errorf("parse task scope: %w", err))
 	}
-	if len(scope.Recipients) == 0 && len(scope.Additional) == 0 {
+	if len(run.scope.Recipients) == 0 && len(run.scope.Additional) == 0 {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "No recipients or additional emails provided"), logger.Field("task_id", w.id))
-		return w.failTask(taskInfo, fmt.Errorf("no recipients provided"))
+		return nil, w.failTask(taskInfo, fmt.Errorf("no recipients provided"))
 	}
 	// Migrate legacy in-scope counters on first resume; current tasks keep these
 	// bounded fields in dedicated columns so progress updates never rewrite the
 	// potentially very large recipient list.
 	if taskInfo.DailyDate == "" && taskInfo.DailySent == 0 {
-		taskInfo.DailyDate = scope.DailyDate
-		taskInfo.DailySent = scope.DailySent
+		taskInfo.DailyDate = run.scope.DailyDate
+		taskInfo.DailySent = run.scope.DailySent
 	} else {
-		scope.DailyDate = taskInfo.DailyDate
-		scope.DailySent = taskInfo.DailySent
+		run.scope.DailyDate = taskInfo.DailyDate
+		run.scope.DailySent = taskInfo.DailySent
 	}
-
-	var content task.EmailContent
-	if err := json.Unmarshal([]byte(taskInfo.Content), &content); err != nil {
+	if err := json.Unmarshal([]byte(taskInfo.Content), &run.content); err != nil {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to parse task content"), logger.Field("error", err.Error()), logger.Field("task_id", w.id))
-		return w.failTask(taskInfo, fmt.Errorf("parse task content: %w", err))
+		return nil, w.failTask(taskInfo, fmt.Errorf("parse task content: %w", err))
 	}
 
-	recipients := slicesx.RemoveDuplicateElements(append(scope.Recipients, scope.Additional...)...)
-	if len(recipients) == 0 {
+	run.recipients = slicesx.RemoveDuplicateElements(append(run.scope.Recipients, run.scope.Additional...)...)
+	if len(run.recipients) == 0 {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "No valid recipients found"), logger.Field("task_id", w.id))
-		return w.failTask(taskInfo, fmt.Errorf("no valid recipients found"))
+		return nil, w.failTask(taskInfo, fmt.Errorf("no valid recipients found"))
 	}
-	if taskInfo.Current > uint64(len(recipients)) {
-		return w.failTask(taskInfo, fmt.Errorf("task progress exceeds recipient count"))
+	if taskInfo.Current > uint64(len(run.recipients)) {
+		return nil, w.failTask(taskInfo, fmt.Errorf("task progress exceeds recipient count"))
 	}
-
-	interval := time.Second
-	if scope.Interval != 0 {
-		interval = time.Duration(scope.Interval) * time.Second
+	if run.scope.Interval != 0 {
+		run.interval = time.Duration(run.scope.Interval) * time.Second
 	}
-
-	storedErrors, err := w.tasks.FindErrors(w.ctx, []int64{taskInfo.Id})
-	if err != nil {
-		return fmt.Errorf("load task errors: %w", err)
+	if run.failures, err = w.storedFailures(taskInfo); err != nil {
+		return nil, err
 	}
-	sendErrors := make([]ErrorInfo, 0, len(storedErrors))
-	for _, item := range storedErrors {
-		sendErrors = append(sendErrors, ErrorInfo{Error: item.Error, Email: item.Target, Time: item.OccurredAt})
-	}
-	// Tasks created before task_error was introduced keep their failure list in
-	// the legacy column. It is read only as a migration fallback.
-	if len(storedErrors) == 0 && taskInfo.Errors != "" {
-		if err := json.Unmarshal([]byte(taskInfo.Errors), &sendErrors); err != nil {
-			return w.failTask(taskInfo, fmt.Errorf("parse task errors: %w", err))
+	// Tasks created before task_error was introduced keep their failure list
+	// in the legacy column; it is read only as a migration fallback.
+	if len(run.failures) == 0 && taskInfo.Errors != "" {
+		if err := json.Unmarshal([]byte(taskInfo.Errors), &run.failures); err != nil {
+			return nil, w.failTask(taskInfo, fmt.Errorf("parse task errors: %w", err))
 		}
 	}
+
 	taskInfo.Status = task.StatusInProgress
-	if err := w.persist(taskInfo, &scope); err != nil {
+	if err := w.persist(taskInfo, &run.scope); err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+// storedFailures reads the delivery failures the task recorded in the
+// task_error table.
+func (w *Worker) storedFailures(taskInfo *task.Task) ([]ErrorInfo, error) {
+	stored, err := w.tasks.FindErrors(w.ctx, []int64{taskInfo.Id})
+	if err != nil {
+		return nil, fmt.Errorf("load task errors: %w", err)
+	}
+	failures := make([]ErrorInfo, 0, len(stored))
+	for _, item := range stored {
+		failures = append(failures, ErrorInfo{Error: item.Error, Email: item.Target, Time: item.OccurredAt})
+	}
+	return failures, nil
+}
+
+// sendNext sends the email of recipient index and records the progress,
+// then waits the task's interval unless it was the last recipient.
+func (w *Worker) sendNext(run *batchRun, index int) error {
+	if err := w.ensureDailyCapacity(&run.scope, run.task); err != nil {
 		return err
 	}
-
-	for index := int(taskInfo.Current); index < len(recipients); index++ {
-		if err := w.ensureDailyCapacity(&scope, taskInfo); err != nil {
-			return err
-		}
-		select {
-		case <-w.ctx.Done():
-			logger.WithContext(w.ctx).Info("Batch Send Email", logger.Field("message", "Worker stopped by context cancellation"), logger.Field("task_id", w.id))
-			return w.ctx.Err()
-		default:
-		}
-
-		recipient := recipients[index]
-		audit, err := w.beginMessage()
-		if err != nil {
-			// Nothing has been delivered yet, so returning the error is safe and
-			// lets the queue retry without duplicating an email.
-			return err
-		}
-		sendErr := w.send(recipient, content)
-		if errors.Is(sendErr, context.Canceled) || errors.Is(sendErr, context.DeadlineExceeded) {
-			return sendErr
-		}
-		var failure *task.TaskError
-		if sendErr != nil {
-			logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to send email"), logger.Field("error", sendErr.Error()), logger.Field("task_id", w.id))
-			occurredAt := timeutil.Now().Unix()
-			failure = &task.TaskError{
-				TaskId: taskInfo.Id, Position: uint64(index), Target: recipient,
-				Error: sendErr.Error(), OccurredAt: occurredAt,
-			}
-			sendErrors = append(sendErrors, ErrorInfo{Error: sendErr.Error(), Email: recipient, Time: occurredAt})
-		}
-		w.finishMessage(audit, sendErr == nil)
-		taskInfo.Current = uint64(index + 1)
-		scope.DailySent++
-		var persistErr error
-		if failure != nil {
-			persistErr = w.persistWithError(taskInfo, &scope, failure)
-		} else {
-			persistErr = w.persist(taskInfo, &scope)
-		}
-		if persistErr != nil {
-			logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to update task progress"), logger.Field("error", persistErr.Error()), logger.Field("task_id", w.id))
-			return persistErr
-		}
-		if index+1 < len(recipients) {
-			if err := waitContext(w.ctx, interval); err != nil {
-				return err
-			}
-		}
+	select {
+	case <-w.ctx.Done():
+		logger.WithContext(w.ctx).Info("Batch Send Email", logger.Field("message", "Worker stopped by context cancellation"), logger.Field("task_id", w.id))
+		return w.ctx.Err()
+	default:
 	}
+
+	recipient := run.recipients[index]
+	audit, err := w.beginMessage()
+	if err != nil {
+		// Nothing has been delivered yet, so returning the error is safe and
+		// lets the queue retry without duplicating an email.
+		return err
+	}
+	sendErr := w.send(recipient, run.content)
+	if errors.Is(sendErr, context.Canceled) || errors.Is(sendErr, context.DeadlineExceeded) {
+		return sendErr
+	}
+	var failure *task.TaskError
+	if sendErr != nil {
+		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to send email"), logger.Field("error", sendErr.Error()), logger.Field("task_id", w.id))
+		occurredAt := timeutil.Now().Unix()
+		failure = &task.TaskError{
+			TaskId: run.task.Id, Position: uint64(index), Target: recipient,
+			Error: sendErr.Error(), OccurredAt: occurredAt,
+		}
+		run.failures = append(run.failures, ErrorInfo{Error: sendErr.Error(), Email: recipient, Time: occurredAt})
+	}
+	w.finishMessage(audit, sendErr == nil)
+	run.task.Current = uint64(index + 1)
+	run.scope.DailySent++
+	var persistErr error
+	if failure != nil {
+		persistErr = w.persistWithError(run.task, &run.scope, failure)
+	} else {
+		persistErr = w.persist(run.task, &run.scope)
+	}
+	if persistErr != nil {
+		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to update task progress"), logger.Field("error", persistErr.Error()), logger.Field("task_id", w.id))
+		return persistErr
+	}
+	if index+1 < len(run.recipients) {
+		return waitContext(w.ctx, run.interval)
+	}
+	return nil
+}
+
+// complete finishes the task: failed when every recipient failed, completed
+// otherwise, with the failures kept in the legacy column for older readers.
+func (w *Worker) complete(run *batchRun) error {
+	taskInfo := run.task
 	taskInfo.Status = task.StatusCompleted
-	failedRecipients := make(map[string]struct{}, len(sendErrors))
-	for _, item := range sendErrors {
+	failedRecipients := make(map[string]struct{}, len(run.failures))
+	for _, item := range run.failures {
 		if item.Email != "" {
 			failedRecipients[item.Email] = struct{}{}
 		}
 	}
-	if len(failedRecipients) >= len(recipients) {
+	if len(failedRecipients) >= len(run.recipients) {
 		taskInfo.Status = task.StatusFailed
 	}
-	if len(sendErrors) > 0 {
-		text, marshalErr := json.Marshal(sendErrors)
+	if len(run.failures) > 0 {
+		text, marshalErr := json.Marshal(run.failures)
 		if marshalErr != nil {
 			return w.failTask(taskInfo, fmt.Errorf("marshal task errors: %w", marshalErr))
 		}
 		taskInfo.Errors = string(text)
 	}
 
-	if err := w.persist(taskInfo, &scope); err != nil {
+	if err := w.persist(taskInfo, &run.scope); err != nil {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to finalize task"), logger.Field("error", err.Error()), logger.Field("task_id", w.id))
 		return err
 	}
@@ -238,7 +290,7 @@ func (w *Worker) beginMessage() (*logEntity.SystemLog, error) {
 	message := logEntity.Message{
 		Metadata: metadata,
 		To:       logger.RedactedValue, Subject: "custom", Platform: w.platform,
-		Content: map[string]interface{}{"redacted": true, "email_type": "custom", "batch_task_id": w.id},
+		Content: map[string]any{"redacted": true, "email_type": "custom", "batch_task_id": w.id},
 		Status:  0,
 	}
 	content, err := message.Marshal()

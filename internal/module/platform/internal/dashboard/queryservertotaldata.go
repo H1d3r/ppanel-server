@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
+	"github.com/perfect-panel/server/internal/module/platform/internal/readmodel"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -23,7 +23,7 @@ const rankingSize = 10
 
 // The console resolves the subscription from SID and the account from UID, so
 // both mappings stay in one place to keep the two identifiers from drifting.
-func userTrafficDataFromRanking(item traffic.UserTrafficRanking) dto.UserTrafficData {
+func userTrafficDataFromRanking(item readmodel.UserTrafficRanking) dto.UserTrafficData {
 	return dto.UserTrafficData{
 		SID:      item.SubscribeId,
 		UID:      item.UserId,
@@ -106,16 +106,16 @@ func (s *Service) QueryServerTotalData(ctx context.Context) (*dto.ServerTotalDat
 
 // todayTraffic is what traffic_log says about today so far.
 type todayTraffic struct {
-	users   []traffic.UserTrafficRanking
-	servers []traffic.ServerTrafficRanking
-	total   traffic.TotalTraffic
+	users   []readmodel.UserTrafficRanking
+	servers []readmodel.ServerTrafficRanking
+	total   readmodel.TotalTraffic
 }
 
 // liveTraffic runs today's three traffic_log aggregates concurrently.
 func (s *Service) liveTraffic(ctx context.Context, now, todayStart time.Time) (todayTraffic, error) {
 	var (
 		live                           todayTraffic
-		total                          *traffic.TotalTraffic
+		total                          *readmodel.TotalTraffic
 		usersErr, serversErr, totalErr error
 		wg                             sync.WaitGroup
 	)
@@ -140,7 +140,7 @@ func (s *Service) liveTraffic(ctx context.Context, now, todayStart time.Time) (t
 	return live, nil
 }
 
-func userRanking(items []traffic.UserTrafficRanking) []dto.UserTrafficData {
+func userRanking(items []readmodel.UserTrafficRanking) []dto.UserTrafficData {
 	var ranking []dto.UserTrafficData
 	for _, item := range items {
 		ranking = append(ranking, userTrafficDataFromRanking(item))
@@ -148,7 +148,7 @@ func userRanking(items []traffic.UserTrafficRanking) []dto.UserTrafficData {
 	return ranking
 }
 
-func serverIDs(items []traffic.ServerTrafficRanking) []int64 {
+func serverIDs(items []readmodel.ServerTrafficRanking) []int64 {
 	ids := make([]int64, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, item.ServerId)
@@ -158,7 +158,7 @@ func serverIDs(items []traffic.ServerTrafficRanking) []int64 {
 
 // serverRanking names the ranked servers; a server that no longer exists
 // keeps an empty name.
-func serverRanking(items []traffic.ServerTrafficRanking, names map[int64]string) []dto.ServerTrafficData {
+func serverRanking(items []readmodel.ServerTrafficRanking, names map[int64]string) []dto.ServerTrafficData {
 	var ranking []dto.ServerTrafficData
 	for _, item := range items {
 		ranking = append(ranking, dto.ServerTrafficData{

@@ -2,7 +2,6 @@ package adminuser
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -14,7 +13,7 @@ import (
 // that cannot be is refused.
 func (s *Service) UpdateUserAuthMethod(ctx context.Context, req *dto.UpdateUserAuthMethodRequest) error {
 	if strings.EqualFold(strings.TrimSpace(req.AuthType), "device") {
-		return fmt.Errorf("use device management for device identities: %w", xerr.NewErrCode(xerr.InvalidParams))
+		return xerr.Errorf(xerr.InvalidParams, "use device management for device identities")
 	}
 	method, err := s.deps.UserAuths.FindUserAuthMethodByPlatform(ctx, req.UserId, req.AuthType)
 	if err != nil {

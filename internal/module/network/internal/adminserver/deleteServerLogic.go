@@ -7,34 +7,21 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type DeleteServerLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewDeleteServerLogic Delete Server
-func newDeleteServerLogic(ctx context.Context, deps Deps) *DeleteServerLogic {
-	return &DeleteServerLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *DeleteServerLogic) DeleteServer(req *dto.DeleteServerRequest) error {
-	if err := l.deps.Store.InNetworkTx(l.ctx, func(store repository.NetworkStore) error {
+// DeleteServer removes a server together with its node configuration
+// override, in one network transaction, and then drops its node-facing
+// caches.
+func (s *Service) DeleteServer(ctx context.Context, req *dto.DeleteServerRequest) error {
+	if err := s.deps.Store.InNetworkTx(ctx, func(store repository.NetworkStore) error {
 		nodeStore := store.Node()
-		if err := nodeStore.DeleteServer(l.ctx, req.Id); err != nil {
+		if err := nodeStore.DeleteServer(ctx, req.Id); err != nil {
 			return err
 		}
-		return nodeStore.DeleteServerConfigOverride(l.ctx, req.Id)
+		return nodeStore.DeleteServerConfigOverride(ctx, req.Id)
 	}); err != nil {
-		l.Errorw("[DeleteServer] Delete Server Error: ", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseDeletedError), "[DeleteServer] Delete Server Error")
+		logger.WithContext(ctx).Errorw("[DeleteServer] Delete Server Error: ", logger.Field("error", err.Error()))
+		return xerr.Errorf(xerr.DatabaseDeletedError, "[DeleteServer] Delete Server Error")
 	}
-	return l.deps.Store.Node().ClearServerCache(l.ctx, req.Id)
+	return s.deps.Store.Node().ClearServerCache(ctx, req.Id)
 }

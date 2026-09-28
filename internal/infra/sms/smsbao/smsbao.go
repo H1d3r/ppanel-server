@@ -1,3 +1,4 @@
+// Package smsbao sends text messages through the SMSBao HTTP API.
 package smsbao
 
 import (
@@ -11,18 +12,21 @@ import (
 	"github.com/perfect-panel/server/internal/infra/protocolkey"
 )
 
+// BaseURL is the API the client sends to.
 const BaseURL = "https://api.smsbao.com"
 
 // maxResponseBytes bounds how much of a provider response is read; the
 // answer is a short status code.
 const maxResponseBytes = 1 << 10
 
+// Config is the stored provider configuration.
 type Config struct {
 	Access   string `json:"access"`
 	Secret   string `json:"secret"`
 	Template string `json:"template"`
 }
 
+// Client sends through one SMSBao account.
 type Client struct {
 	config  Config
 	baseURL string

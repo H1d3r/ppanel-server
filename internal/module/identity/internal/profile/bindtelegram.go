@@ -18,29 +18,16 @@ import (
 // the expiry advertised to the client, so the two can no longer drift.
 const telegramBindTokenTTL = 300 * time.Second
 
-type BindTelegramLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// Bind Telegram
-func newBindTelegramLogic(ctx context.Context, deps Deps) *BindTelegramLogic {
-	return &BindTelegramLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *BindTelegramLogic) BindTelegram() (resp *dto.BindTelegramResponse, err error) {
-	u, ok := user.FromContext(l.ctx)
+// BindTelegram returns the bot deep link that binds the calling account's
+// Telegram chat once the user opens it.
+func (s *Service) BindTelegram(ctx context.Context) (*dto.BindTelegramResponse, error) {
+	u, ok := user.FromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("no signed-in user: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "no signed-in user")
 	}
-	if l.deps.TelegramBotName() == "" {
-		l.Errorw("bind telegram failed: telegram bot is not initialized")
-		return nil, fmt.Errorf("telegram bot is not configured: %w", xerr.NewErrCode(xerr.TelegramBotUnavailable))
+	if s.deps.TelegramBotName() == "" {
+		logger.WithContext(ctx).Errorw("bind telegram failed: telegram bot is not initialized")
+		return nil, xerr.Errorf(xerr.TelegramBotUnavailable, "telegram bot is not configured")
 	}
 
 	// The deep link carries a dedicated single-use token rather than the
@@ -50,12 +37,12 @@ func (l *BindTelegramLogic) BindTelegram() (resp *dto.BindTelegramResponse, err 
 	token := random.KeyNew(32, 1)
 	expiredAt := timeutil.Now().Add(telegramBindTokenTTL)
 	key := fmt.Sprintf("%s:%s", config.TelegramBindKey, token)
-	if err := l.deps.Redis.Set(l.ctx, key, u.Id, telegramBindTokenTTL).Err(); err != nil {
+	if err := s.deps.Redis.Set(ctx, key, u.Id, telegramBindTokenTTL).Err(); err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "store telegram bind token of user %d", u.Id)
 	}
 
 	return &dto.BindTelegramResponse{
-		Url:       fmt.Sprintf("https://t.me/%s?start=%s", l.deps.TelegramBotName(), token),
+		Url:       fmt.Sprintf("https://t.me/%s?start=%s", s.deps.TelegramBotName(), token),
 		ExpiredAt: expiredAt.UnixMilli(),
 	}, nil
 }

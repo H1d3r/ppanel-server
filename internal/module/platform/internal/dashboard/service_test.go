@@ -10,12 +10,9 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/module/network/entity/node"
-	"github.com/perfect-panel/server/internal/module/network/entity/traffic"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
+	"github.com/perfect-panel/server/internal/module/platform/internal/readmodel"
 	"github.com/perfect-panel/server/internal/module/platform/internal/repo"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -35,21 +32,21 @@ var (
 )
 
 type fakeTraffic struct {
-	users                          []traffic.UserTrafficRanking
-	servers                        []traffic.ServerTrafficRanking
-	total                          traffic.TotalTraffic
+	users                          []readmodel.UserTrafficRanking
+	servers                        []readmodel.ServerTrafficRanking
+	total                          readmodel.TotalTraffic
 	usersErr, serversErr, totalErr error
 }
 
-func (f *fakeTraffic) TopUsersTrafficByDay(context.Context, time.Time, int) ([]traffic.UserTrafficRanking, error) {
+func (f *fakeTraffic) TopUsersTrafficByDay(context.Context, time.Time, int) ([]readmodel.UserTrafficRanking, error) {
 	return f.users, f.usersErr
 }
 
-func (f *fakeTraffic) TopServersTrafficByDay(context.Context, time.Time, int) ([]traffic.ServerTrafficRanking, error) {
+func (f *fakeTraffic) TopServersTrafficByDay(context.Context, time.Time, int) ([]readmodel.ServerTrafficRanking, error) {
 	return f.servers, f.serversErr
 }
 
-func (f *fakeTraffic) QueryTrafficSummary(context.Context, time.Time, time.Time) (*traffic.TotalTraffic, error) {
+func (f *fakeTraffic) QueryTrafficSummary(context.Context, time.Time, time.Time) (*readmodel.TotalTraffic, error) {
 	if f.totalErr != nil {
 		return nil, f.totalErr
 	}
@@ -63,14 +60,14 @@ type fakeNodes struct {
 	listErr, onlineErr, countErr error
 }
 
-func (f *fakeNodes) QueryServerList(_ context.Context, ids []int64) ([]*node.Server, error) {
+func (f *fakeNodes) QueryServerList(_ context.Context, ids []int64) ([]*readmodel.Server, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	var servers []*node.Server
+	var servers []*readmodel.Server
 	for _, id := range ids {
 		if name, ok := f.names[id]; ok {
-			servers = append(servers, &node.Server{Id: id, Name: name})
+			servers = append(servers, &readmodel.Server{Id: id, Name: name})
 		}
 	}
 	return servers, nil
@@ -85,8 +82,8 @@ func (f *fakeNodes) CountServersByReportStatus(context.Context, time.Time) (int6
 }
 
 type fakeOrders struct {
-	today, month, total                  order.OrdersTotal
-	daily, monthly                       []order.OrdersTotalWithDate
+	today, month, total                  readmodel.OrdersTotal
+	daily, monthly                       []readmodel.OrdersTotalWithDate
 	todayErr, monthErr, totalErr         error
 	dailyErr, monthlyErr                 error
 	newToday, renewToday                 int64
@@ -95,23 +92,23 @@ type fakeOrders struct {
 	todayUsersErr, monthUsersErr, allErr error
 }
 
-func (f *fakeOrders) QueryDateOrders(context.Context, time.Time) (order.OrdersTotal, error) {
+func (f *fakeOrders) QueryDateOrders(context.Context, time.Time) (readmodel.OrdersTotal, error) {
 	return f.today, f.todayErr
 }
 
-func (f *fakeOrders) QueryMonthlyOrders(context.Context, time.Time) (order.OrdersTotal, error) {
+func (f *fakeOrders) QueryMonthlyOrders(context.Context, time.Time) (readmodel.OrdersTotal, error) {
 	return f.month, f.monthErr
 }
 
-func (f *fakeOrders) QueryTotalOrders(context.Context) (order.OrdersTotal, error) {
+func (f *fakeOrders) QueryTotalOrders(context.Context) (readmodel.OrdersTotal, error) {
 	return f.total, f.totalErr
 }
 
-func (f *fakeOrders) QueryDailyOrdersList(context.Context, time.Time) ([]order.OrdersTotalWithDate, error) {
+func (f *fakeOrders) QueryDailyOrdersList(context.Context, time.Time) ([]readmodel.OrdersTotalWithDate, error) {
 	return f.daily, f.dailyErr
 }
 
-func (f *fakeOrders) QueryMonthlyOrdersList(context.Context, time.Time) ([]order.OrdersTotalWithDate, error) {
+func (f *fakeOrders) QueryMonthlyOrdersList(context.Context, time.Time) ([]readmodel.OrdersTotalWithDate, error) {
 	return f.monthly, f.monthlyErr
 }
 
@@ -129,7 +126,7 @@ func (f *fakeOrders) QueryTotalUserCounts(context.Context) (int64, int64, error)
 
 type fakeUsers struct {
 	today, month, total int64
-	daily, monthly      []user.UserStatisticsWithDate
+	daily, monthly      []readmodel.UserStatisticsWithDate
 	err                 error
 }
 
@@ -145,11 +142,11 @@ func (f *fakeUsers) QueryRegisterUserTotal(context.Context) (int64, error) {
 	return f.total, f.err
 }
 
-func (f *fakeUsers) QueryDailyUserStatisticsList(context.Context, time.Time) ([]user.UserStatisticsWithDate, error) {
+func (f *fakeUsers) QueryDailyUserStatisticsList(context.Context, time.Time) ([]readmodel.UserStatisticsWithDate, error) {
 	return f.daily, f.err
 }
 
-func (f *fakeUsers) QueryMonthlyUserStatisticsList(context.Context, time.Time) ([]user.UserStatisticsWithDate, error) {
+func (f *fakeUsers) QueryMonthlyUserStatisticsList(context.Context, time.Time) ([]readmodel.UserStatisticsWithDate, error) {
 	return f.monthly, f.err
 }
 
@@ -251,15 +248,15 @@ func today() calendar {
 func TestServerTotalDataCombinesLiveTrafficWithArchivedRankings(t *testing.T) {
 	w := newWorld(t)
 	cal := today()
-	w.traffic.users = []traffic.UserTrafficRanking{
+	w.traffic.users = []readmodel.UserTrafficRanking{
 		{UserId: 7, SubscribeId: 70, Upload: 1, Download: 2, Total: 3},
 		{UserId: 8, SubscribeId: 80, Upload: 3, Download: 4, Total: 7},
 	}
-	w.traffic.servers = []traffic.ServerTrafficRanking{
+	w.traffic.servers = []readmodel.ServerTrafficRanking{
 		{ServerId: 1, Upload: 10, Download: 20, Total: 30},
 		{ServerId: 4, Upload: 5, Download: 5, Total: 10}, // deleted since: no name
 	}
-	w.traffic.total = traffic.TotalTraffic{Upload: 100, Download: 200}
+	w.traffic.total = readmodel.TotalTraffic{Upload: 100, Download: 200}
 	w.nodes.names = map[int64]string{1: "hk-01", 2: "jp-01", 3: "us-01"}
 	w.nodes.online, w.nodes.up, w.nodes.down = 12, 2, 1
 
@@ -324,7 +321,7 @@ func TestServerTotalDataCombinesLiveTrafficWithArchivedRankings(t *testing.T) {
 
 func TestServerTotalDataWithoutHistory(t *testing.T) {
 	w := newWorld(t)
-	w.traffic.total = traffic.TotalTraffic{Upload: 1, Download: 2}
+	w.traffic.total = readmodel.TotalTraffic{Upload: 1, Download: 2}
 	got, err := w.svc.QueryServerTotalData(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +340,7 @@ func TestServerTotalDataWithoutHistory(t *testing.T) {
 func TestServerTotalDataToleratesDegradedSources(t *testing.T) {
 	w := newWorld(t)
 	cal := today()
-	w.traffic.servers = []traffic.ServerTrafficRanking{{ServerId: 1, Upload: 1, Download: 1}}
+	w.traffic.servers = []readmodel.ServerTrafficRanking{{ServerId: 1, Upload: 1, Download: 1}}
 	w.nodes.names = map[int64]string{1: "hk-01"}
 	w.nodes.listErr = errBackend
 	w.addRawLog(t, log.TypeUserTrafficRank, cal.yesterday, "{corrupt")
@@ -415,11 +412,11 @@ func TestServerTotalDataIsCachedForAMinute(t *testing.T) {
 
 func TestRevenueStatistics(t *testing.T) {
 	w := newWorld(t)
-	w.orders.today = order.OrdersTotal{AmountTotal: 30, NewOrderAmount: 20, RenewalOrderAmount: 10}
-	w.orders.month = order.OrdersTotal{AmountTotal: 300, NewOrderAmount: 200, RenewalOrderAmount: 100}
-	w.orders.total = order.OrdersTotal{AmountTotal: 3000, NewOrderAmount: 2000, RenewalOrderAmount: 1000}
-	w.orders.daily = []order.OrdersTotalWithDate{{Date: "2026-09-01", AmountTotal: 3, NewOrderAmount: 2, RenewalOrderAmount: 1}}
-	w.orders.monthly = []order.OrdersTotalWithDate{{Date: "2026-09", AmountTotal: 300, NewOrderAmount: 200, RenewalOrderAmount: 100}}
+	w.orders.today = readmodel.OrdersTotal{AmountTotal: 30, NewOrderAmount: 20, RenewalOrderAmount: 10}
+	w.orders.month = readmodel.OrdersTotal{AmountTotal: 300, NewOrderAmount: 200, RenewalOrderAmount: 100}
+	w.orders.total = readmodel.OrdersTotal{AmountTotal: 3000, NewOrderAmount: 2000, RenewalOrderAmount: 1000}
+	w.orders.daily = []readmodel.OrdersTotalWithDate{{Date: "2026-09-01", AmountTotal: 3, NewOrderAmount: 2, RenewalOrderAmount: 1}}
+	w.orders.monthly = []readmodel.OrdersTotalWithDate{{Date: "2026-09", AmountTotal: 300, NewOrderAmount: 200, RenewalOrderAmount: 100}}
 
 	got, err := w.svc.QueryRevenueStatistics(context.Background())
 	if err != nil {
@@ -447,7 +444,7 @@ func TestRevenueStatistics(t *testing.T) {
 func TestRevenueStatisticsFailures(t *testing.T) {
 	// The per-period lists are optional: without them the totals still show.
 	w := newWorld(t)
-	w.orders.today = order.OrdersTotal{AmountTotal: 30}
+	w.orders.today = readmodel.OrdersTotal{AmountTotal: 30}
 	w.orders.dailyErr, w.orders.monthlyErr = errBackend, errBackend
 	got, err := w.svc.QueryRevenueStatistics(context.Background())
 	if err != nil || got.Today.AmountTotal != 30 || len(got.Monthly.List) != 0 || len(got.All.List) != 0 {
@@ -475,8 +472,8 @@ func TestRevenueStatisticsFailures(t *testing.T) {
 func TestUserStatistics(t *testing.T) {
 	w := newWorld(t)
 	w.users.today, w.users.month, w.users.total = 2, 20, 200
-	w.users.daily = []user.UserStatisticsWithDate{{Date: "2026-09-01", Register: 2, NewOrderUsers: 1, RenewalOrderUsers: 1}}
-	w.users.monthly = []user.UserStatisticsWithDate{{Date: "2026-09", Register: 20, NewOrderUsers: 10, RenewalOrderUsers: 5}}
+	w.users.daily = []readmodel.UserStatisticsWithDate{{Date: "2026-09-01", Register: 2, NewOrderUsers: 1, RenewalOrderUsers: 1}}
+	w.users.monthly = []readmodel.UserStatisticsWithDate{{Date: "2026-09", Register: 20, NewOrderUsers: 10, RenewalOrderUsers: 5}}
 	w.orders.newToday, w.orders.renewToday = 1, 1
 	w.orders.newMonth, w.orders.renewMonth = 10, 5
 	w.orders.newAll, w.orders.renewAll = 100, 50

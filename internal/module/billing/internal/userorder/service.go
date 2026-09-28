@@ -13,7 +13,6 @@ import (
 	subscribeEntity "github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -43,9 +42,9 @@ func NewService(orders Orders, plans PlanReader) *Service {
 // attachPlan fills the detail's plan fields from the subscription domain.
 // A missing plan (deleted, or a recharge order without one) leaves the
 // zero value, matching the former SQL association's behaviour.
-func (s *Service) attachPlan(ctx context.Context, detail *dto.OrderDetail, cache map[int64]*subscribeEntity.Subscribe) {
+func (s *Service) attachPlan(ctx context.Context, detail *dto.OrderDetail, cache map[int64]*subscribeEntity.Subscribe) error {
 	if detail.SubscribeId == 0 || s.plans == nil {
-		return
+		return nil
 	}
 	plan, cached := cache[detail.SubscribeId]
 	if !cached {
@@ -58,9 +57,27 @@ func (s *Service) attachPlan(ctx context.Context, detail *dto.OrderDetail, cache
 		}
 		cache[detail.SubscribeId] = plan
 	}
-	if plan != nil {
-		mapping.DeepCopy(&detail.Subscribe, plan)
+	if plan == nil {
+		return nil
 	}
+	if err := mapping.Copy(&detail.Subscribe, plan); err != nil {
+		return xerr.Wrapf(err, xerr.ERROR, "map subscribe %d of order %s", plan.Id, detail.OrderNo)
+	}
+	return nil
+}
+
+// orderDetail is what the buyer is shown of an order: the order with its
+// plan, never the referrer commission it earned.
+func (s *Service) orderDetail(ctx context.Context, orderInfo *order.Details, planCache map[int64]*subscribeEntity.Subscribe) (dto.OrderDetail, error) {
+	var detail dto.OrderDetail
+	if err := mapping.Copy(&detail, orderInfo); err != nil {
+		return dto.OrderDetail{}, xerr.Wrapf(err, xerr.ERROR, "map order %s", orderInfo.OrderNo)
+	}
+	if err := s.attachPlan(ctx, &detail, planCache); err != nil {
+		return dto.OrderDetail{}, err
+	}
+	detail.Commission = 0
+	return detail, nil
 }
 
 // QueryDetail returns one of the current user's orders; ownership is
@@ -68,30 +85,29 @@ func (s *Service) attachPlan(ctx context.Context, detail *dto.OrderDetail, cache
 func (s *Service) QueryDetail(ctx context.Context, req *dto.QueryOrderDetailRequest) (*dto.OrderDetail, error) {
 	currentUser, ok := user.FromContext(ctx)
 	if !ok {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "Invalid Access")
 	}
 	orderInfo, err := s.orders.FindOneDetailsByOrderNo(ctx, req.OrderNo)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order %s not found", req.OrderNo)
+		return nil, xerr.Errorf(xerr.OrderNotExist, "order %s not found", req.OrderNo)
 	}
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", req.OrderNo)
 	}
 	if orderInfo.UserId != currentUser.Id {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "order does not belong to the current user")
 	}
-	resp := &dto.OrderDetail{}
-	mapping.DeepCopy(resp, orderInfo)
-	s.attachPlan(ctx, resp, map[int64]*subscribeEntity.Subscribe{})
-	// Prevent commission amount leakage
-	resp.Commission = 0
-	return resp, nil
+	detail, err := s.orderDetail(ctx, orderInfo, map[int64]*subscribeEntity.Subscribe{})
+	if err != nil {
+		return nil, err
+	}
+	return &detail, nil
 }
 
 func (s *Service) QueryList(ctx context.Context, req *dto.QueryOrderListRequest) (*dto.QueryOrderListResponse, error) {
 	u, ok := user.FromContext(ctx)
 	if !ok {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "Invalid Access")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "Invalid Access")
 	}
 	total, data, err := s.orders.QueryOrderListByPage(ctx, req.Page, req.Size, 0, u.Id, 0, "")
 	if err != nil {
@@ -103,12 +119,11 @@ func (s *Service) QueryList(ctx context.Context, req *dto.QueryOrderListRequest)
 	}
 	planCache := map[int64]*subscribeEntity.Subscribe{}
 	for _, item := range data {
-		var orderInfo dto.OrderDetail
-		mapping.DeepCopy(&orderInfo, item)
-		s.attachPlan(ctx, &orderInfo, planCache)
-		// Prevent commission amount leakage
-		orderInfo.Commission = 0
-		resp.List = append(resp.List, orderInfo)
+		detail, err := s.orderDetail(ctx, item, planCache)
+		if err != nil {
+			return nil, err
+		}
+		resp.List = append(resp.List, detail)
 	}
 	return resp, nil
 }

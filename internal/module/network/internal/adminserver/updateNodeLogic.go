@@ -7,30 +7,17 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type UpdateNodeLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewUpdateNodeLogic Update Node
-func newUpdateNodeLogic(ctx context.Context, deps Deps) *UpdateNodeLogic {
-	return &UpdateNodeLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *UpdateNodeLogic) UpdateNode(req *dto.UpdateNodeRequest) error {
-	nodeStore := l.deps.Store.Node()
-	data, err := nodeStore.FindOneNode(l.ctx, req.Id)
+// UpdateNode stores a node's settings and drops the node-facing caches of
+// its server, and of the server it moved from. A request without the enabled
+// switch keeps the stored one: the column cannot be NULL.
+func (s *Service) UpdateNode(ctx context.Context, req *dto.UpdateNodeRequest) error {
+	nodeStore := s.deps.Store.Node()
+	data, err := nodeStore.FindOneNode(ctx, req.Id)
 	if err != nil {
-		l.Errorw("[UpdateNode] Query Database Error: ", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "[UpdateNode] Query Database Error")
+		logger.WithContext(ctx).Errorw("[UpdateNode] Query Database Error: ", logger.Field("error", err.Error()))
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find node %d", req.Id)
 	}
 	oldServerID := data.ServerId
 	data.Name = req.Name
@@ -39,17 +26,18 @@ func (l *UpdateNodeLogic) UpdateNode(req *dto.UpdateNodeRequest) error {
 	data.Port = req.Port
 	data.Address = req.Address
 	data.Protocol = req.Protocol
-	data.Enabled = req.Enabled
-	err = nodeStore.UpdateNode(l.ctx, data)
-	if err != nil {
-		l.Errorw("[UpdateNode] Update Database Error: ", logger.Field("error", err.Error()))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "[UpdateNode] Update Database Error")
+	if req.Enabled != nil {
+		data.Enabled = req.Enabled
 	}
-	if err := nodeStore.ClearServerCache(l.ctx, oldServerID); err != nil {
+	if err := nodeStore.UpdateNode(ctx, data); err != nil {
+		logger.WithContext(ctx).Errorw("[UpdateNode] Update Database Error: ", logger.Field("error", err.Error()))
+		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update node %d", req.Id)
+	}
+	if err := nodeStore.ClearServerCache(ctx, oldServerID); err != nil {
 		return err
 	}
 	if oldServerID != data.ServerId {
-		return nodeStore.ClearServerCache(l.ctx, data.ServerId)
+		return nodeStore.ClearServerCache(ctx, data.ServerId)
 	}
 	return nil
 }

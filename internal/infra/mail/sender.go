@@ -1,3 +1,7 @@
+// Package mail sends the application's email through the provider the
+// administrators configure; SMTP is the one provider. It also holds the
+// default subjects and HTML templates of the notification emails, which
+// the stored configuration falls back to.
 package mail
 
 import (
@@ -14,10 +18,6 @@ type Sender interface {
 	// SendContext delivers an HTML body to the recipients. ctx bounds the
 	// whole delivery; the provider applies its own deadline besides.
 	SendContext(ctx context.Context, to []string, subject, body string) error
-	// Send is SendContext without a caller context.
-	//
-	// Deprecated: use SendContext.
-	Send(to []string, subject, body string) error
 }
 
 // NewSender builds the provider client for one provider configuration.

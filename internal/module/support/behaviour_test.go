@@ -9,59 +9,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	userEntity "github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/internal/module/platform"
 	taskEntity "github.com/perfect-panel/server/internal/module/platform/entity/task"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
-	adsEntity "github.com/perfect-panel/server/internal/module/support/entity/ads"
-	announcementEntity "github.com/perfect-panel/server/internal/module/support/entity/announcement"
-	docEntity "github.com/perfect-panel/server/internal/module/support/entity/document"
 	ticketEntity "github.com/perfect-panel/server/internal/module/support/entity/ticket"
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/module/support/internal/supporttest"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/redis/go-redis/v9"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 // The tests in this file run the support facade against its own repository
-// implementations on SQLite, with Redis (the repositories' cache) on
-// miniredis: they check what a caller observes, not which calls were made.
+// implementations on the harness database, with Redis (the repositories'
+// cache) on miniredis: they check what a caller observes, not which calls
+// were made.
 
 type supportWorld struct {
-	db    *gorm.DB
-	repos repository.SupportRepos
-	tasks repository.TaskRepo
+	*supporttest.Env
 }
 
 func openSupportWorld(t *testing.T) supportWorld {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:support-behaviour-%d?mode=memory&cache=shared", time.Now().UnixNano())), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&ticketEntity.Ticket{}, &ticketEntity.Follow{}, &announcementEntity.Announcement{},
-		&adsEntity.Ads{}, &docEntity.Document{}, &taskEntity.Task{}, &taskEntity.TaskError{}); err != nil {
-		t.Fatal(err)
-	}
-	server := miniredis.RunT(t)
-	rds := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = rds.Close() })
-	conn := repository.ModuleConn{DB: db, Redis: rds}
-	return supportWorld{
-		db:    db,
-		repos: support.NewRepoBuilder()(conn),
-		tasks: platform.NewRepoBuilder()(conn).Tasks,
-	}
+	return supportWorld{Env: supporttest.New(t)}
 }
 
 // ───────────────────────── tickets ─────────────────────────
 
 func (w supportWorld) ticketService(notify *fakeTicketNotifier) support.Service {
-	deps := support.Deps{Tickets: w.repos.Tickets}
+	deps := support.Deps{Tickets: w.Tickets}
 	if notify != nil {
 		deps.TicketNotify = notify
 	}
@@ -71,7 +47,7 @@ func (w supportWorld) ticketService(notify *fakeTicketNotifier) support.Service 
 func (w supportWorld) seedTicket(t *testing.T, userID int64, status uint8) int64 {
 	t.Helper()
 	row := &ticketEntity.Ticket{Title: "cannot connect", UserId: userID, Status: status}
-	if err := w.db.Create(row).Error; err != nil {
+	if err := w.DB.Create(row).Error; err != nil {
 		t.Fatal(err)
 	}
 	return row.Id
@@ -80,11 +56,11 @@ func (w supportWorld) seedTicket(t *testing.T, userID int64, status uint8) int64
 func (w supportWorld) ticket(t *testing.T, id int64) (*ticketEntity.Ticket, []ticketEntity.Follow) {
 	t.Helper()
 	var row ticketEntity.Ticket
-	if err := w.db.First(&row, id).Error; err != nil {
+	if err := w.DB.First(&row, id).Error; err != nil {
 		t.Fatal(err)
 	}
 	var follows []ticketEntity.Follow
-	if err := w.db.Where("ticket_id = ?", id).Order("id").Find(&follows).Error; err != nil {
+	if err := w.DB.Where("ticket_id = ?", id).Order("id").Find(&follows).Error; err != nil {
 		t.Fatal(err)
 	}
 	return &row, follows
@@ -295,7 +271,7 @@ func TestAdminTicketListFiltersByStatus(t *testing.T) {
 
 func TestAnnouncementsVisibleOnlyOnceShown(t *testing.T) {
 	w := openSupportWorld(t)
-	svc := support.New(support.Deps{Announcements: w.repos.Announcements})
+	svc := support.New(support.Deps{Announcements: w.Announcements})
 	ctx := context.Background()
 
 	for _, title := range []string{"maintenance", "new plans"} {
@@ -345,7 +321,7 @@ func TestAnnouncementsVisibleOnlyOnceShown(t *testing.T) {
 
 func TestDocumentsLifecycle(t *testing.T) {
 	w := openSupportWorld(t)
-	svc := support.New(support.Deps{Documents: w.repos.Documents, Subscriptions: fakeSubscriptionReader{active: true}})
+	svc := support.New(support.Deps{Documents: w.Documents, Subscriptions: fakeSubscriptionReader{active: true}})
 	ctx := context.Background()
 
 	create := func(title string, show bool) {
@@ -401,7 +377,7 @@ func TestDocumentsLifecycle(t *testing.T) {
 
 func TestPublicAdsFollowScheduleAndStatus(t *testing.T) {
 	w := openSupportWorld(t)
-	svc := support.New(support.Deps{Ads: w.repos.Ads})
+	svc := support.New(support.Deps{Ads: w.Ads})
 	ctx := context.Background()
 	now := time.Now()
 
@@ -501,7 +477,7 @@ func (s *recordingStopper) StopBatchEmail(taskID int64) { s.stopped = append(s.s
 
 func (w supportWorld) marketing(queue *recordingQueue, stopper *recordingStopper) support.Service {
 	return support.New(support.Deps{
-		Tasks:        w.tasks,
+		Tasks:        w.Tasks,
 		Recipients:   fixedRecipients{"a@example.com", "b@example.com", "a@example.com"},
 		QuotaTargets: fixedSelector{3, 5},
 		Queue:        queue,
@@ -591,9 +567,8 @@ func TestQuotaTaskLifecycle(t *testing.T) {
 	if got := list.List[0]; got.Days != 7 || !slices.Equal(got.Objects, []int64{3, 5}) || got.Total != 2 {
 		t.Fatalf("quota task = %+v, want 7 days for both subscriptions", got)
 	}
-	status, err := svc.QueryQuotaTaskStatus(ctx, &dto.QueryQuotaTaskStatusRequest{Id: queue.quotas[0]})
-	if err != nil || status.Total != 2 || status.Status != uint8(taskEntity.StatusPending) {
-		t.Fatalf("status = %+v (err %v)", status, err)
+	if got := list.List[0]; got.Id != queue.quotas[0] || got.Status != uint8(taskEntity.StatusPending) {
+		t.Fatalf("quota task = %+v, want the enqueued task pending", got)
 	}
 	if err := svc.CreateQuotaTask(ctx, &dto.CreateQuotaTaskRequest{}); err == nil {
 		t.Fatal("a quota task without any action was accepted")

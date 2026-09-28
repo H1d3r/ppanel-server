@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/notification/entity/telegramtopic"
 	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
-	"github.com/pkg/errors"
+	"github.com/perfect-panel/server/internal/repository"
 	"gorm.io/gorm"
 )
 
@@ -481,13 +482,13 @@ func TestHumanReopeningTicketTopicReopensTicket(t *testing.T) {
 func TestEnsureAdoptsExistingMappingOnDuplicate(t *testing.T) {
 	repo := &fakeTopicRepo{}
 	client := &fakeTopicClient{deadThreads: map[int64]bool{}}
-	svc := NewTopicService(context.Background(), client, repo, testGroupID)
+	svc := NewTopicService(client, repo, testGroupID)
 
-	first, created, err := svc.Ensure(telegramtopic.KindNotify, 0, NotifyTopicTitle)
+	first, created, err := svc.Ensure(context.Background(), telegramtopic.KindNotify, 0, NotifyTopicTitle)
 	if err != nil || !created {
 		t.Fatalf("first ensure = (%+v, %v, %v), want a created topic", first, created, err)
 	}
-	second, created, err := svc.Ensure(telegramtopic.KindNotify, 0, NotifyTopicTitle)
+	second, created, err := svc.Ensure(context.Background(), telegramtopic.KindNotify, 0, NotifyTopicTitle)
 	if err != nil || created {
 		t.Fatalf("second ensure = (%v, %v), want the same mapping without a create", created, err)
 	}
@@ -506,6 +507,8 @@ type racingTopicRepo struct {
 	*fakeTopicRepo
 	missedOnce bool
 }
+
+var _ repository.TelegramTopicRepo = (*racingTopicRepo)(nil)
 
 func (r *racingTopicRepo) FindByKindRef(ctx context.Context, chatID int64, kind uint8, refID int64) (*telegramtopic.Topic, error) {
 	if !r.missedOnce {
@@ -527,9 +530,9 @@ func TestEnsureInsertConflictAdoptsWinnerAndDeletesOrphan(t *testing.T) {
 		t.Fatalf("seed winner: %v", err)
 	}
 	client := &fakeTopicClient{nextThread: 100, deadThreads: map[int64]bool{}, closedThreads: map[int64]bool{}}
-	svc := NewTopicService(context.Background(), client, &racingTopicRepo{fakeTopicRepo: inner}, testGroupID)
+	svc := NewTopicService(client, &racingTopicRepo{fakeTopicRepo: inner}, testGroupID)
 
-	adopted, created, err := svc.Ensure(telegramtopic.KindSupport, 7, "💬 loser")
+	adopted, created, err := svc.Ensure(context.Background(), telegramtopic.KindSupport, 7, "💬 loser")
 	if err != nil {
 		t.Fatalf("ensure error = %v", err)
 	}
@@ -555,10 +558,10 @@ func TestRelayReopensClosedTopicAndRetries(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	client := &fakeTopicClient{deadThreads: map[int64]bool{}, closedThreads: map[int64]bool{5: true}}
-	svc := NewTopicService(context.Background(), client, repo, testGroupID)
+	svc := NewTopicService(client, repo, testGroupID)
 
 	calls := 0
-	relayed, err := svc.Relay(seeded, func(threadID int64) error {
+	relayed, err := svc.Relay(context.Background(), seeded, func(threadID int64) error {
 		calls++
 		if client.closedThreads[threadID] {
 			return errors.New("Bad Request: TOPIC_CLOSED")

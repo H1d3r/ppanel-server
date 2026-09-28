@@ -44,7 +44,7 @@ func newCryptomusCase(t *testing.T, answer func() (int, string, error), adjust .
 	// The invoice query goes to the production host through the injected
 	// client; nothing leaves the process.
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		defer req.Body.Close()
+		defer func() { _ = req.Body.Close() }()
 		if req.URL.String() != cryptomus.DefaultBaseURL+"/v1/payment/info" || req.Method != http.MethodPost {
 			t.Errorf("unexpected gateway request: %s %s", req.Method, req.URL)
 		}
@@ -65,7 +65,7 @@ func newCryptomusCase(t *testing.T, answer func() (int, string, error), adjust .
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	f := newCheckoutFixture(t, withGateways(gateway.NewRegistry(gateway.WithHTTPClient(client))))
-	buyer, _ := f.buyer(0, 10)
+	buyer, _ := f.buyer(10)
 	plan := f.h.Plan(1000, func(p *subscribe.Subscribe) { p.Inventory = 3 })
 	method := f.h.Payment("Cryptomus", `{"merchant_id":"merchant-1","api_key":"test-key"}`)
 	o.UserId, o.SubscribeId, o.PaymentId = buyer.Id, plan.Id, method.Id
@@ -216,7 +216,7 @@ func TestCloseCryptomusRechecksConcurrentCheckoutInsideTransaction(t *testing.T)
 		t.Error("the close read the order before its checkout started")
 		return 0, "", errors.New("unexpected")
 	}, func(o *order.Order) { o.TradeNo, o.PaymentCurrency = "", "" })
-	c.svc.deps.Tx = raceTransactor{Transactor: c.h.Store, compete: func() {
+	c.svc.deps.Tx = raceTransactor{tx: c.h.Store, compete: func() {
 		if err := c.h.DB.Model(&order.Order{}).Where("order_no = ?", cryptomusOrderNo).Update("payment_currency", "USD").Error; err != nil {
 			t.Fatal(err)
 		}

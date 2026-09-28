@@ -29,7 +29,7 @@ func (m *UserRepo) FindOneByEmail(ctx context.Context, email string) (*user.User
 		return &u, err
 	}
 	key := fmt.Sprintf("%s%v", cacheUserEmailPrefix, canonicalEmail)
-	err = m.QueryCtx(ctx, &u, key, func(conn *gorm.DB, v interface{}) error {
+	err = m.QueryCtx(ctx, &u, key, func(conn *gorm.DB, v any) error {
 		data, err := findUserAuthMethodByIdentifier(conn, identifier.Email, canonicalEmail)
 		if err != nil {
 			return err
@@ -61,7 +61,7 @@ func (m *UserRepo) Insert(ctx context.Context, data *user.User) error {
 func (m *UserRepo) FindOne(ctx context.Context, id int64) (*user.User, error) {
 	userIdKey := fmt.Sprintf("%s%v", cacheUserIdPrefix, id)
 	var resp user.User
-	err := m.QueryCtx(ctx, &resp, userIdKey, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, &resp, userIdKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Unscoped().Where("id = ?", id).Preload("UserDevices").Preload("AuthMethods").First(&resp).Error
 	})
 	return &resp, err
@@ -70,7 +70,7 @@ func (m *UserRepo) FindOne(ctx context.Context, id int64) (*user.User, error) {
 func (m *UserRepo) FindAccountState(ctx context.Context, id int64) (*user.AccountState, error) {
 	key := fmt.Sprintf("%s%d", cacheUserStatePrefix, id)
 	var state user.AccountState
-	err := m.QueryCtx(ctx, &state, key, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, &state, key, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Unscoped().
 			Select("id", "enable", "updated_at", "deleted_at").Where("id = ?", id).First(v).Error
 	})
@@ -85,7 +85,7 @@ func (m *UserRepo) FindEnabledUserIDs(ctx context.Context, ids []int64) ([]int64
 	if len(ids) == 0 {
 		return result, nil
 	}
-	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &result, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).
 			Where("id IN ? AND enable = ?", ids, true).
 			Pluck("id", v).Error
@@ -95,7 +95,7 @@ func (m *UserRepo) FindEnabledUserIDs(ctx context.Context, ids []int64) ([]int64
 
 func (m *UserRepo) FindOneForUpdate(ctx context.Context, id int64) (*user.User, error) {
 	var resp user.User
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Model(&user.User{}).
 			Where("id = ?", id).
@@ -110,7 +110,7 @@ func (m *UserRepo) FindOneForUpdate(ctx context.Context, id int64) (*user.User, 
 // the fields they change, so a stale snapshot, such as the request's
 // authenticated user, cannot write back an enable flag, admin flag, password
 // or deletion that changed meanwhile, and a soft-deleted row stays deleted.
-func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[string]interface{}) error {
+func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[string]any) error {
 	if len(columns) == 0 {
 		return nil
 	}
@@ -132,7 +132,7 @@ func (m *UserRepo) UpgradePasswordHash(ctx context.Context, id int64, currentHas
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		result := conn.Model(&user.User{}).
 			Where("id = ? AND password = ?", id, currentHash).
-			Updates(map[string]interface{}{
+			Updates(map[string]any{
 				"password": password,
 				"algo":     algo,
 				"salt":     salt,
@@ -183,7 +183,7 @@ func (m *UserRepo) QueryPageList(ctx context.Context, page, size int, filter *us
 	if err != nil {
 		return nil, 0, err
 	}
-	err = m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err = m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		conn = applyUserPageFilters(conn.Model(&user.User{}), filter, subIDs, subFiltered)
 		if err := conn.Count(&total).Error; err != nil {
 			return err
@@ -387,7 +387,7 @@ func (m *UserRepo) QueryEmailRecipients(ctx context.Context, filter *user.EmailR
 		return nil, err
 	}
 	var emails []string
-	err = m.QueryNoCacheCtx(ctx, &emails, func(conn *gorm.DB, v interface{}) error {
+	err = m.QueryNoCacheCtx(ctx, &emails, func(conn *gorm.DB, v any) error {
 		return emailRecipientQuery(conn, filter, ids, exclude).Pluck("auth_identifier", v).Error
 	})
 	return emails, err
@@ -406,7 +406,7 @@ func (m *UserRepo) CountEmailRecipients(ctx context.Context, filter *user.EmailR
 		return 0, err
 	}
 	var total int64
-	err = m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err = m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return emailRecipientQuery(conn, filter, ids, exclude).Count(&total).Error
 	})
 	return total, err
@@ -417,7 +417,7 @@ func (m *UserRepo) BatchDeleteUser(ctx context.Context, ids []int64) error {
 		return nil
 	}
 	var users []*user.User
-	err := m.QueryNoCacheCtx(ctx, &users, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &users, func(conn *gorm.DB, v any) error {
 		// The auth methods carry the email lookup's cache key.
 		return conn.Where("id in ?", ids).Preload("AuthMethods").Find(&users).Error
 	})
@@ -433,7 +433,7 @@ func (m *UserRepo) QueryRegisterUserTotalByDate(ctx context.Context, date time.T
 	var total int64
 	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	end := start.AddDate(0, 0, 1)
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Where("created_at >= ? AND created_at < ?", start, end).Count(&total).Error
 	})
 	return total, err
@@ -443,7 +443,7 @@ func (m *UserRepo) QueryRegisterUserTotalByMonthly(ctx context.Context, date tim
 	var total int64
 	start := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
 	end := start.AddDate(0, 1, 0)
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Where("created_at >= ? AND created_at < ?", start, end).Count(&total).Error
 	})
 	return total, err
@@ -451,7 +451,7 @@ func (m *UserRepo) QueryRegisterUserTotalByMonthly(ctx context.Context, date tim
 
 func (m *UserRepo) QueryRegisterUserTotal(ctx context.Context) (int64, error) {
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Count(&total).Error
 	})
 	return total, err
@@ -474,7 +474,7 @@ func (m *UserRepo) QueryResisterUserTotalByMonthly(ctx context.Context, date tim
 
 func (m *UserRepo) CountEnabledUsers(ctx context.Context) (int64, error) {
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Where("enable = ?", true).Count(&total).Error
 	})
 	return total, err
@@ -482,7 +482,7 @@ func (m *UserRepo) CountEnabledUsers(ctx context.Context) (int64, error) {
 
 func (m *UserRepo) QueryAdminUsers(ctx context.Context) ([]*user.User, error) {
 	var data []*user.User
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Preload("AuthMethods").Where("is_admin = ?", true).Find(&data).Error
 	})
 	return data, err
@@ -495,7 +495,7 @@ func (m *UserRepo) UpdateUserCache(ctx context.Context, data *user.User) error {
 
 func (m *UserRepo) FindOneByReferCode(ctx context.Context, referCode string) (*user.User, error) {
 	var data user.User
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Where("refer_code = ?", referCode).First(&data).Error
 	})
 	return &data, err
@@ -548,7 +548,7 @@ func (m *UserRepo) orderUserCountsByBucket(ctx context.Context, isNew bool, sinc
 // (identity-domain only).
 func (m *UserRepo) registrationCountsByBucket(ctx context.Context, since time.Time, until *time.Time, bucket string) ([]user.UserStatisticsWithDate, error) {
 	var results []user.UserStatisticsWithDate
-	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &results, func(conn *gorm.DB, v any) error {
 		userCreatedAt := userColumn(conn, "created_at")
 		userDateExpr := orm.DateBucketExpr(conn, userCreatedAt, bucket)
 		q := conn.Model(&user.User{}).
@@ -575,7 +575,7 @@ func mergeUserStatistics(registrations []user.UserStatisticsWithDate, newUsers, 
 
 func (m *UserRepo) FindUserAuthMethods(ctx context.Context, userId int64) ([]*user.AuthMethods, error) {
 	var data []*user.AuthMethods
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.AuthMethods{}).Where("user_id = ?", userId).Find(&data).Error
 	})
 	return data, err
@@ -588,7 +588,7 @@ func (m *UserRepo) FindUserAuthMethodsByUserIds(ctx context.Context, method stri
 		return []*user.AuthMethods{}, nil
 	}
 	var data []*user.AuthMethods
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return joinUndeletedUsers(conn.Model(&user.AuthMethods{})).
 			Where(authMethodsColumn(conn, "auth_type")+" = ? AND "+authMethodsColumn(conn, "user_id")+" IN ?", method, userIds).
 			Find(v).Error
@@ -615,10 +615,10 @@ func (m *UserRepo) FindEmailAlias(ctx context.Context, email string) (*user.Auth
 		domains = append(domains, "googlemail.com")
 	}
 	var candidates []*user.AuthMethods
-	err := m.QueryNoCacheCtx(ctx, &candidates, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &candidates, func(conn *gorm.DB, v any) error {
 		column := authMethodsColumn(conn, "auth_identifier")
 		conditions := make([]string, 0, len(domains))
-		args := make([]interface{}, 0, len(domains))
+		args := make([]any, 0, len(domains))
 		for _, d := range domains {
 			conditions = append(conditions, column+" LIKE ?"+orm.LikeEscapeClause())
 			args = append(args, emailAliasPattern(local, d))
@@ -653,7 +653,7 @@ func emailAliasPattern(local, domain string) string {
 
 func (m *UserRepo) FindUserAuthMethodByOpenID(ctx context.Context, method, openID string) (*user.AuthMethods, error) {
 	var data user.AuthMethods
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		resolved, err := findUserAuthMethodByIdentifier(conn, method, openID)
 		if err != nil {
 			return err
@@ -666,7 +666,7 @@ func (m *UserRepo) FindUserAuthMethodByOpenID(ctx context.Context, method, openI
 
 func (m *UserRepo) FindUserAuthMethodByPlatform(ctx context.Context, userId int64, platform string) (*user.AuthMethods, error) {
 	var data user.AuthMethods
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.AuthMethods{}).Where("user_id = ? AND auth_type = ?", userId, platform).First(&data).Error
 	})
 	return &data, err
@@ -729,7 +729,10 @@ func (m *UserRepo) DeleteUserAuthMethods(ctx context.Context, userId int64, plat
 		return err
 	}
 	defer func() {
-		if err = m.ClearUserCache(context.Background(), u); err != nil {
+		// The write may have committed although the request ended
+		// meanwhile, so the cached rows are dropped without its
+		// cancellation.
+		if err = m.ClearUserCache(context.WithoutCancel(ctx), u); err != nil {
 			logger.Errorf("[UserModel] clear user cache failed: %v", err.Error())
 		}
 	}()
@@ -752,7 +755,9 @@ func (m *UserRepo) UpdateUserAuthMethodOwner(ctx context.Context, authType, auth
 		return err
 	}
 	defer func() {
-		if err = m.ClearUserCache(context.Background(), oldUser, newUser); err != nil {
+		// As in DeleteUserAuthMethods, the cached rows are dropped without
+		// the request's cancellation.
+		if err = m.ClearUserCache(context.WithoutCancel(ctx), oldUser, newUser); err != nil {
 			logger.Errorf("[UserModel] clear user cache failed: %v", err.Error())
 		}
 	}()
@@ -776,7 +781,9 @@ func (m *UserRepo) DeleteUserAuthMethodByIdentifier(ctx context.Context, authTyp
 		return err
 	}
 	defer func() {
-		if err = m.ClearUserCache(context.Background(), u); err != nil {
+		// As in DeleteUserAuthMethods, the cached rows are dropped without
+		// the request's cancellation.
+		if err = m.ClearUserCache(context.WithoutCancel(ctx), u); err != nil {
 			logger.Errorf("[UserModel] clear user cache failed: %v", err.Error())
 		}
 	}()
@@ -802,7 +809,7 @@ func (m *UserRepo) UpsertUserAuthMethod(ctx context.Context, data *user.AuthMeth
 
 func (m *UserRepo) FindUserAuthMethodByUserId(ctx context.Context, method string, userId int64) (*user.AuthMethods, error) {
 	var data user.AuthMethods
-	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &data, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.AuthMethods{}).Where("auth_type = ? AND user_id = ?", method, userId).First(&data).Error
 	})
 	return &data, err
@@ -812,7 +819,7 @@ func (m *UserRepo) FindUserAuthMethodByUserId(ctx context.Context, method string
 
 func (m *UserRepo) FindDeviceForAuth(ctx context.Context, id int64) (*user.Device, error) {
 	var device user.Device
-	err := m.QueryNoCacheCtx(ctx, &device, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &device, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.Device{}).Select("id", "user_id", "identifier", "enabled").Where("id = ?", id).First(v).Error
 	})
 	return &device, err
@@ -826,7 +833,7 @@ func (m *UserRepo) TouchDevice(ctx context.Context, id, userID int64, ip, userAg
 	var changed bool
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		result := conn.Model(&user.Device{}).Where("id = ? AND user_id = ? AND enabled = ?", id, userID, true).
-			Updates(map[string]interface{}{"ip": ip, "user_agent": userAgent})
+			Updates(map[string]any{"ip": ip, "user_agent": userAgent})
 		changed = result.RowsAffected == 1
 		return result.Error
 	}, device.GetCacheKeys()...)
@@ -849,29 +856,25 @@ func (m *UserRepo) TouchDevice(ctx context.Context, id, userID int64, ip, userAg
 func (m *UserRepo) FindOneDevice(ctx context.Context, id int64) (*user.Device, error) {
 	deviceIdKey := fmt.Sprintf("%s%v", cacheUserDeviceIdPrefix, id)
 	var resp user.Device
-	err := m.QueryCtx(ctx, &resp, deviceIdKey, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, &resp, deviceIdKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.Device{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *UserRepo) FindOneDeviceByIdentifier(ctx context.Context, id string) (*user.Device, error) {
 	deviceIdKey := fmt.Sprintf("%s%v", cacheUserDeviceNumberPrefix, id)
 	var resp user.Device
-	err := m.QueryCtx(ctx, &resp, deviceIdKey, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryCtx(ctx, &resp, deviceIdKey, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.Device{}).Where("identifier = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 // QueryDevicePageList  returns a list of records that meet the conditions.
@@ -879,7 +882,7 @@ func (m *UserRepo) QueryDevicePageList(ctx context.Context, userId, subscribeId 
 	var list []*user.Device
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.Device{}).Where("user_id = ? and subscribe_id = ?", userId, subscribeId).Count(&total).Limit(size).Offset((page - 1) * size).Find(&list).Error
 	})
 	return list, total, err
@@ -889,7 +892,7 @@ func (m *UserRepo) QueryDevicePageList(ctx context.Context, userId, subscribeId 
 func (m *UserRepo) QueryDeviceList(ctx context.Context, userId int64) ([]*user.Device, int64, error) {
 	var list []*user.Device
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.Device{}).Where("user_id = ?", userId).Count(&total).Find(&list).Error
 	})
 	return list, total, err
@@ -911,7 +914,7 @@ func (m *UserRepo) updateDeviceField(ctx context.Context, id int64, field string
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		query := conn.Model(&user.Device{}).Where("id = ?", id)
 		if field == "enabled" && !value {
-			return query.Updates(map[string]interface{}{"enabled": false, "online": false}).Error
+			return query.Updates(map[string]any{"enabled": false, "online": false}).Error
 		}
 		if field == "online" && value {
 			query = query.Where("enabled = ?", true)
@@ -950,7 +953,7 @@ func (m *UserRepo) InsertDevice(ctx context.Context, data *user.Device) error {
 
 func (m *UserRepo) FindDeviceOnlineRecord(ctx context.Context, userId int64, startTime, endTime string) (*user.DeviceOnlineRecord, error) {
 	var record user.DeviceOnlineRecord
-	err := m.QueryNoCacheCtx(ctx, &record, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &record, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.DeviceOnlineRecord{}).
 			Where("user_id = ? AND created_at >= ? AND created_at < ?", userId, startTime, endTime).
 			First(&record).Error
@@ -968,7 +971,7 @@ func (m *UserRepo) InsertDeviceOnlineRecord(ctx context.Context, data *user.Devi
 
 func (m *UserRepo) CountAffiliates(ctx context.Context, refererId int64) (int64, error) {
 	var total int64
-	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Where("referer_id = ?", refererId).Count(&total).Error
 	})
 	return total, err
@@ -978,7 +981,7 @@ func (m *UserRepo) QueryAffiliateList(ctx context.Context, refererId int64, page
 	var list []*user.User
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).
 			Where("referer_id = ?", refererId).
 			Count(&total).
@@ -996,7 +999,7 @@ func (m *UserRepo) FindUsersByIds(ctx context.Context, ids []int64) ([]*user.Use
 	if len(ids) == 0 {
 		return users, nil
 	}
-	err := m.QueryNoCacheCtx(ctx, &users, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &users, func(conn *gorm.DB, v any) error {
 		return conn.Model(&user.User{}).Where("id IN ?", ids).Find(&users).Error
 	})
 	return users, err

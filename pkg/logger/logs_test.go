@@ -24,17 +24,9 @@ var (
 	_    Writer = (*mockWriter)(nil)
 )
 
-func init() {
-	ExitOnFatal.Store(false)
-}
-
 type mockWriter struct {
 	lock    sync.Mutex
 	builder strings.Builder
-}
-
-func (mw *mockWriter) Alert(v any) {
-	mw.write(levelAlert, v)
 }
 
 func (mw *mockWriter) Debug(v any, fields ...LogField) {
@@ -49,20 +41,12 @@ func (mw *mockWriter) Info(v any, fields ...LogField) {
 	mw.write(levelInfo, v, fields...)
 }
 
-func (mw *mockWriter) Severe(v any) {
-	mw.write(levelSevere, v)
-}
-
 func (mw *mockWriter) Slow(v any, fields ...LogField) {
 	mw.write(levelSlow, v, fields...)
 }
 
 func (mw *mockWriter) Stack(v any) {
 	mw.write(levelError, v)
-}
-
-func (mw *mockWriter) Stat(v any, fields ...LogField) {
-	mw.write(levelStat, v, fields...)
 }
 
 func (mw *mockWriter) write(level string, v any, fields ...LogField) {
@@ -202,12 +186,6 @@ func TestFileLineConsoleMode(t *testing.T) {
 	assert.True(t, w.Contains(fmt.Sprintf("%s:%d", file, line+1)))
 }
 
-func TestMust(t *testing.T) {
-	assert.Panics(t, func() {
-		Must(errors.New("foo"))
-	})
-}
-
 func TestStructedLogDebug(t *testing.T) {
 	w := new(mockWriter)
 	old := writer.Swap(w)
@@ -215,16 +193,6 @@ func TestStructedLogDebug(t *testing.T) {
 
 	doTestStructedLog(t, levelDebug, w, func(v ...any) {
 		Debug(v...)
-	})
-}
-
-func TestStructedLogDebugf(t *testing.T) {
-	w := new(mockWriter)
-	old := writer.Swap(w)
-	defer writer.Store(old)
-
-	doTestStructedLog(t, levelDebug, w, func(v ...any) {
-		Debugf("%s", fmt.Sprint(v...))
 	})
 }
 
@@ -321,7 +289,7 @@ func TestStructedLogInfoConsoleAny(t *testing.T) {
 			atomic.StoreUint32(&encoding, old)
 		}()
 
-		new(richLogger).Infov(v)
+		new(richLogger).info(v)
 	})
 }
 
@@ -337,7 +305,7 @@ func TestStructedLogInfoConsoleAnyString(t *testing.T) {
 			atomic.StoreUint32(&encoding, old)
 		}()
 
-		new(richLogger).Infov(fmt.Sprint(v...))
+		new(richLogger).info(fmt.Sprint(v...))
 	})
 }
 
@@ -353,7 +321,7 @@ func TestStructedLogInfoConsoleAnyError(t *testing.T) {
 			atomic.StoreUint32(&encoding, old)
 		}()
 
-		new(richLogger).Infov(errors.New(fmt.Sprint(v...)))
+		new(richLogger).info(errors.New(fmt.Sprint(v...)))
 	})
 }
 
@@ -369,7 +337,7 @@ func TestStructedLogInfoConsoleAnyStringer(t *testing.T) {
 			atomic.StoreUint32(&encoding, old)
 		}()
 
-		new(richLogger).Infov(ValStringer{
+		new(richLogger).info(ValStringer{
 			val: fmt.Sprint(v...),
 		})
 	})
@@ -474,10 +442,6 @@ func TestErrorfWithWrappedError(t *testing.T) {
 	assert.True(t, strings.Contains(w.String(), "hello there"))
 }
 
-func TestMustNil(t *testing.T) {
-	Must(nil)
-}
-
 func TestSetup(t *testing.T) {
 	oldWriter := writer.Load()
 	oldLevel := atomic.LoadUint32(&logLevel)
@@ -496,50 +460,52 @@ func TestSetup(t *testing.T) {
 	})
 
 	setupOnce = sync.Once{}
-	Must(SetUp(LogConf{
+	assert.NoError(t, SetUp(LogConf{
 		ServiceName: "any",
 		Mode:        "console",
 		Encoding:    "json",
 		TimeFormat:  timeFormat,
 	}))
 	setupOnce = sync.Once{}
-	Must(SetUp(LogConf{
+	assert.NoError(t, SetUp(LogConf{
 		ServiceName: "any",
 		Mode:        "console",
 		TimeFormat:  timeFormat,
 	}))
 	setupOnce = sync.Once{}
-	Must(SetUp(LogConf{
+	assert.NoError(t, SetUp(LogConf{
 		ServiceName: "any",
 		Mode:        "file",
 		Path:        os.TempDir(),
 	}))
 	setupOnce = sync.Once{}
-	Must(SetUp(LogConf{
+	assert.NoError(t, SetUp(LogConf{
 		ServiceName: "any",
 		Mode:        "volume",
 		Path:        os.TempDir(),
 	}))
 	setupOnce = sync.Once{}
-	Must(SetUp(LogConf{
+	assert.NoError(t, SetUp(LogConf{
 		ServiceName: "any",
 		Mode:        "console",
 		TimeFormat:  timeFormat,
 	}))
 	setupOnce = sync.Once{}
-	Must(SetUp(LogConf{
+	assert.NoError(t, SetUp(LogConf{
 		ServiceName: "any",
 		Mode:        "console",
 		Encoding:    plainEncoding,
 	}))
 
-	defer os.RemoveAll("CD01CB7D-2705-4F3F-889E-86219BF56F10")
+	volume := t.TempDir()
 	assert.NotNil(t, setupWithVolume(LogConf{}))
 	assert.Nil(t, setupWithVolume(LogConf{
 		ServiceName: "CD01CB7D-2705-4F3F-889E-86219BF56F10",
+		Path:        volume,
 	}))
 	assert.Nil(t, setupWithVolume(LogConf{
 		ServiceName: "CD01CB7D-2705-4F3F-889E-86219BF56F10",
+		Path:        volume,
 		Rotation:    sizeRotationRule,
 	}))
 	assert.NotNil(t, setupWithFiles(LogConf{}))
@@ -643,7 +609,7 @@ func BenchmarkCopyByteSlice(b *testing.B) {
 		buf = make([]byte, len(s))
 		copy(buf, s)
 	}
-	fmt.Fprint(io.Discard, buf)
+	_, _ = io.Discard.Write(buf)
 }
 
 func BenchmarkCopyOnWriteByteSlice(b *testing.B) {
@@ -652,7 +618,7 @@ func BenchmarkCopyOnWriteByteSlice(b *testing.B) {
 		size := len(s)
 		buf = s[:size:size]
 	}
-	fmt.Fprint(io.Discard, buf)
+	_, _ = io.Discard.Write(buf)
 }
 
 func BenchmarkCacheByteSlice(b *testing.B) {

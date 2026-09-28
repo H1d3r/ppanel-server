@@ -1,3 +1,6 @@
+// Package apple is the Sign in with Apple client of the Apple sign-in
+// method: it signs the client secret from the configured private key and
+// exchanges authorization codes for the identity token.
 package apple
 
 import (

@@ -16,7 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/geoip/geoiptest"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
-	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/internal/module/platform/internal/readmodel"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
@@ -24,8 +24,9 @@ import (
 
 var errStatBackend = errors.New("backend unavailable")
 
+// statUsers counts the enabled accounts; the statistics read no
+// authentication methods.
 type statUsers struct {
-	repository.UserRepo
 	enabled int64
 	err     error
 	calls   atomic.Int64
@@ -45,8 +46,16 @@ func (u *statUsers) CountEnabledUsers(ctx context.Context) (int64, error) {
 	return u.enabled, u.err
 }
 
+func (u *statUsers) ListAuthMethods(context.Context) ([]readmodel.AuthMethod, error) {
+	return nil, errors.New("the statistics read no authentication methods")
+}
+
+var (
+	_ AccountStats = (*statUsers)(nil)
+	_ NodeStats    = (*statNodes)(nil)
+)
+
 type statNodes struct {
-	repository.NodeRepo
 	enabled                        int64
 	addresses, protocols           []string
 	countErr, addressErr, protoErr error
@@ -59,15 +68,6 @@ func (n *statNodes) QueryServerAddresses(context.Context) ([]string, error) {
 func (n *statNodes) QueryEnabledNodeProtocols(context.Context) ([]string, error) {
 	return n.protocols, n.protoErr
 }
-
-type statStore struct {
-	Store
-	users *statUsers
-	nodes *statNodes
-}
-
-func (s statStore) User() repository.UserRepo { return s.users }
-func (s statStore) Node() repository.NodeRepo { return s.nodes }
 
 // hosts resolves the names it knows; the others fail like NXDOMAIN.
 type hosts map[string]string
@@ -105,7 +105,8 @@ func newStatWorld(t *testing.T) *statWorld {
 
 	w := &statWorld{redis: server, users: &statUsers{}, nodes: &statNodes{}, geoip: db}
 	w.svc = NewService(Deps{
-		Store:    statStore{users: w.users, nodes: w.nodes},
+		Accounts: w.users,
+		Nodes:    w.nodes,
 		Redis:    rds,
 		GeoIP:    func() *geoip2.Reader { return w.geoip },
 		Resolver: hosts{"hk.example": "150.0.0.1", "au.example": "1.0.0.1"},

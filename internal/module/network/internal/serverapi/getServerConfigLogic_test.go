@@ -15,7 +15,7 @@ const legacyShapes = `{"anytls":{"port":443,"security_config":{"allow_insecure":
 func TestCompatibleKeepsTheLegacyShapes(t *testing.T) {
 	out := map[string]any{}
 	for _, typ := range []string{ShadowSocks, Vless, Vmess, Trojan, AnyTLS, Tuic, Hysteria, Nowhere} {
-		out[typ] = (&GetServerConfigLogic{}).compatible(node.Protocol{
+		out[typ] = compatible(node.Protocol{
 			Type: typ, Port: 443, Enable: true, Security: "reality", SNI: "sni", AllowInsecure: true, Fingerprint: "chrome",
 			RealityServerAddr: "addr", RealityServerPort: 8443, RealityPrivateKey: "priv", RealityPublicKey: "pub", RealityShortId: "sid",
 			Transport: "ws", Host: "host", Path: "/p", ServiceName: "svc", Cipher: "aes", ServerKey: "key", Flow: "flow",
@@ -33,8 +33,7 @@ func TestCompatibleKeepsTheLegacyShapes(t *testing.T) {
 }
 
 func TestCompatibleDoesNotInventLegacyNowhereContract(t *testing.T) {
-	logic := &GetServerConfigLogic{}
-	if config := logic.compatible(node.Protocol{
+	if config := compatible(node.Protocol{
 		Type: Nowhere, Port: 443, Version: 1, Enable: true, Security: "tls",
 		Network: "mix", SNI: "node.example", ALPN: []string{"now/1"}, CertMode: "self",
 	}); config != nil {

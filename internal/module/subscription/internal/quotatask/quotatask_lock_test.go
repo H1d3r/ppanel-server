@@ -28,9 +28,9 @@ func TestGrantSubscriptionKeepsConcurrentWritesAndAdminHold(t *testing.T) {
 		Id: 9, UserId: 3, SubscribeId: 1, Status: usersub.SubscribeStatusActive, ExpireTime: term,
 		Traffic: 1000, Token: "token-stale", UUID: "uuid-stale",
 	}
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
-	if err := logic.grantSubscription(context.Background(), 7, stale, task.QuotaContent{Days: 30}, now); err != nil {
+	if err := svc.grantSubscription(context.Background(), 7, stale, task.QuotaContent{Days: 30}, now); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
 	row := f.Load(t, 9)
@@ -43,7 +43,7 @@ func TestGrantSubscriptionKeepsConcurrentWritesAndAdminHold(t *testing.T) {
 	if !row.ExpireTime.Equal(term.AddDate(0, 0, 30)) {
 		t.Fatalf("expire_time = %v, want %v", row.ExpireTime, term.AddDate(0, 0, 30))
 	}
-	if stale.Token != "token-fresh" || stale.Status != usersub.SubscribeStatusStopped || !grantMarker(t, f, 7, 9) {
+	if stale.Token != "token-fresh" || stale.Status != usersub.SubscribeStatusStopped || !grantMarker(t, f, 9) {
 		t.Fatalf("caller copy not refreshed or marker missing: sub=%+v", stale)
 	}
 }
@@ -56,9 +56,9 @@ func TestGrantSubscriptionResetKeepsAdminHold(t *testing.T) {
 		Traffic: 1000, Upload: 500, Download: 700,
 	})
 	stale := &usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusFinished}
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
-	if err := logic.grantSubscription(context.Background(), 7, stale, task.QuotaContent{ResetTraffic: true}, now); err != nil {
+	if err := svc.grantSubscription(context.Background(), 7, stale, task.QuotaContent{ResetTraffic: true}, now); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
 	if row := f.Load(t, 9); row.Status != usersub.SubscribeStatusStopped || row.Upload != 0 || row.Download != 0 {
@@ -72,13 +72,13 @@ func TestGrantSubscriptionSkipsRowDeductedAfterTaskStart(t *testing.T) {
 	term := now.Add(time.Hour)
 	f.Subscription(t, usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusDeducted, ExpireTime: term})
 	stale := &usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusActive, ExpireTime: term}
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
-	err := logic.grantSubscription(context.Background(), 7, stale, task.QuotaContent{Days: 30}, now)
+	err := svc.grantSubscription(context.Background(), 7, stale, task.QuotaContent{Days: 30}, now)
 	if !errors.Is(err, errQuotaIneligible) {
 		t.Fatalf("grantSubscription error = %v, want errQuotaIneligible", err)
 	}
-	if row := f.Load(t, 9); row.Status != usersub.SubscribeStatusDeducted || !row.ExpireTime.Equal(term) || grantMarker(t, f, 7, 9) {
+	if row := f.Load(t, 9); row.Status != usersub.SubscribeStatusDeducted || !row.ExpireTime.Equal(term) || grantMarker(t, f, 9) {
 		t.Fatalf("deducted row was granted: %+v", row)
 	}
 }
@@ -91,9 +91,9 @@ func TestGrantSubscriptionReactivatesExpiredSubscription(t *testing.T) {
 		Id: 9, UserId: 3, Status: usersub.SubscribeStatusExpired, ExpireTime: now.Add(-2 * time.Hour), FinishedAt: &finishedAt,
 	})
 	stale := &usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusExpired}
-	logic := &QuotaTaskLogic{deps: Deps{Store: newQuotaStore(f)}}
+	svc := NewService(Deps{Store: newQuotaStore(f)})
 
-	if err := logic.grantSubscription(context.Background(), 7, stale, task.QuotaContent{Days: 10}, now); err != nil {
+	if err := svc.grantSubscription(context.Background(), 7, stale, task.QuotaContent{Days: 10}, now); err != nil {
 		t.Fatalf("grantSubscription: %v", err)
 	}
 	if row := f.Load(t, 9); row.Status != usersub.SubscribeStatusActive || row.FinishedAt != nil || !row.ExpireTime.Equal(now.AddDate(0, 0, 10)) {
@@ -108,16 +108,16 @@ func TestProcessSubscribesReportsRowDeductedMidTask(t *testing.T) {
 	now := timeutil.Now().Truncate(time.Millisecond)
 	f.Subscription(t, usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusDeducted, ExpireTime: now.Add(time.Hour)})
 	stale := &usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusActive, ExpireTime: now.Add(time.Hour)}
-	store := newQuotaStore(f)
-	logic := &QuotaTaskLogic{deps: Deps{Store: store}}
+	store, gifts := newQuotaStore(f), newQuotaGifts()
+	svc := NewService(Deps{Store: store, Gifts: gifts})
 	taskInfo := &task.Task{Id: 7, Status: task.StatusInProgress, Total: 1}
 
 	content := task.QuotaContent{Days: 1, GiftType: 1, GiftValue: 100}
-	if err := logic.processSubscribes(context.Background(), []*usersub.Subscribe{stale}, content, taskInfo); err != nil {
+	if err := svc.processSubscribes(context.Background(), []*usersub.Subscribe{stale}, content, taskInfo); err != nil {
 		t.Fatalf("processSubscribes: %v", err)
 	}
-	if store.billingCalls != 0 {
-		t.Fatalf("gift granted to a deducted subscription: billing calls=%d", store.billingCalls)
+	if len(gifts.credits) != 0 {
+		t.Fatalf("gift granted to a deducted subscription: credits=%+v", gifts.credits)
 	}
 	if taskInfo.Current != 1 || !strings.Contains(taskInfo.Errors, "deducted") {
 		t.Fatalf("deducted subscription not reported: current=%d errors=%q", taskInfo.Current, taskInfo.Errors)

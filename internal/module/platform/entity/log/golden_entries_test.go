@@ -23,7 +23,7 @@ var goldenRequest = requestmeta.Metadata{
 // goldenEntries is one populated entry of every log content type.
 func goldenEntries() []goldenEntry {
 	return []goldenEntry{
-		{"message", &Message{Metadata: goldenRequest, To: "user@example.com", Subject: "verify", Content: map[string]interface{}{"email_type": "verify", "code": "123456"}, Platform: "smtp", Template: "{{.Code}}", Status: 1}},
+		{"message", &Message{Metadata: goldenRequest, To: "user@example.com", Subject: "verify", Content: map[string]any{"email_type": "verify", "code": "123456"}, Platform: "smtp", Template: "{{.Code}}", Status: 1}},
 		{"traffic", &Traffic{Download: 10, Upload: 20}},
 		{"login", &Login{IPMetadata: goldenRequest.IPMetadata, Method: "email", LoginIP: "203.0.113.7", UserAgent: "RiskClient/1.0", Success: true, Timestamp: 1700000000000, ActorID: 9}},
 		{"register", &Register{IPMetadata: goldenRequest.IPMetadata, AuthMethod: "email", Identifier: "user@example.com", RegisterIP: "203.0.113.7", UserAgent: "RiskClient/1.0", Timestamp: 1700000000000, ActorID: 9}},

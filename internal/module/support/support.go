@@ -24,6 +24,10 @@ import (
 // Service is the only surface other code may depend on; the implementation
 // lives under internal/ where the compiler seals it off.
 type Service interface {
+	// TicketReads serves the dashboard's ticket figures and the bot's ticket
+	// views.
+	TicketReads
+
 	CreateAnnouncement(ctx context.Context, req *dto.CreateAnnouncementRequest) error
 	UpdateAnnouncement(ctx context.Context, req *dto.UpdateAnnouncementRequest) error
 	DeleteAnnouncement(ctx context.Context, req *dto.DeleteAnnouncementRequest) error
@@ -78,7 +82,6 @@ type Service interface {
 	CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskRequest) error
 	QueryQuotaTaskList(ctx context.Context, req *dto.QueryQuotaTaskListRequest) (*dto.QueryQuotaTaskListResponse, error)
 	QueryQuotaTaskPreCount(ctx context.Context, req *dto.QueryQuotaTaskPreCountRequest) (*dto.QueryQuotaTaskPreCountResponse, error)
-	QueryQuotaTaskStatus(ctx context.Context, req *dto.QueryQuotaTaskStatusRequest) (*dto.QueryQuotaTaskStatusResponse, error)
 }
 
 // SubscriptionReader is the support module's port onto the subscription
@@ -155,6 +158,8 @@ func NewRepoBuilder() repository.SupportBuilder {
 
 func New(deps Deps) Service {
 	return &service{
+		ticketReads: ticketReads{tickets: deps.Tickets},
+
 		announcements: announcement.NewService(deps.Announcements),
 		ads:           ads.NewService(deps.Ads),
 		documents:     document.NewService(deps.Documents, deps.Subscriptions),
@@ -164,6 +169,7 @@ func New(deps Deps) Service {
 }
 
 type service struct {
+	ticketReads
 	announcements *announcement.Service
 	ads           *ads.Service
 	documents     *document.Service
@@ -317,10 +323,6 @@ func (s *service) QueryQuotaTaskList(ctx context.Context, req *dto.QueryQuotaTas
 
 func (s *service) QueryQuotaTaskPreCount(ctx context.Context, req *dto.QueryQuotaTaskPreCountRequest) (*dto.QueryQuotaTaskPreCountResponse, error) {
 	return s.marketing.QueryQuotaTaskPreCount(ctx, req)
-}
-
-func (s *service) QueryQuotaTaskStatus(ctx context.Context, req *dto.QueryQuotaTaskStatusRequest) (*dto.QueryQuotaTaskStatusResponse, error) {
-	return s.marketing.QueryQuotaTaskStatus(ctx, req)
 }
 
 func (s *service) GetPublicAds(ctx context.Context, req *dto.GetAdsRequest) (*dto.GetAdsResponse, error) {

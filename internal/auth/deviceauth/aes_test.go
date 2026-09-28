@@ -8,7 +8,7 @@ import (
 )
 
 func TestAes(t *testing.T) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"method":   "email",
 		"account":  "admin@ppanel.dev",
 		"password": "password",

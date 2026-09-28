@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -41,7 +40,7 @@ func ensureLoginAllowed(ctx context.Context, client *redis.Client, userID int64)
 		return xerr.Wrapf(err, xerr.ERROR, "read sign-in attempts")
 	}
 	if failures >= maxLoginFailures {
-		return fmt.Errorf("too many failed sign-in attempts, try again later: %w", xerr.NewErrCode(xerr.TooManyRequests))
+		return xerr.Errorf(xerr.TooManyRequests, "too many failed sign-in attempts, try again later")
 	}
 	return nil
 }

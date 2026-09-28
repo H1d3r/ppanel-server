@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/perfect-panel/server/internal/module/platform"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/httpx"
 )
@@ -19,7 +18,7 @@ var _ dto.GetNodeMultiplierResponse
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.GetNodeMultiplierResponse}
 // @Router /v1/admin/system/get_node_multiplier [get]
-func GetNodeMultiplierHandler(service platform.Service) app.HandlerFunc {
+func GetNodeMultiplierHandler(service Settings) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 
 		resp, err := service.GetNodeMultiplier(ctx)

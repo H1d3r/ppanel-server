@@ -3,14 +3,23 @@ package server
 import (
 	"context"
 
+	"errors"
+
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/perfect-panel/server/internal/module/network"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
+
+// ServerUserListReader is the part of the network facade
+// GetServerUserListHandler calls.
+type ServerUserListReader interface {
+	GetServerUserList(ctx context.Context, req *dto.GetServerUserListRequest, meta network.RequestMeta) (*dto.GetServerUserListResponse, network.ResponseMeta, error)
+}
+
+var _ ServerUserListReader = network.Service(nil)
 
 // GetServerUserListHandler documents Get user list.
 //
@@ -22,7 +31,7 @@ import (
 // @Param request query dto.GetServerUserListRequest false "Request parameters"
 // @Success 200 {object} dto.GetServerUserListResponse
 // @Router /v1/server/user [get]
-func GetServerUserListHandler(service network.Service) app.HandlerFunc {
+func GetServerUserListHandler(service ServerUserListReader) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		acceptsProtobuf := acceptsProtobuf(ctx)
 		commonReq, err := serverCommonRequest(ctx)
@@ -42,7 +51,7 @@ func GetServerUserListHandler(service network.Service) app.HandlerFunc {
 		})
 		writeHeaders(ctx, respMeta.Headers)
 		if err != nil {
-			if errors.Is(err, xerr.StatusNotModified) {
+			if errors.Is(err, xerr.ErrNotModified) {
 				ctx.String(consts.StatusNotModified, "Not Modified")
 				return
 			}

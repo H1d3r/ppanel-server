@@ -8,7 +8,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/pricing"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/xerr"
-	pkgerrors "github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -30,7 +29,7 @@ func (s *Service) PreCreateOrder(ctx context.Context, req *dto.PurchaseOrderRequ
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find subscribe %d", req.SubscribeId)
 	}
 	if req.UserSubscribeId < 0 {
-		return nil, pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid user subscribe id")
+		return nil, xerr.Errorf(xerr.InvalidParams, "invalid user subscribe id")
 	}
 	if req.UserSubscribeId > 0 {
 		if err := s.ensureRenewable(ctx, u.Id, req.UserSubscribeId, req.SubscribeId); err != nil {
@@ -63,19 +62,19 @@ func (s *Service) PreCreateOrder(ctx context.Context, req *dto.PurchaseOrderRequ
 func (s *Service) ensureRenewable(ctx context.Context, userID, userSubscribeID, planID int64) error {
 	userSubscribe, err := s.deps.UserSubs.FindOneSubscribe(ctx, userSubscribeID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe not found")
+		return xerr.Errorf(xerr.InvalidParams, "user subscribe not found")
 	}
 	if err != nil {
 		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find user subscribe %d", userSubscribeID)
 	}
 	if userSubscribe.UserId != userID {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
+		return xerr.Errorf(xerr.InvalidAccess, "user subscribe does not belong to current user")
 	}
 	if userSubscribe.SubscribeId != planID {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe does not match subscribe plan")
+		return xerr.Errorf(xerr.InvalidParams, "user subscribe does not match subscribe plan")
 	}
 	if userSubscribe.Status == usersub.SubscribeStatusDeducted {
-		return pkgerrors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe status does not allow renewal")
+		return xerr.Errorf(xerr.InvalidParams, "user subscribe status does not allow renewal")
 	}
 	return nil
 }

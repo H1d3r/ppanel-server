@@ -10,32 +10,20 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-type QueryServerProtocolConfigLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-// NewQueryServerProtocolConfigLogic Get Server Protocol Config
-func newQueryServerProtocolConfigLogic(ctx context.Context, deps Deps) *QueryServerProtocolConfigLogic {
-	return &QueryServerProtocolConfigLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.QueryServerConfigRequest) (resp *dto.QueryServerConfigResponse, err error) {
-	// find server
-	data, err := l.deps.Store.Node().FindOneServer(l.ctx, req.ServerID)
+// QueryServerProtocolConfig returns the configuration a node pulls for its
+// server: the enabled protocols, only the requested ones when the node names
+// any, with the node settings in effect after the server's override.
+func (s *Service) QueryServerProtocolConfig(ctx context.Context, req *dto.QueryServerConfigRequest) (*dto.QueryServerConfigResponse, error) {
+	log := logger.WithContext(ctx)
+	data, err := s.deps.Servers.FindOneServer(ctx, req.ServerID)
 	if err != nil {
-		l.Errorf("[GetServerProtocols] FindOneServer Error: %s", err.Error())
+		log.Errorf("[QueryServerProtocolConfig] FindOneServer Error: %s", err.Error())
 		return nil, err
 	}
 
 	dst, err := data.UnmarshalProtocols()
 	if err != nil {
-		l.Errorf("[QueryServerProtocolConfig] UnmarshalProtocols Error: %s", err.Error())
+		log.Errorf("[QueryServerProtocolConfig] UnmarshalProtocols Error: %s", err.Error())
 		return nil, err
 	}
 	protocols, err := protocolmap.ToDTO(node.SanitizeProtocolsForNodeDistribution(dst))
@@ -43,7 +31,7 @@ func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.Quer
 		return nil, err
 	}
 
-	// only return enabled protocols for node distribution
+	// Only the enabled protocols are distributed to the node.
 	var enabledProtocols []dto.Protocol
 	for _, p := range protocols {
 		if p.Enable {
@@ -52,9 +40,9 @@ func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.Quer
 	}
 	protocols = enabledProtocols
 
-	// filter by req.Protocols
-
 	if len(req.Protocols) > 0 {
+		// A requested name matches in its stored form; one that does not
+		// normalize is compared as given.
 		var filtered []dto.Protocol
 		protocolSet := make(map[string]struct{})
 		for _, p := range req.Protocols {
@@ -73,23 +61,24 @@ func (l *QueryServerProtocolConfigLogic) QueryServerProtocolConfig(req *dto.Quer
 		protocols = filtered
 	}
 
-	nodeValues := nodeconfig.GlobalValues(l.deps.Config().Node)
-	override, err := l.deps.Store.Node().FindServerConfigOverride(l.ctx, req.ServerID)
+	settings := s.deps.Config().Node
+	nodeValues := nodeconfig.GlobalValues(settings)
+	override, err := s.deps.Overrides.FindServerConfigOverride(ctx, req.ServerID)
 	if err != nil {
-		l.Errorf("[GetServerProtocols] FindServerConfigOverride Error: %s", err.Error())
+		log.Errorf("[QueryServerProtocolConfig] FindServerConfigOverride Error: %s", err.Error())
 		return nil, err
 	}
 	if override != nil {
 		if err = nodeconfig.ApplyOverride(&nodeValues, override); err != nil {
-			l.Errorf("[GetServerProtocols] ApplyOverride Error: %s", err.Error())
+			log.Errorf("[QueryServerProtocolConfig] ApplyOverride Error: %s", err.Error())
 			return nil, err
 		}
 	}
 
 	return &dto.QueryServerConfigResponse{
-		TrafficReportThreshold: l.deps.Config().Node.TrafficReportThreshold,
-		PushInterval:           l.deps.Config().Node.NodePushInterval,
-		PullInterval:           l.deps.Config().Node.NodePullInterval,
+		TrafficReportThreshold: settings.TrafficReportThreshold,
+		PushInterval:           settings.NodePushInterval,
+		PullInterval:           settings.NodePullInterval,
 		IPStrategy:             nodeValues.IPStrategy,
 		DNS:                    nodeValues.DNS,
 		Block:                  nodeValues.Block,

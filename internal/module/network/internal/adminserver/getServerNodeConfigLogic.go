@@ -7,46 +7,34 @@ import (
 	"github.com/perfect-panel/server/internal/module/network/internal/nodeconfig"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
-type GetServerNodeConfigLogic struct {
-	logger.Logger
-	ctx  context.Context
-	deps Deps
-}
-
-func newGetServerNodeConfigLogic(ctx context.Context, deps Deps) *GetServerNodeConfigLogic {
-	return &GetServerNodeConfigLogic{
-		Logger: logger.WithContext(ctx),
-		ctx:    ctx,
-		deps:   deps,
-	}
-}
-
-func (l *GetServerNodeConfigLogic) GetServerNodeConfig(req *dto.GetServerNodeConfigRequest) (*dto.GetServerNodeConfigResponse, error) {
-	nodeStore := l.deps.Store.Node()
-	if _, err := nodeStore.FindOneServer(l.ctx, req.ServerID); err != nil {
-		l.Errorf("[GetServerNodeConfig] FindOneServer Error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find server error: %v", err)
+// GetServerNodeConfig returns a server's node configuration: the global
+// values, the server's override and the values in effect with it.
+func (s *Service) GetServerNodeConfig(ctx context.Context, req *dto.GetServerNodeConfigRequest) (*dto.GetServerNodeConfigResponse, error) {
+	log := logger.WithContext(ctx)
+	nodeStore := s.deps.Store.Node()
+	if _, err := nodeStore.FindOneServer(ctx, req.ServerID); err != nil {
+		log.Errorf("[GetServerNodeConfig] FindOneServer Error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find server error: %v", err)
 	}
 
-	override, err := nodeStore.FindServerConfigOverride(l.ctx, req.ServerID)
+	override, err := nodeStore.FindServerConfigOverride(ctx, req.ServerID)
 	if err != nil {
-		l.Errorf("[GetServerNodeConfig] FindServerConfigOverride Error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find server node config error: %v", err)
+		log.Errorf("[GetServerNodeConfig] FindServerConfigOverride Error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find server node config error: %v", err)
 	}
 
-	global := nodeconfig.GlobalValues(l.deps.Config().Node)
+	global := nodeconfig.GlobalValues(s.deps.Config().Node)
 	effective := nodeconfig.CloneValues(global)
 	if err := nodeconfig.ApplyOverride(&effective, override); err != nil {
-		l.Errorf("[GetServerNodeConfig] ApplyOverride Error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "apply server node config override error: %v", err)
+		log.Errorf("[GetServerNodeConfig] ApplyOverride Error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.ERROR, "apply server node config override error: %v", err)
 	}
 	overrideResp, err := nodeconfig.OverrideResponse(override)
 	if err != nil {
-		l.Errorf("[GetServerNodeConfig] OverrideResponse Error: %v", err.Error())
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "parse server node config override error: %v", err)
+		log.Errorf("[GetServerNodeConfig] OverrideResponse Error: %v", err.Error())
+		return nil, xerr.Wrapf(err, xerr.ERROR, "parse server node config override error: %v", err)
 	}
 
 	return &dto.GetServerNodeConfigResponse{

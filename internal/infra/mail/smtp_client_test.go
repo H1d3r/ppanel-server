@@ -74,7 +74,7 @@ func TestSMTPClientRejectsUntrustedCertificate(t *testing.T) {
 			relay := startFakeSMTP(t, relayOptions{cert: &cert, implicit: implicit})
 			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, SSL: implicit, From: "panel@example.test"})
 
-			err := client.Send([]string{"user@example.test"}, "subject", "body")
+			err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body")
 
 			var verifyErr *tls.CertificateVerificationError
 			if !errors.As(err, &verifyErr) {
@@ -89,7 +89,7 @@ func TestSMTPClientOptOutAcceptsSelfSignedRelay(t *testing.T) {
 	relay := startFakeSMTP(t, relayOptions{cert: &cert})
 	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test", InsecureSkipVerify: true})
 
-	if err := client.Send([]string{"user@example.test"}, "subject", "body"); err != nil {
+	if err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body"); err != nil {
 		t.Fatalf("send through self-signed relay with explicit opt-out: %v", err)
 	}
 	if relay.session().data == "" {
@@ -102,7 +102,7 @@ func TestSMTPClientSendsThroughPlainRelay(t *testing.T) {
 	relay := startFakeSMTP(t, relayOptions{})
 	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, From: "panel@example.test"})
 
-	if err := client.Send([]string{"user@example.test"}, "subject", "body"); err != nil {
+	if err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body"); err != nil {
 		t.Fatalf("send through plain relay: %v", err)
 	}
 }
@@ -135,7 +135,7 @@ func TestSMTPClientAuthenticates(t *testing.T) {
 			relay := startFakeSMTP(t, relayOptions{auth: mechanisms})
 			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, User: "mailer", Pass: "s3cret", From: "panel@example.test"})
 
-			if err := client.Send([]string{"user@example.test"}, "subject", "body"); err != nil {
+			if err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body"); err != nil {
 				t.Fatalf("send: %v", err)
 			}
 			if got := relay.session().credentials; got != "mailer:s3cret" {

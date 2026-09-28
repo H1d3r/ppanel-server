@@ -1,3 +1,6 @@
+// Package order holds the HTTP handlers of the user order API, V1 and the
+// V2 create-and-checkout orchestration with its event stream; they adapt
+// requests to the billing facade.
 package order
 
 import (
@@ -12,6 +15,11 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
+// OrderCloser is the part of the billing facade CloseOrderHandler uses.
+type OrderCloser interface {
+	CloseOrder(ctx context.Context, req *dto.CloseOrderRequest) error
+}
+
 // CloseOrderHandler documents Close order.
 //
 // @Summary Close order
@@ -22,7 +30,7 @@ import (
 // @Param request body dto.CloseOrderRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean
 // @Router /v1/public/order/close [post]
-func CloseOrderHandler(service billing.Service) app.HandlerFunc {
+func CloseOrderHandler(service OrderCloser) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		var req dto.CloseOrderRequest
 		if err := httpx.ShouldBind(ctx, &req); err != nil {

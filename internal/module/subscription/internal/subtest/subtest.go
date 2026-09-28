@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
@@ -230,13 +229,6 @@ func (s *Store) Log() repository.LogRepo { return &Logs{db: s.db} }
 // Outbox is not part of the subscription flows under test.
 func (s *Store) Outbox() repository.OutboxRepo { return nil }
 
-// UserCache is the identity cache facade as the subscription flows use it:
-// subscription entries go through the subscription repository, the identity
-// entries are not cached in the fixture.
-func (s *Store) UserCache() repository.UserCacheRepo {
-	return userCache{subs: repo.NewUserSubscriptionRepo(s.conn())}
-}
-
 // NewInbox returns the inbox over db (a fixture database or a transaction).
 func NewInbox(db *gorm.DB) *Inbox { return &Inbox{db: db} }
 
@@ -321,25 +313,3 @@ func (r *Logs) DeleteBeforeBatch(context.Context, time.Time, int) (int64, error)
 func (r *Logs) SumAmountByTypeAndObjectID(context.Context, uint8, int64) (int64, error) {
 	return 0, errUnsupported
 }
-
-type userCache struct {
-	subs *repo.UserSubscriptionRepo
-}
-
-var _ repository.UserCacheRepo = userCache{}
-
-func (c userCache) ClearSubscribeCache(ctx context.Context, data ...*usersub.Subscribe) error {
-	return c.subs.ClearSubscribeCache(ctx, data...)
-}
-
-func (c userCache) UpdateUserSubscribeCache(ctx context.Context, data *usersub.Subscribe) error {
-	return c.subs.ClearSubscribeCache(ctx, data)
-}
-
-func (userCache) ClearUserCache(context.Context, ...*user.User) error     { return nil }
-func (userCache) ClearDeviceCache(context.Context, ...*user.Device) error { return nil }
-func (userCache) ClearAuthMethodCache(context.Context, ...*user.AuthMethods) error {
-	return nil
-}
-func (userCache) BatchClearRelatedCache(context.Context, *user.User) error { return nil }
-func (userCache) UpdateUserCache(context.Context, *user.User) error        { return nil }

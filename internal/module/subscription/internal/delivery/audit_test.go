@@ -31,10 +31,11 @@ func (r *deliveryAuditRepo) Insert(_ context.Context, row *log.SystemLog) error 
 
 func TestSubscriptionAuditIsRedactedAndFailClosed(t *testing.T) {
 	repo := &deliveryAuditRepo{}
-	logic := newSubscribeLogic(context.Background(), Deps{Logs: repo}, RequestMeta{ClientIP: "192.0.2.1", UserAgent: "risk-client/1.0"})
+	svc := NewService(Deps{Logs: repo})
+	meta := RequestMeta{ClientIP: "192.0.2.1", UserAgent: "risk-client/1.0"}
 	sub := &usersub.Subscribe{Id: 9, UserId: 7}
 
-	if err := logic.logSubscribeActivity(sub); err != nil {
+	if err := svc.logSubscribeActivity(context.Background(), meta, sub); err != nil {
 		t.Fatal(err)
 	}
 	if repo.row == nil || strings.Contains(repo.row.Content, "subscription-secret") || !strings.Contains(repo.row.Content, logger.RedactedValue) || !strings.Contains(repo.row.Content, "192.0.2.1") || !strings.Contains(repo.row.Content, "risk-client/1.0") {
@@ -42,7 +43,7 @@ func TestSubscriptionAuditIsRedactedAndFailClosed(t *testing.T) {
 	}
 
 	repo.err = errors.New("audit unavailable")
-	if err := logic.logSubscribeActivity(sub); err == nil {
+	if err := svc.logSubscribeActivity(context.Background(), meta, sub); err == nil {
 		t.Fatal("subscription audit failure was swallowed")
 	}
 }
@@ -55,8 +56,8 @@ func TestSubscriptionAuditCarriesTheRequestMetadata(t *testing.T) {
 		ClientIP: "192.0.2.1", UserAgent: "risk-client/1.0",
 		IPMetadata: requestmeta.IPMetadata{IPCountryCode: "NL", IPCity: "Amsterdam", IPASN: 64500},
 	})
-	logic := newSubscribeLogic(ctx, Deps{Logs: repo}, RequestMeta{ClientIP: "192.0.2.1", UserAgent: "risk-client/1.0"})
-	if err := logic.logSubscribeActivity(&usersub.Subscribe{Id: 9, UserId: 7}); err != nil {
+	svc := NewService(Deps{Logs: repo})
+	if err := svc.logSubscribeActivity(ctx, RequestMeta{ClientIP: "192.0.2.1", UserAgent: "risk-client/1.0"}, &usersub.Subscribe{Id: 9, UserId: 7}); err != nil {
 		t.Fatal(err)
 	}
 	var content log.Subscribe

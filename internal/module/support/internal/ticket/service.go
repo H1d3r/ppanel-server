@@ -27,6 +27,7 @@ type Notifier interface {
 	TicketStatusChanged(ctx context.Context, ticketID int64, status uint8)
 }
 
+// Service runs the ticket desk for the support facade.
 type Service struct {
 	repo    repository.TicketRepo
 	notify  Notifier
@@ -148,6 +149,7 @@ func validStatus(status uint8) bool {
 	return false
 }
 
+// List pages the tickets of every user, or of one, for the admin panel.
 func (s *Service) List(ctx context.Context, req *dto.GetTicketListRequest) (*dto.GetTicketListResponse, error) {
 	total, list, err := s.repo.QueryTicketList(ctx, int(req.Page), int(req.Size), req.UserId, req.Status, req.Search)
 	if err != nil {
@@ -157,24 +159,41 @@ func (s *Service) List(ctx context.Context, req *dto.GetTicketListRequest) (*dto
 		Total: total,
 		List:  make([]dto.Ticket, 0),
 	}
-	mapping.DeepCopy(&resp.List, list)
+	if err := mapping.Copy(&resp.List, list); err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "copy the ticket list")
+	}
 	return resp, nil
 }
 
+// GetDetail returns a ticket with its follows for the admin panel.
 func (s *Service) GetDetail(ctx context.Context, req *dto.GetTicketRequest) (*dto.Ticket, error) {
 	data, err := s.repo.QueryTicketDetail(ctx, req.Id)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "get ticket detail failed: %v", err)
 	}
 	resp := &dto.Ticket{}
-	mapping.DeepCopy(resp, data)
+	if err := mapping.Copy(resp, data); err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "copy ticket %d", req.Id)
+	}
 	return resp, nil
 }
 
+// UpdateStatus moves a ticket to the status staff chose in the admin panel.
+// As for a change from the bot, the status must be one of the four ticket
+// statuses and the ticket must exist; otherwise nothing is stored or
+// mirrored.
 func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateTicketStatusRequest) error {
+	if !validStatus(*req.Status) {
+		return xerr.Wrapf(errors.New("unknown ticket status"), xerr.InvalidParams, "ticket status %d is not a ticket status", *req.Status)
+	}
+	if _, err := s.findTicket(ctx, req.Id); err != nil {
+		return err
+	}
 	return s.apply(ctx, change{ticketID: req.Id, status: *req.Status, mirror: true})
 }
 
+// CreateUserTicket opens a ticket for the current user, within the creation
+// limit, and mirrors it.
 func (s *Service) CreateUserTicket(ctx context.Context, req *dto.CreateUserTicketRequest) error {
 	u, err := currentUser(ctx)
 	if err != nil {
@@ -286,6 +305,7 @@ func isImageReference(content string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
+// GetUserDetail returns one of the current user's tickets with its follows.
 func (s *Service) GetUserDetail(ctx context.Context, req *dto.GetUserTicketDetailRequest) (*dto.Ticket, error) {
 	data, err := s.repo.QueryTicketDetail(ctx, req.Id)
 	if err != nil {
@@ -299,10 +319,13 @@ func (s *Service) GetUserDetail(ctx context.Context, req *dto.GetUserTicketDetai
 		return nil, xerr.Wrapf(errors.New("not the ticket owner"), xerr.InvalidAccess, "invalid access")
 	}
 	resp := &dto.Ticket{}
-	mapping.DeepCopy(resp, data)
+	if err := mapping.Copy(resp, data); err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "copy ticket %d", req.Id)
+	}
 	return resp, nil
 }
 
+// GetUserList pages the current user's tickets.
 func (s *Service) GetUserList(ctx context.Context, req *dto.GetUserTicketListRequest) (*dto.GetUserTicketListResponse, error) {
 	u, err := currentUser(ctx)
 	if err != nil {
@@ -316,7 +339,9 @@ func (s *Service) GetUserList(ctx context.Context, req *dto.GetUserTicketListReq
 		Total: total,
 		List:  make([]dto.Ticket, 0),
 	}
-	mapping.DeepCopy(&resp.List, list)
+	if err := mapping.Copy(&resp.List, list); err != nil {
+		return nil, xerr.Wrapf(err, xerr.ERROR, "copy the ticket list")
+	}
 	return resp, nil
 }
 

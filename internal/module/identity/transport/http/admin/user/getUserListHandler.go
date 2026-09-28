@@ -1,3 +1,5 @@
+// Package user holds the identity module's admin handlers of the accounts:
+// user CRUD, identities, devices, login logs and notification settings.
 package user
 
 import (

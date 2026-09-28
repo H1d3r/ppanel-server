@@ -1,3 +1,6 @@
+// Package random makes the random and derived strings the application hands
+// out: verification codes, tokens and secrets from crypto/rand, and the
+// invite-code encoding of user ids.
 package random
 
 import (
@@ -43,6 +46,8 @@ func EncodeBase62(id int64) string {
 	return string(code)
 }
 
+// Key returns length random characters: letters and digits for keyType 1,
+// digits otherwise, as in a verification code.
 func Key(length int, keyType int) string {
 	randomString := "0123456789"
 	if keyType == 1 {
@@ -51,11 +56,14 @@ func Key(length int, keyType int) string {
 	return secureKey(length, randomString)
 }
 
+// KeyNew is Key with one more keyType: 2 draws from upper-case letters and
+// digits.
 func KeyNew(length int, keyType int) string {
 	randomString := "0123456789"
-	if keyType == 1 {
+	switch keyType {
+	case 1:
 		randomString = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz"
-	} else if keyType == 2 {
+	case 2:
 		randomString = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	}
 	return secureKey(length, randomString)
@@ -79,6 +87,8 @@ func secureKey(length int, alphabet string) string {
 	return string(result)
 }
 
+// StrToDashedString inserts a dash after every fourth character, to make a
+// long code readable ("ABCD-EFGH-IJ").
 func StrToDashedString(strNum string) string {
 	var result strings.Builder
 

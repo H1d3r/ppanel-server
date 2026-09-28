@@ -1,3 +1,6 @@
+// Package epay implements the EPay payment protocol: signed payment URLs,
+// callback signature verification and the order query, with the
+// EasyPay-compatible query as a fallback.
 package epay
 
 import (

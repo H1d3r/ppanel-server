@@ -11,6 +11,14 @@ import (
 
 var _ dto.GetDeviceListResponse
 
+// GetDeviceListService is the part of the identity facade
+// GetDeviceListHandler calls.
+type GetDeviceListService interface {
+	GetDeviceList(ctx context.Context) (*dto.GetDeviceListResponse, error)
+}
+
+var _ GetDeviceListService = identity.Service(nil)
+
 // GetDeviceListHandler documents Get Device List.
 //
 // @Summary Get Device List
@@ -19,7 +27,7 @@ var _ dto.GetDeviceListResponse
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.GetDeviceListResponse}
 // @Router /v1/public/user/devices [get]
-func GetDeviceListHandler(service identity.Service) app.HandlerFunc {
+func GetDeviceListHandler(service GetDeviceListService) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 
 		resp, err := service.GetDeviceList(c)

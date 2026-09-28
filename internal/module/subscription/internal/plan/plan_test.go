@@ -91,6 +91,30 @@ func TestUpdateSubscribeReplacesNodesWithTagsAndNotifies(t *testing.T) {
 	}
 }
 
+// An update that leaves a switch out keeps the stored one: writing NULL
+// into show or sell failed on their NOT NULL columns.
+func TestUpdateSubscribeKeepsTheSwitchesTheRequestOmits(t *testing.T) {
+	f := newPlanFixture(t)
+	on, off := true, false
+	f.Plan(t, subscribe.Subscribe{Id: 1, Name: "gold", UnitTime: "Month", Show: &on, Sell: &on, AllowDeduction: &off, RenewalReset: &on})
+
+	if err := f.svc.UpdateSubscribe(context.Background(), &dto.UpdateSubscribeRequest{Id: 1, Name: "gold+", UnitTime: "Month", Inventory: -1}); err != nil {
+		t.Fatalf("UpdateSubscribe without the switches: %v", err)
+	}
+	got := f.plan(t, 1)
+	if got.Name != "gold+" || got.Show == nil || !*got.Show || got.Sell == nil || !*got.Sell ||
+		got.AllowDeduction == nil || *got.AllowDeduction || got.RenewalReset == nil || !*got.RenewalReset {
+		t.Fatalf("updated plan %+v, want the stored switches kept", got)
+	}
+
+	if err := f.svc.UpdateSubscribe(context.Background(), &dto.UpdateSubscribeRequest{Id: 1, Name: "gold+", UnitTime: "Month", Inventory: -1, Sell: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.plan(t, 1); got.Sell == nil || *got.Sell || !*got.Show {
+		t.Fatalf("updated plan %+v, want only sell switched off", got)
+	}
+}
+
 // A plan with an active user subscription cannot be deleted; one whose
 // subscriptions all ended can.
 func TestDeleteSubscribeRefusesPlansInUse(t *testing.T) {

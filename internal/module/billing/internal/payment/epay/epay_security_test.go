@@ -77,7 +77,7 @@ func TestQueryOrderReturnsAuthoritativeGatewayFields(t *testing.T) {
 				t.Errorf("query %s=%q, want %q", name, got, want)
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 1, "msg": "ok", "pid": 1001, "trade_no": "trade-1",
 			"out_trade_no": "order-1", "type": "alipay", "money": "10.00", "status": 1,
 		})
@@ -121,7 +121,7 @@ func TestQueryOrderFallsBackToEasyPayStatusQuery(t *testing.T) {
 			if len(r.PostForm) != 1 {
 				t.Errorf("fallback params=%v, want only orderNo", r.PostForm)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code": 1, "msg": "query success", "data": map[string]string{"status": "success"},
 			})
 		default:
@@ -149,7 +149,7 @@ func TestQueryOrderEasyPayFallbackReportsUnpaid(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 1, "data": map[string]string{"status": "pending"},
 		})
 	}))

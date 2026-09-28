@@ -84,7 +84,7 @@ func TestBalanceCheckoutRechecksTheOrderUnderItsLock(t *testing.T) {
 	f := newPortalFixture(t)
 	u, ctx := f.buyer(5000, 0)
 	o := f.pendingOrder("order-1", u.Id, 2500, f.balance())
-	f.svc.deps.Tx = raceTransactor{Transactor: f.h.Store, compete: func() {
+	f.svc.deps.Tx = raceTransactor{tx: f.h.Store, compete: func() {
 		if _, err := f.h.Store.Order().UpdateOrderStatusFrom(context.Background(), o.OrderNo, order.StatusPending, order.StatusPaid); err != nil {
 			t.Fatal(err)
 		}

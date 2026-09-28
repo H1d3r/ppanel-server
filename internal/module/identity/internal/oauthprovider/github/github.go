@@ -1,3 +1,5 @@
+// Package github is the GitHub API client of the GitHub sign-in method: the
+// profile of the signed-in user and their verified email address.
 package github
 
 import (

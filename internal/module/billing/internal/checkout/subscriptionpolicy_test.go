@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,8 +12,9 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
+// policyUserSubs answers the single-subscription and quota policies and
+// counts their reads; the policies never read a user subscription's details.
 type policyUserSubs struct {
-	UserSubscriptionReader
 	blocking           bool
 	quotaCount         int64
 	subscription       *usersub.Subscribe
@@ -20,6 +22,8 @@ type policyUserSubs struct {
 	quotaCountCalls    int
 	findSubscribeCalls int
 }
+
+var _ UserSubscriptionReader = (*policyUserSubs)(nil)
 
 func (r *policyUserSubs) HasBlockingSubscription(_ context.Context, _ int64) (bool, error) {
 	r.hasBlockingCalls++
@@ -34,6 +38,10 @@ func (r *policyUserSubs) CountQuotaConsumingSubscriptions(_ context.Context, _ i
 func (r *policyUserSubs) FindOneSubscribe(_ context.Context, _ int64) (*usersub.Subscribe, error) {
 	r.findSubscribeCalls++
 	return r.subscription, nil
+}
+
+func (*policyUserSubs) FindOneUserSubscribe(context.Context, int64) (*usersub.SubscribeDetails, error) {
+	return nil, errors.New("policyUserSubs: the policies do not read subscription details")
 }
 
 type policyPlans struct {

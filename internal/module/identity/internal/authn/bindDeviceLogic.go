@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -82,17 +81,17 @@ func (s *Service) BindDeviceToUser(ctx context.Context, deviceIdentifier string,
 
 func (s *Service) touchOwnDevice(ctx context.Context, device *user.Device, userID int64, ip, userAgent string) (*user.Device, error) {
 	if device == nil || device.UserId != userID {
-		return nil, fmt.Errorf("device belongs to another account: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "device belongs to another account")
 	}
 	if !device.Enabled {
-		return nil, fmt.Errorf("device is disabled: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "device is disabled")
 	}
 	updated, err := s.deps.Store.UserDevice().TouchDevice(ctx, device.Id, userID, ip, userAgent)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "refresh device")
 	}
 	if !updated {
-		return nil, fmt.Errorf("device binding changed: %w", xerr.NewErrCode(xerr.InvalidAccess))
+		return nil, xerr.Errorf(xerr.InvalidAccess, "device binding changed")
 	}
 	device.Ip, device.UserAgent = ip, userAgent
 	return device, nil

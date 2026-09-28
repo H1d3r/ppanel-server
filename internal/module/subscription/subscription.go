@@ -1,6 +1,9 @@
-// Package subscription is the facade of the subscription module: plan and
-// group management plus the public storefront listings (subscription
-// delivery joins as migration proceeds). See docs/design/adr-001-modular-monolith.md.
+// Package subscription is the facade of the subscription module: plans and
+// groups, the storefront, user subscriptions and their self-service,
+// subscription delivery and client applications, order fulfillment and
+// provider entitlements, trials, quota tasks, the lifecycle sweeps and
+// calendar traffic resets, plan inventory and traffic usage accounting. See
+// docs/design/adr-001-modular-monolith.md.
 package subscription
 
 import (
@@ -10,6 +13,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/application"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/delivery"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/fulfillment"
+	"github.com/perfect-panel/server/internal/module/subscription/internal/nodeaccess"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/plan"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/quotatask"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/repo"
@@ -109,7 +113,17 @@ type Service interface {
 	// ChangeUserSubscribeStatus stops or resumes a subscription the caller
 	// saw in status from, refusing when the status changed meanwhile.
 	ChangeUserSubscribeStatus(ctx context.Context, id int64, from, to uint8) error
+
+	// Access and Reads serve the other modules' reads and cache
+	// invalidation (see access.go and reads.go).
+	Access
+	Reads
 }
+
+// TrialGrantConsumer is the trial grant's consumer identity on the event bus
+// and in its inbox markers. It is persisted: renaming it would grant
+// committed trials again.
+const TrialGrantConsumer = trial.Consumer
 
 // RequestMeta re-exports the delivery subdomain's transport details.
 type RequestMeta = delivery.RequestMeta
@@ -125,7 +139,7 @@ type SubscriptionTransactor = plan.SubscriptionTransactor
 type Deps struct {
 	Plans    repository.SubscribeRepo
 	UserSubs repository.UserSubscriptionRepo
-	Nodes    repository.NodeRepo
+	Nodes    NodeReader
 	Store    SubscriptionTransactor
 	// NotifyPlanChanged broadcasts a plan update to connected devices.
 	NotifyPlanChanged func()
@@ -134,19 +148,26 @@ type Deps struct {
 
 	// Delivery dependencies.
 	Clients repository.ClientRepo
-	Users   repository.UserRepo
 	Logs    repository.LogRepo
 	// DeliveryConfig reads the runtime-mutable delivery configuration.
 	DeliveryConfig func() DeliveryConfig
 
+	// Accounts is the identity port of delivery, administration, lifecycle
+	// and quota use cases: owners, their devices and email bindings, and
+	// their cached projections.
+	Accounts Accounts
+
 	// User-subscription administration dependencies.
-	Devices repository.UserDeviceRepo
-	Cache   repository.UserCacheRepo
-	Traffic repository.TrafficRepo
+	Traffic TrafficLogReader
 	// Operations composes only the persistence capabilities of this module's
 	// administration, lifecycle and fulfillment use cases.
 	Operations Store
-	Orders     repository.OrderRepo
+	// Orders, Refunds and QuotaGifts are the billing module's side of
+	// fulfillment, cancellation and quota tasks: the orders they read, the
+	// cancellation's refund stage and the quota task's gift stage.
+	Orders     OrderReader
+	Refunds    RefundSettler
+	QuotaGifts QuotaGiftLedger
 	Inbox      repository.InboxRepo
 	// SingleModel forbids holding more than one blocking subscription;
 	// runtime-mutable, read per request.
@@ -155,11 +176,24 @@ type Deps struct {
 	// per call.
 	TrialPolicy func() TrialPolicy
 
-	// UserAuths and LifecycleNotify serve the lifecycle sweep: the identity
-	// email lookup and the owner notification channel.
-	UserAuths       sweep.OwnerEmailReader
+	// LifecycleNotify is the lifecycle sweep's owner notification channel.
 	LifecycleNotify sweep.Notifier
 }
+
+// OrderReader is the billing read port of fulfillment and the refund quote:
+// the paid order by id or number, and the order with its renewals.
+type OrderReader interface {
+	fulfillment.OrderReader
+	selfsub.OrderReader
+}
+
+// RefundSettler and QuotaGiftLedger re-export the billing ports of the
+// cancellation's refund stage and the quota task's gift stage; the billing
+// facade provides both.
+type (
+	RefundSettler   = selfsub.RefundSettler
+	QuotaGiftLedger = quotatask.GiftLedger
+)
 
 // NewRepoBuilder exports the module-owned repository implementations for
 // store assembly (ADR-001 step-6 preparation).
@@ -172,17 +206,20 @@ func NewRepoBuilder() repository.SubscriptionBuilder {
 			Plans:        repo.NewSubscribeRepo(conn, nodes),
 			UserSubs:     subs,
 			Traffic:      subs,
+			Clients:      repo.NewClientRepo(conn),
 			CacheBridge:  subs,
 			ScopeBridge:  subs,
 		}
 	}
 }
 
+// New assembles the module from its dependencies.
 func New(deps Deps) Service {
 	return &service{
+		reads: reads{plans: deps.Plans, userSubs: deps.UserSubs},
 		trials: trial.NewService(trial.Deps{
 			Plans:       deps.Plans,
-			Cache:       deps.Cache,
+			Cache:       deps.UserSubs,
 			Store:       deps.Operations,
 			TrialPolicy: deps.TrialPolicy,
 		}),
@@ -191,11 +228,13 @@ func New(deps Deps) Service {
 			Store:       deps.Operations,
 			UserSubs:    deps.UserSubs,
 			Plans:       deps.Plans,
-			Cache:       deps.Cache,
+			Cache:       deps.UserSubs,
 			SingleModel: deps.SingleModel,
 		}),
 		quota: quotatask.NewService(quotatask.Deps{
-			Store: deps.Operations,
+			Accounts: deps.Accounts,
+			Store:    deps.Operations,
+			Gifts:    deps.QuotaGifts,
 		}),
 		trafficReset: trafficreset.NewService(trafficreset.Deps{
 			Store: deps.Operations,
@@ -204,10 +243,10 @@ func New(deps Deps) Service {
 		sweeper: sweep.NewService(sweep.Deps{
 			UserSubs: deps.UserSubs,
 			Plans:    deps.Plans,
-			Cache:    deps.Cache,
+			Cache:    deps.UserSubs,
 			Store:    deps.Operations,
-			Emails:   deps.UserAuths,
-			Owners:   deps.Users,
+			Emails:   deps.Accounts,
+			Owners:   deps.Accounts,
 			Notify:   deps.LifecycleNotify,
 		}),
 		apps: application.NewService(application.Deps{
@@ -224,7 +263,7 @@ func New(deps Deps) Service {
 			Clients:        deps.Clients,
 			Plans:          deps.Plans,
 			UserSubs:       deps.UserSubs,
-			Users:          deps.Users,
+			Users:          deps.Accounts,
 			Nodes:          deps.Nodes,
 			Logs:           deps.Logs,
 			ConfigSnapshot: deps.DeliveryConfig,
@@ -232,20 +271,20 @@ func New(deps Deps) Service {
 		selfSubs: selfsub.NewService(selfsub.Deps{
 			UserSubs:    deps.UserSubs,
 			Plans:       deps.Plans,
-			Users:       deps.Users,
 			Orders:      deps.Orders,
-			Cache:       deps.Cache,
+			Refunds:     deps.Refunds,
+			Cache:       deps.UserSubs,
 			Logs:        deps.Logs,
 			Inbox:       deps.Inbox,
-			Store:       selfsub.NewStore(deps.Operations),
+			Store:       deps.Operations,
 			SingleModel: deps.SingleModel,
 		}),
 		userSubs: usersub.NewService(usersub.Deps{
 			Plans:       deps.Plans,
 			UserSubs:    deps.UserSubs,
-			Users:       deps.Users,
-			Devices:     deps.Devices,
-			Cache:       deps.Cache,
+			Users:       deps.Accounts,
+			Devices:     deps.Accounts,
+			Cache:       deps.UserSubs,
 			Traffic:     deps.Traffic,
 			Logs:        deps.Logs,
 			Store:       deps.Operations,
@@ -257,10 +296,15 @@ func New(deps Deps) Service {
 			Nodes:       deps.Nodes,
 			IsTrialPlan: deps.IsTrialPlan,
 		}),
+		nodeAccess: nodeaccess.NewService(nodeaccess.Deps{
+			Plans:         deps.Plans,
+			Subscriptions: deps.UserSubs,
+		}),
 	}
 }
 
 type service struct {
+	reads
 	trials       *trial.Service
 	fulfil       *fulfillment.Service
 	quota        *quotatask.Service
@@ -272,6 +316,7 @@ type service struct {
 	delivery     *delivery.Service
 	userSubs     *usersub.Service
 	selfSubs     *selfsub.Service
+	nodeAccess   *nodeaccess.Service
 }
 
 func (s *service) CreateSubscribe(ctx context.Context, req *dto.CreateSubscribeRequest) error {
@@ -466,6 +511,8 @@ var ErrQuotaTaskUnretryable = quotatask.ErrUnretryable
 // context, and the NotifyKind* constants label which notice applies.
 type FulfillmentOutcome = fulfillment.Outcome
 
+// The notices a fulfillment outcome can call for: a new subscription, a
+// renewal, or a traffic reset.
 const (
 	NotifyKindPurchase     = fulfillment.NotifyPurchase
 	NotifyKindRenewal      = fulfillment.NotifyRenewal
@@ -492,7 +539,7 @@ func (s *service) GrantTrial(ctx context.Context, userID int64) error {
 // unrelated repositories and application-wide transactions.
 type Store interface {
 	usersub.Store
-	selfsub.AppStore
+	selfsub.Store
 	sweep.Store
 	trial.Store
 	fulfillment.Store

@@ -50,15 +50,13 @@ func (m *announcementRepo) Insert(ctx context.Context, data *announcement.Announ
 
 func (m *announcementRepo) FindOne(ctx context.Context, id int64) (*announcement.Announcement, error) {
 	var resp announcement.Announcement
-	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &resp, func(conn *gorm.DB, v any) error {
 		return conn.Model(&announcement.Announcement{}).Where("id = ?", id).First(&resp).Error
 	})
-	switch {
-	case err == nil:
-		return &resp, nil
-	default:
+	if err != nil {
 		return nil, err
 	}
+	return &resp, nil
 }
 
 func (m *announcementRepo) Update(ctx context.Context, data *announcement.Announcement) error {
@@ -89,7 +87,7 @@ func (m *announcementRepo) GetAnnouncementListByPage(ctx context.Context, page, 
 	var list []*announcement.Announcement
 	var total int64
 	page, size = repository.NormalizePage(page, size)
-	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v interface{}) error {
+	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		conn = conn.Model(&announcement.Announcement{})
 		if filter.Show != nil {
 			conn = conn.Where(clause.Eq{

@@ -20,21 +20,23 @@ type CalendarTrafficResetter interface {
 	ResetCalendarTraffic(ctx context.Context) error
 }
 
-// ResetTrafficLogic is the queue shell of the calendar traffic reset: the
+// ResetTrafficHandler is the queue shell of the calendar traffic reset: the
 // reset rules and their once-per-day guarantee live in the subscription
 // module. A failed run returns its error and asynq retries it (the scheduler
 // sets the retry budget); the lock only keeps two runs from overlapping.
-type ResetTrafficLogic struct {
+type ResetTrafficHandler struct {
 	resetter CalendarTrafficResetter
 	redis    *redis.Client
 }
 
-func NewResetTrafficLogic(resetter CalendarTrafficResetter, rdb *redis.Client) *ResetTrafficLogic {
-	return &ResetTrafficLogic{resetter: resetter, redis: rdb}
+// NewResetTrafficHandler builds the shell over the subscription facade and
+// the Redis connection holding the run lock.
+func NewResetTrafficHandler(resetter CalendarTrafficResetter, rdb *redis.Client) *ResetTrafficHandler {
+	return &ResetTrafficHandler{resetter: resetter, redis: rdb}
 }
 
-func (l *ResetTrafficLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
-	lock, ok, err := tasklock.Acquire(ctx, l.redis, resetTrafficLockKey, resetTrafficLockTTL)
+func (h *ResetTrafficHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+	lock, ok, err := tasklock.Acquire(ctx, h.redis, resetTrafficLockKey, resetTrafficLockTTL)
 	if err != nil {
 		return err
 	}
@@ -43,7 +45,7 @@ func (l *ResetTrafficLogic) ProcessTask(ctx context.Context, _ *asynq.Task) erro
 		return nil
 	}
 	defer releaseLock(ctx, lock, "[ResetTraffic]")
-	return l.resetter.ResetCalendarTraffic(ctx)
+	return h.resetter.ResetCalendarTraffic(ctx)
 }
 
 // releaseLock frees a task lock; a failure only delays the next run until

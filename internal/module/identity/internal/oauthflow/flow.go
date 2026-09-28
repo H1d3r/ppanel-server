@@ -8,7 +8,6 @@ package oauthflow
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -94,7 +93,7 @@ func (f *Flow) Identify(ctx context.Context, method string, fields map[string]an
 		code, _ := fields["code"].(string)
 		state, _ := fields["state"].(string)
 		if strings.TrimSpace(state) == "" || strings.TrimSpace(code) == "" {
-			return nil, fmt.Errorf("%s callback needs a code and a state: %w", method, xerr.NewErrCode(xerr.InvalidParams))
+			return nil, xerr.Errorf(xerr.InvalidParams, "%s callback needs a code and a state", method)
 		}
 		redirect, err := oauthstate.Consume(ctx, f.deps.Redis, method, state)
 		if err != nil {
@@ -116,7 +115,7 @@ func (f *Flow) Identify(ctx context.Context, method string, fields map[string]an
 		return nil, codeFor(ctx, method, err)
 	}
 	if identity.Subject == "" {
-		return nil, fmt.Errorf("%s returned no user id: %w", method, xerr.NewErrCode(xerr.OAuthProviderError))
+		return nil, xerr.Errorf(xerr.OAuthProviderError, "%s returned no user id", method)
 	}
 	if identity.ReplayKey != "" {
 		if err := f.redeem(ctx, method, identity.ReplayKey); err != nil {
@@ -137,7 +136,7 @@ func (f *Flow) redeem(ctx context.Context, method, key string) error {
 		return nil
 	}
 	if !allowed {
-		return fmt.Errorf("%s callback has already been used: %w", method, xerr.NewErrCode(xerr.OAuthCallbackReplayed))
+		return xerr.Errorf(xerr.OAuthCallbackReplayed, "%s callback has already been used", method)
 	}
 	return nil
 }
@@ -166,7 +165,7 @@ func (f *Flow) siteHost() string {
 }
 
 func notSupported(method string) error {
-	return fmt.Errorf("oauth method %q is not supported: %w", method, xerr.NewErrCode(xerr.AuthenticatorNotSupportedError))
+	return xerr.Errorf(xerr.AuthenticatorNotSupportedError, "oauth method %q is not supported", method)
 }
 
 // codeFor attaches the client code of a provider failure. Failures that are

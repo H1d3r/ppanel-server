@@ -33,7 +33,7 @@ func TestResetTrafficHandlerRunsTheModuleResetUnderTheLock(t *testing.T) {
 	task := asynq.NewTask("scheduler:reset:traffic", nil)
 
 	resetter := &recordingResetter{}
-	handler := NewResetTrafficLogic(resetter, client)
+	handler := NewResetTrafficHandler(resetter, client)
 	if err := handler.ProcessTask(ctx, task); err != nil || resetter.calls != 1 {
 		t.Fatalf("run = %v, calls %d", err, resetter.calls)
 	}

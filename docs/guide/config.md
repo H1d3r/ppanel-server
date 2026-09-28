@@ -61,10 +61,22 @@ Administrator: # First administrator, created on the first start
 
 - **`Host`**: Address the server listens on.
   - Default: `0.0.0.0` (all network interfaces).
+  - It is only a bind address. Public links, such as payment callback URLs, are built from the site host
+    (site settings) or a payment method's own domain.
 - **`Port`**: Port the server listens on.
   - Default: `8080`.
 - **`Debug`**: Enables debug mode, disabling background logging.
   - Default: `false`.
+- **`AppLocation`**: IANA time zone of the application: "today", expiry reminders, reset cycles and the daily
+  statistics are computed in it.
+  - Default: `Asia/Shanghai`.
+  - The server also makes it the process time zone at startup, whatever `TZ` says, so every time it writes
+    (automatic `created_at` / `updated_at` included) is on the same clock.
+  - It must match the database time zone (`Database.Config`: MySQL `loc`, PostgreSQL `TimeZone`), in which
+    timestamps are stored and statistics are grouped by day. The setup page writes the zone of `AppLocation`
+    into a new database's parameters; for an existing database the server logs an error at startup when they
+    differ. Change the database zone only on an empty database or after converting the stored times: changing
+    it reinterprets every stored time.
 
 ### 3.2 JWT Authentication (`JwtAuth`)
 
@@ -119,6 +131,7 @@ Administrator: # First administrator, created on the first start
 - **`Config`**: Dialect-specific connection parameters.
   - MySQL default: `charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true`.
   - PostgreSQL default: `sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel`.
+  - The zone in these parameters is the database time zone; see `AppLocation`.
 - **`MaxIdleConns`**: Maximum idle connections.
   - Default: `10`.
 - **`MaxOpenConns`**: Maximum open connections.

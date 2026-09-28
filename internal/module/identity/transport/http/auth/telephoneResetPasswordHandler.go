@@ -10,11 +10,17 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// TelephoneResetPasswordService is the part of the identity facade
+// TelephoneResetPasswordHandler calls.
+type TelephoneResetPasswordService interface {
+	TelephoneResetPassword(ctx context.Context, req *dto.TelephoneResetPasswordRequest) (*dto.LoginResponse, error)
+}
+
+var _ TelephoneResetPasswordService = identity.Service(nil)
+
 // TelephoneResetPasswordHandler documents Reset password.
 //
-// The identity service applies the configured Turnstile check, so the
-// verify-config argument is no longer read; it stays until the route
-// wiring drops it.
+// The identity service applies the configured Turnstile check.
 //
 // @Summary Reset password
 // @Tags common
@@ -23,7 +29,7 @@ import (
 // @Param request body dto.TelephoneResetPasswordRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/reset/telephone [post]
-func TelephoneResetPasswordHandler(service identity.Service) app.HandlerFunc {
+func TelephoneResetPasswordHandler(service TelephoneResetPasswordService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.TelephoneResetPasswordRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

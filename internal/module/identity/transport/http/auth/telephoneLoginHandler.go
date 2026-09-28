@@ -10,11 +10,17 @@ import (
 	"github.com/perfect-panel/server/pkg/httpx"
 )
 
+// TelephoneLoginService is the part of the identity facade
+// TelephoneLoginHandler calls.
+type TelephoneLoginService interface {
+	TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginRequest) (*dto.LoginResponse, error)
+}
+
+var _ TelephoneLoginService = identity.Service(nil)
+
 // TelephoneLoginHandler documents User Telephone login.
 //
-// The identity service applies the configured Turnstile check, so the
-// verify-config argument is no longer read; it stays until the route
-// wiring drops it.
+// The identity service applies the configured Turnstile check.
 //
 // @Summary User Telephone login
 // @Tags common
@@ -23,7 +29,7 @@ import (
 // @Param request body dto.TelephoneLoginRequest true "Request parameters"
 // @Success 200 {object} httpx.ResponseSuccessBean{data=dto.LoginResponse}
 // @Router /v1/auth/login/telephone [post]
-func TelephoneLoginHandler(service identity.Service) app.HandlerFunc {
+func TelephoneLoginHandler(service TelephoneLoginService) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		var req dto.TelephoneLoginRequest
 		if err := httpx.ShouldBind(c, &req); err != nil {

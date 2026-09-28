@@ -11,13 +11,13 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	stdErrors "errors"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
-	token2 "github.com/perfect-panel/server/internal/auth/token"
+	"github.com/perfect-panel/server/internal/auth/token"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
@@ -25,7 +25,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"gorm.io/gorm"
 )
 
@@ -41,7 +40,7 @@ const (
 
 // ErrIdempotencyKeyReused is handled as HTTP 409 by the V2 handler. It is a
 // distinct transport condition: the original order remains intact.
-var ErrIdempotencyKeyReused = stdErrors.New("idempotency key reused with a different request")
+var ErrIdempotencyKeyReused = errors.New("idempotency key reused with a different request")
 
 // Orders reads the orders the orchestration creates.
 type Orders interface {
@@ -137,7 +136,7 @@ func (s *Service) Checkout(ctx context.Context, orderNo string, req *dto.V2Check
 		return nil, err
 	}
 	if !order.CanCheckout(orderInfo.Status) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is not pending")
+		return nil, xerr.Errorf(xerr.OrderStatusError, "order is not pending")
 	}
 	return s.checkoutResponse(ctx, orderInfo, req.CheckoutToken, req.ReturnURL)
 }
@@ -193,16 +192,16 @@ func (s *Service) Session(ctx context.Context, orderNo, checkoutToken string) (*
 		return nil, err
 	}
 	if orderInfo.GuestCheckoutTokenHash == "" {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not have a guest checkout capability")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "order does not have a guest checkout capability")
 	}
 	if orderInfo.UserId == 0 || !order.IsSettled(orderInfo.Status) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "guest account is not ready")
+		return nil, xerr.Errorf(xerr.OrderStatusError, "guest account is not ready")
 	}
-	token, err := s.deps.Portal.IssueSession(ctx, orderInfo.UserId)
+	accessToken, err := s.deps.Portal.IssueSession(ctx, orderInfo.UserId)
 	if err != nil {
 		return nil, err
 	}
-	return &dto.V2OrderSessionResponse{AccessToken: token}, nil
+	return &dto.V2OrderSessionResponse{AccessToken: accessToken}, nil
 }
 
 // AuthorizeEventStream validates the self-contained stream capability and
@@ -223,7 +222,7 @@ func (s *Service) AuthorizeEventStream(ctx context.Context, orderNo, ticket stri
 func (s *Service) findOrder(ctx context.Context, orderNo string) (*order.Order, error) {
 	orderInfo, err := s.deps.Orders.FindOneByOrderNo(ctx, orderNo)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderNotExist), "order not found")
+		return nil, xerr.Errorf(xerr.OrderNotExist, "order not found")
 	}
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", orderNo)
@@ -277,7 +276,7 @@ func (s *Service) createOrder(ctx context.Context, req *dto.V2CreateOrderRequest
 		}
 		return resp.OrderNo, "", nil
 	default:
-		return "", "", errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "unsupported order type")
+		return "", "", xerr.Errorf(xerr.InvalidParams, "unsupported order type")
 	}
 }
 
@@ -343,7 +342,7 @@ func (s *Service) authorizeExistingCreate(ctx context.Context, orderInfo *order.
 		return s.authorizeOrder(ctx, orderInfo, "")
 	}
 	if req.Guest == nil || orderInfo.GuestAuthType != req.Guest.AuthType || orderInfo.GuestIdentifier != req.Guest.Identifier {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to this checkout")
+		return xerr.Errorf(xerr.InvalidAccess, "order does not belong to this checkout")
 	}
 	return s.authorizeOrder(ctx, orderInfo, checkoutToken)
 }
@@ -355,7 +354,7 @@ func (s *Service) authorizeOrder(ctx context.Context, orderInfo *order.Order, ch
 	if guestCheckoutTokenMatches(orderInfo, checkoutToken) {
 		return nil
 	}
-	return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
+	return xerr.Errorf(xerr.InvalidAccess, "order does not belong to the current user")
 }
 
 func (s *Service) mintEventTicket(ctx context.Context, orderInfo *order.Order, checkoutToken string) (string, int64, error) {
@@ -367,11 +366,11 @@ func (s *Service) mintEventTicket(ctx context.Context, orderInfo *order.Order, c
 		expiresAt = time.Now().Add(v2EventTicketExtra)
 	}
 	seconds := max(int64(time.Until(expiresAt).Seconds()), 1)
-	ticket, err := token2.NewJwtToken(s.deps.JwtSecret, time.Now().Unix(), seconds,
-		token2.WithOption("OrderNo", orderInfo.OrderNo),
-		token2.WithOption("Scope", v2EventScope),
-		token2.WithOption("UserId", orderInfo.UserId),
-		token2.WithOption("GuestCheckoutHash", orderInfo.GuestCheckoutTokenHash),
+	ticket, err := token.NewJwtToken(s.deps.JwtSecret, time.Now().Unix(), seconds,
+		token.WithOption("OrderNo", orderInfo.OrderNo),
+		token.WithOption("Scope", v2EventScope),
+		token.WithOption("UserId", orderInfo.UserId),
+		token.WithOption("GuestCheckoutHash", orderInfo.GuestCheckoutTokenHash),
 	)
 	if err != nil {
 		return "", 0, xerr.Wrapf(err, xerr.ERROR, "create event ticket")
@@ -383,9 +382,9 @@ func (s *Service) mintEventTicket(ctx context.Context, orderInfo *order.Order, c
 // the current order row. It deliberately does not require a long-lived bearer
 // token in the EventSource URL.
 func (s *Service) authorizeEventTicket(ctx context.Context, orderNo, ticket string) (*order.Order, error) {
-	claims, err := token2.ParseJwtToken(ticket, s.deps.JwtSecret)
+	claims, err := token.ParseJwtToken(ticket, s.deps.JwtSecret)
 	if err != nil || claimString(claims, "OrderNo") != orderNo || claimString(claims, "Scope") != v2EventScope {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "event ticket is invalid")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "event ticket is invalid")
 	}
 	orderInfo, err := s.findOrder(ctx, orderNo)
 	if err != nil {
@@ -395,19 +394,19 @@ func (s *Service) authorizeEventTicket(ctx context.Context, orderNo, ticket stri
 		return orderInfo, nil
 	}
 	if orderInfo.UserId == 0 || claimInt64(claims, "UserId") != orderInfo.UserId {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "event ticket is invalid")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "event ticket is invalid")
 	}
 	return orderInfo, nil
 }
 
 func (s *Service) eventTicketExpiresAt(ticket string) (time.Time, error) {
-	claims, err := token2.ParseJwtToken(ticket, s.deps.JwtSecret)
+	claims, err := token.ParseJwtToken(ticket, s.deps.JwtSecret)
 	if err != nil {
-		return time.Time{}, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "event ticket is invalid")
+		return time.Time{}, xerr.Errorf(xerr.InvalidAccess, "event ticket is invalid")
 	}
 	expiresAt := claimInt64(claims, "exp")
 	if expiresAt <= time.Now().Unix() {
-		return time.Time{}, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "event ticket expired")
+		return time.Time{}, xerr.Errorf(xerr.InvalidAccess, "event ticket expired")
 	}
 	return time.Unix(expiresAt, 0), nil
 }
@@ -460,26 +459,26 @@ func (s *Service) guestCheckoutToken(idempotencyKey string, orderInfo *order.Ord
 	if orderInfo.GuestCheckoutTokenHash == "" {
 		return ""
 	}
-	token := s.derivedGuestCheckoutToken(idempotencyKey)
-	if !guestCheckoutTokenMatches(orderInfo, token) {
+	derived := s.derivedGuestCheckoutToken(idempotencyKey)
+	if !guestCheckoutTokenMatches(orderInfo, derived) {
 		return ""
 	}
-	return token
+	return derived
 }
 
 func validateV2CreateRequest(req *dto.V2CreateOrderRequest, currentUser *user.User) error {
 	if req == nil || req.PaymentID <= 0 {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "payment_id is required")
+		return xerr.Errorf(xerr.InvalidParams, "payment_id is required")
 	}
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 	switch req.Type {
 	case v2OrderTypePurchase:
 		if req.SubscribeID <= 0 || req.Quantity <= 0 || req.Quantity > checkout.MaxQuantity || req.UserSubscribeID != 0 || req.Amount != 0 {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid purchase parameters")
+			return xerr.Errorf(xerr.InvalidParams, "invalid purchase parameters")
 		}
 		if currentUser == nil {
 			if req.Guest == nil || len(req.Guest.Password) < 8 || len(req.Guest.Password) > 128 {
-				return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "guest credentials are required")
+				return xerr.Errorf(xerr.InvalidParams, "guest credentials are required")
 			}
 			// Canonicalize in place so the idempotency hash, the replay
 			// ownership check and the created order share one identity.
@@ -489,22 +488,22 @@ func validateV2CreateRequest(req *dto.V2CreateOrderRequest, currentUser *user.Us
 			}
 			req.Guest.AuthType, req.Guest.Identifier = authType, identifier
 		} else if req.Guest != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "guest is only allowed for anonymous purchase")
+			return xerr.Errorf(xerr.InvalidParams, "guest is only allowed for anonymous purchase")
 		}
 	case v2OrderTypeRenewal:
 		if currentUser == nil || req.UserSubscribeID <= 0 || req.Quantity <= 0 || req.Quantity > checkout.MaxQuantity || req.SubscribeID != 0 || req.Amount != 0 || req.Guest != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid renewal parameters")
+			return xerr.Errorf(xerr.InvalidParams, "invalid renewal parameters")
 		}
 	case v2OrderTypeResetTraffic:
 		if currentUser == nil || req.UserSubscribeID <= 0 || req.SubscribeID != 0 || req.Quantity != 0 || req.Amount != 0 || req.Coupon != "" || req.Guest != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid reset traffic parameters")
+			return xerr.Errorf(xerr.InvalidParams, "invalid reset traffic parameters")
 		}
 	case v2OrderTypeRecharge:
 		if currentUser == nil || req.Amount <= 0 || req.SubscribeID != 0 || req.UserSubscribeID != 0 || req.Quantity != 0 || req.Coupon != "" || req.Guest != nil {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid recharge parameters")
+			return xerr.Errorf(xerr.InvalidParams, "invalid recharge parameters")
 		}
 	default:
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "unsupported order type")
+		return xerr.Errorf(xerr.InvalidParams, "unsupported order type")
 	}
 	return nil
 }

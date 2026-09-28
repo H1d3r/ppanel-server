@@ -3,14 +3,23 @@ package server
 import (
 	"context"
 
+	"errors"
+
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/perfect-panel/server/internal/module/network"
 	dto "github.com/perfect-panel/server/internal/module/network/contract"
 	"github.com/perfect-panel/server/internal/transport/http/validation"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
+
+// ServerConfigReader is the part of the network facade
+// GetServerConfigHandler calls.
+type ServerConfigReader interface {
+	GetServerConfig(ctx context.Context, req *dto.GetServerConfigRequest, meta network.RequestMeta) (*dto.GetServerConfigResponse, network.ResponseMeta, error)
+}
+
+var _ ServerConfigReader = network.Service(nil)
 
 // GetServerConfigHandler documents Get server config.
 //
@@ -22,7 +31,7 @@ import (
 // @Param request query dto.GetServerConfigRequest false "Request parameters"
 // @Success 200 {object} dto.GetServerConfigResponse
 // @Router /v1/server/config [get]
-func GetServerConfigHandler(service network.Service) app.HandlerFunc {
+func GetServerConfigHandler(service ServerConfigReader) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		acceptsProtobuf := acceptsProtobuf(ctx)
 		commonReq, err := serverCommonRequest(ctx)
@@ -42,7 +51,7 @@ func GetServerConfigHandler(service network.Service) app.HandlerFunc {
 		})
 		writeHeaders(ctx, respMeta.Headers)
 		if err != nil {
-			if errors.Is(err, xerr.StatusNotModified) {
+			if errors.Is(err, xerr.ErrNotModified) {
 				ctx.String(consts.StatusNotModified, "Not Modified")
 				return
 			}

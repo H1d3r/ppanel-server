@@ -94,7 +94,7 @@ func (g *alipayGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconc
 			)
 			return Reconciliation{}, nil
 		}
-		return Reconciliation{}, fmt.Errorf("cannot safely expire Alipay order %s: %v: %w", o.OrderNo, err, ErrUnconfirmed)
+		return Reconciliation{}, fmt.Errorf("cannot safely expire Alipay order %s: %w: %w", o.OrderNo, err, ErrUnconfirmed)
 	}
 	if trade.Status.Paid() {
 		return paidAlipayTrade(o, trade)
@@ -118,7 +118,7 @@ func (g *alipayGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconc
 	if req.Explicit {
 		return Reconciliation{}, nil // the owner or administrator forfeits the unconfirmed trade.
 	}
-	return Reconciliation{}, fmt.Errorf("cannot safely expire Alipay order %s: gateway close failed: %v: %w", o.OrderNo, closeErr, ErrUnconfirmed)
+	return Reconciliation{}, fmt.Errorf("cannot safely expire Alipay order %s: gateway close failed: %w: %w", o.OrderNo, closeErr, ErrUnconfirmed)
 }
 
 // paidAlipayTrade settles a trade the gateway reports as paid once the

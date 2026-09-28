@@ -64,9 +64,8 @@ perf:
 
 # check is the fast local subset of CI: formatting, vet, lint and the unit
 # tests (CI adds the database-backed and -race runs, govulncheck and the
-# generated-code check). Like CI it lints only lines changed since LINT_BASE
-# until the existing code is lint clean; switch it to lint then.
-check: fmt-check vet lint-new test
+# generated-code check).
+check: fmt-check vet lint test
 
 fmt: $(GOIMPORTS)
 	$(GOIMPORTS) -w .
@@ -87,8 +86,8 @@ vet:
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run ./...
 
-# Reports only issues on lines changed since LINT_BASE; CI runs this until the
-# existing code is lint clean.
+# Reports only issues on lines changed since LINT_BASE: the pre-commit hook's
+# quick pass. CI lints the whole tree.
 lint-new: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run --new-from-rev=$(LINT_BASE) ./...
 

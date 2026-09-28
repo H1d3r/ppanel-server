@@ -5,12 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"errors"
+
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/module/support"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
 	ticketEntity "github.com/perfect-panel/server/internal/module/support/entity/ticket"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -183,7 +184,7 @@ func (n *fakeTicketNotifier) TicketStatusChanged(_ context.Context, ticketID int
 func errCode(t *testing.T, err error) uint32 {
 	t.Helper()
 	var codeErr *xerr.CodeError
-	if !errors.As(errors.Cause(err), &codeErr) {
+	if !errors.As(err, &codeErr) {
 		t.Fatalf("error %v carries no error code", err)
 	}
 	return codeErr.GetErrCode()

@@ -48,11 +48,11 @@ func withGateways(registry *gateway.Registry) func(*Deps) {
 	return func(d *Deps) { d.Gateways = registry }
 }
 
-// buyer seeds an account holding balance and gift credit.
-func (f *checkoutFixture) buyer(balance, gift int64) (*user.User, context.Context) {
+// buyer seeds an account holding gift credit and no balance.
+func (f *checkoutFixture) buyer(gift int64) (*user.User, context.Context) {
 	f.t.Helper()
 	u := f.h.User()
-	f.h.Wallet(u.Id, balance, gift)
+	f.h.Wallet(u.Id, 0, gift)
 	return u, billingtest.UserContext(u)
 }
 

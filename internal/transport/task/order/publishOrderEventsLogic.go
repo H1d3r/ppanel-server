@@ -2,40 +2,29 @@ package order
 
 import (
 	"context"
-	"strconv"
-	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/perfect-panel/server/pkg/logger"
 )
 
-// PublishOrderEventsLogic drains the durable order event outbox. Publishing
-// is intentionally separate from writing the event: a Redis outage may delay
-// a notification but can never roll back a committed payment state.
-type PublishOrderEventsLogic struct {
-	deps Dependencies
+// orderEventPublisher is billing's order-event outbox publication.
+type orderEventPublisher interface {
+	PublishOrderEvents(ctx context.Context) error
 }
 
-func NewPublishOrderEventsLogic(deps Dependencies) *PublishOrderEventsLogic {
-	return &PublishOrderEventsLogic{deps: deps}
+// PublishOrderEventsHandler is the queue shell of billing's order-event
+// outbox: the billing module drains the durable events onto the channels that
+// wake the order event streams (ADR-001), and the scheduler's next tick
+// drains whatever a run left behind.
+type PublishOrderEventsHandler struct {
+	outbox orderEventPublisher
 }
 
-func (l *PublishOrderEventsLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
-	events, err := l.deps.Store.OrderEvent().ListUnpublished(ctx, 500)
-	if err != nil {
-		return err
-	}
-	for _, event := range events {
-		if err := l.deps.Redis.Publish(ctx, order.EventChannel(event.OrderNo), strconv.FormatInt(event.ID, 10)).Err(); err != nil {
-			return err
-		}
-		if _, err := l.deps.Store.OrderEvent().MarkPublished(ctx, event.ID, time.Now()); err != nil {
-			return err
-		}
-	}
-	if len(events) > 0 {
-		logger.WithContext(ctx).Debugf("published %d order events", len(events))
-	}
-	return nil
+// NewPublishOrderEventsHandler builds the shell over the billing facade.
+func NewPublishOrderEventsHandler(deps Dependencies) *PublishOrderEventsHandler {
+	return &PublishOrderEventsHandler{outbox: deps.Billing}
+}
+
+// ProcessTask runs one publication and hands its failure to asynq.
+func (h *PublishOrderEventsHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+	return h.outbox.PublishOrderEvents(ctx)
 }

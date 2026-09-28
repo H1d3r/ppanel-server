@@ -12,26 +12,33 @@ import (
 	"github.com/cloudwego/hertz/pkg/route/param"
 	"github.com/perfect-panel/server/internal/module/billing"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // streamService answers the event stream with a fixed outcome and records
-// the request it served.
+// the request it served. keepAlive sends a heartbeat before the events.
 type streamService struct {
-	billing.Service
-	err    error
-	events [][3]string
-	got    billing.V2EventStreamRequest
+	err       error
+	keepAlive bool
+	events    [][3]string
+	got       billing.V2EventStreamRequest
 }
+
+var _ EventStreamer = (*streamService)(nil)
 
 func (s *streamService) V2StreamOrderEvents(_ context.Context, req billing.V2EventStreamRequest, sink billing.V2EventSink) error {
 	s.got = req
 	if s.err != nil {
 		return s.err
 	}
+	if s.keepAlive {
+		if err := sink.KeepAlive(); err != nil {
+			return err
+		}
+	}
 	for _, event := range s.events {
+		// The handler ignores what a stream that started returns.
 		if err := sink.Event(event[0], event[1], []byte(event[2])); err != nil {
-			return nil
+			return err
 		}
 	}
 	return nil
@@ -86,7 +93,7 @@ func TestV2OrderEventsHandlerAnswersRefusalsWithJSON(t *testing.T) {
 		wantCode   uint32
 	}{
 		"too many streams": {billing.ErrTooManyEventStreams, http.StatusTooManyRequests, xerr.TooManyRequests},
-		"invalid ticket":   {errors.Wrap(xerr.NewErrCode(xerr.InvalidAccess), "event ticket is invalid"), http.StatusOK, xerr.InvalidAccess},
+		"invalid ticket":   {xerr.Errorf(xerr.InvalidAccess, "event ticket is invalid"), http.StatusOK, xerr.InvalidAccess},
 	} {
 		t.Run(name, func(t *testing.T) {
 			status, body := serveEvents(t, &streamService{err: tt.err}, "")
@@ -100,5 +107,38 @@ func TestV2OrderEventsHandlerAnswersRefusalsWithJSON(t *testing.T) {
 				t.Fatalf("response %d %q, want %d with code %d", status, body, tt.wantStatus, tt.wantCode)
 			}
 		})
+	}
+}
+
+// A heartbeat opens the stream like an event does: a quiet order still
+// reaches the browser through proxies, which must neither cache nor buffer
+// the stream.
+func TestV2OrderEventsHandlerOpensTheStreamOnAKeepAlive(t *testing.T) {
+	status, stream := serveEvents(t, &streamService{keepAlive: true}, "")
+	if status != http.StatusOK || !strings.Contains(stream, ":keep-alive\n") {
+		t.Fatalf("response %d: %q, want a keep-alive comment", status, stream)
+	}
+	for _, header := range []string{"Content-Type: text/event-stream", "Cache-Control: no-cache", "X-Accel-Buffering: no"} {
+		if !strings.Contains(stream, header) {
+			t.Errorf("stream %q lacks header %q", stream, header)
+		}
+	}
+}
+
+// The browser's Last-Event-ID wins over the after parameter even when it is
+// unusable: a cursor that is not a non-negative number replays the order's
+// events from the start instead of skipping any.
+func TestV2OrderEventsHandlerReplaysFromTheStartOnAnUnusableLastEventID(t *testing.T) {
+	for lastEventID, want := range map[string]int64{
+		" 7 ": 7,
+		"abc": 0,
+		"-3":  0,
+		"7.5": 0,
+	} {
+		svc := &streamService{}
+		serveEvents(t, svc, lastEventID)
+		if svc.got.AfterID != want {
+			t.Errorf("Last-Event-ID %q: replay after %d, want %d", lastEventID, svc.got.AfterID, want)
+		}
 	}
 }

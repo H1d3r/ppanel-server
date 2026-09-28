@@ -11,17 +11,17 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
 	orderEntity "github.com/perfect-panel/server/internal/module/billing/entity/order"
-	"github.com/perfect-panel/server/internal/repository"
 )
 
-type reconcileOrderRepo struct {
-	repository.OrderRepo
-	orders []*orderEntity.Order
-}
+// reconcileOrders serves billing's order scan from a list of orders sorted
+// by id.
+type reconcileOrders []*orderEntity.Order
 
-func (r reconcileOrderRepo) QueryOrdersByStatusAfterID(_ context.Context, status uint8, afterID int64, limit int) ([]*orderEntity.Order, error) {
+var _ orderScanner = reconcileOrders(nil)
+
+func (r reconcileOrders) OrdersByStatusAfter(_ context.Context, status uint8, afterID int64, limit int) ([]*orderEntity.Order, error) {
 	result := make([]*orderEntity.Order, 0, limit)
-	for _, item := range r.orders {
+	for _, item := range r {
 		if item.Status == status && item.Id > afterID {
 			result = append(result, item)
 			if len(result) == limit {
@@ -32,14 +32,21 @@ func (r reconcileOrderRepo) QueryOrdersByStatusAfterID(_ context.Context, status
 	return result, nil
 }
 
-type reconcileStore struct {
-	repository.Store
-	orders repository.OrderRepo
+// reconcileDeps is the activation queue on miniredis the reconciler repairs,
+// with the orders its scan serves.
+type reconcileDeps struct {
+	Queue     *taskqueue.Client
+	Inspector *asynq.Inspector
+	orders    reconcileOrders
 }
 
-func (s reconcileStore) Order() repository.OrderRepo { return s.orders }
+// handler builds the reconciler like NewReconcilePaidOrdersHandler, with the
+// fake scan in place of the billing facade.
+func (d reconcileDeps) handler() *ReconcilePaidOrdersHandler {
+	return &ReconcilePaidOrdersHandler{orders: d.orders, queue: d.Queue, inspector: d.Inspector}
+}
 
-func newReconcileTestContext(t *testing.T, orders []*orderEntity.Order) (Dependencies, *miniredis.Miniredis) {
+func newReconcileTestContext(t *testing.T, orders []*orderEntity.Order) (reconcileDeps, *miniredis.Miniredis) {
 	t.Helper()
 	redisServer := miniredis.RunT(t)
 	redisOpt := asynq.RedisClientOpt{Addr: redisServer.Addr()}
@@ -47,11 +54,7 @@ func newReconcileTestContext(t *testing.T, orders []*orderEntity.Order) (Depende
 	t.Cleanup(func() { _ = queue.Close() })
 	inspector := asynq.NewInspector(redisOpt)
 	t.Cleanup(func() { _ = inspector.Close() })
-	return Dependencies{
-		Store:     reconcileStore{orders: reconcileOrderRepo{orders: orders}},
-		Queue:     queue,
-		Inspector: inspector,
-	}, redisServer
+	return reconcileDeps{Queue: queue, Inspector: inspector, orders: orders}, redisServer
 }
 
 func TestReconcilePaidOrdersEnqueuesEachPaidOrderIdempotently(t *testing.T) {
@@ -60,12 +63,12 @@ func TestReconcilePaidOrdersEnqueuesEachPaidOrderIdempotently(t *testing.T) {
 		{Id: 2, OrderNo: "pending", Status: OrderStatusPending},
 		{Id: 3, OrderNo: "paid-2", Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("duplicate ProcessTask: %v", err)
 	}
 	tasks, err := deps.Inspector.ListPendingTasks("default")
@@ -82,10 +85,10 @@ func TestReconcilePaidOrdersArchivedRecovery(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("first ProcessTask: %v", err)
 	}
 
@@ -102,7 +105,7 @@ func TestReconcilePaidOrdersArchivedRecovery(t *testing.T) {
 		t.Fatalf("expected 1 archived task, got %d", len(archivedTasks))
 	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("recovery ProcessTask: %v", err)
 	}
 
@@ -131,10 +134,10 @@ func TestReconcilePaidOrdersNonArchivedPreserved(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("first ProcessTask: %v", err)
 	}
 
@@ -146,7 +149,7 @@ func TestReconcilePaidOrdersNonArchivedPreserved(t *testing.T) {
 		t.Fatalf("expected pending initially, got %v", info.State)
 	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("second ProcessTask: %v", err)
 	}
 
@@ -172,7 +175,7 @@ func TestReconcilePaidOrdersArchivedTypeMismatch(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
 	payload, _ := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: orderNo})
@@ -187,7 +190,7 @@ func TestReconcilePaidOrdersArchivedTypeMismatch(t *testing.T) {
 		t.Fatalf("ArchiveTask: %v", err)
 	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask must repair a type-mismatched task, got: %v", err)
 	}
 
@@ -200,7 +203,7 @@ func TestReconcilePaidOrdersArchivedPayloadOrderNoMismatch(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
 	payload, _ := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: otherOrderNo})
@@ -215,7 +218,7 @@ func TestReconcilePaidOrdersArchivedPayloadOrderNoMismatch(t *testing.T) {
 		t.Fatalf("ArchiveTask: %v", err)
 	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask must repair an OrderNo-mismatched task, got: %v", err)
 	}
 
@@ -230,7 +233,7 @@ func TestReconcilePaidOrdersArchivedEmptyPayloadRepaired(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
 	task := asynq.NewTask(taskqueue.ForthwithActivateOrder, []byte("{}"), asynq.MaxRetry(5))
@@ -241,7 +244,7 @@ func TestReconcilePaidOrdersArchivedEmptyPayloadRepaired(t *testing.T) {
 		t.Fatalf("ArchiveTask: %v", err)
 	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask must repair an empty-payload task, got: %v", err)
 	}
 
@@ -250,7 +253,7 @@ func TestReconcilePaidOrdersArchivedEmptyPayloadRepaired(t *testing.T) {
 
 // assertRepairedActivationTask verifies the corrupt task was replaced by a
 // pending activation task carrying the canonical payload.
-func assertRepairedActivationTask(t *testing.T, deps Dependencies, taskID, orderNo string) {
+func assertRepairedActivationTask(t *testing.T, deps reconcileDeps, taskID, orderNo string) {
 	t.Helper()
 	taskInfo, err := deps.Inspector.GetTaskInfo("default", taskID)
 	if err != nil {
@@ -276,10 +279,10 @@ func TestReconcilePaidOrdersNotFoundReenqueue(t *testing.T) {
 	deps, redisSrv := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("first ProcessTask: %v", err)
 	}
 
@@ -289,9 +292,11 @@ func TestReconcilePaidOrdersNotFoundReenqueue(t *testing.T) {
 	}
 
 	redisSrv.Del("asynq:{default}:t:" + taskID)
-	redisSrv.ZRem("asynq:{default}:archived", taskID)
+	if _, err := redisSrv.ZRem("asynq:{default}:archived", taskID); err != nil {
+		t.Fatalf("remove the archived entry: %v", err)
+	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("recovery ProcessTask: %v", err)
 	}
 
@@ -320,9 +325,9 @@ func TestReconcilePaidOrdersOnlyPaidAreEnqueued(t *testing.T) {
 		{Id: 4, OrderNo: "finished-1", Status: OrderStatusFinished},
 		{Id: 5, OrderNo: "paid-2", Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 	tasks, err := deps.Inspector.ListPendingTasks("default")
@@ -363,9 +368,9 @@ func TestReconcilePaidOrdersStaleDetection(t *testing.T) {
 		{Id: 2, OrderNo: "truly-stale", Status: OrderStatusPaid, UpdatedAt: time.Now().Add(-20 * time.Minute)},
 		{Id: 3, OrderNo: "recently-paid-old-creation", Status: OrderStatusPaid, CreatedAt: time.Now().Add(-20 * time.Minute), UpdatedAt: time.Now()},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 	tasks, err := deps.Inspector.ListPendingTasks("default")
@@ -382,10 +387,10 @@ func TestReconcilePaidOrdersArchivedRunTaskRace(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("first ProcessTask: %v", err)
 	}
 
@@ -407,7 +412,7 @@ func TestReconcilePaidOrdersArchivedRunTaskRace(t *testing.T) {
 		t.Fatalf("expected pending after RunTask, got %v", taskInfo.State)
 	}
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("recovery ProcessTask: %v", err)
 	}
 
@@ -433,7 +438,7 @@ func TestReconcilePaidOrdersHandleArchivedBenignRace(t *testing.T) {
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
 	payload, _ := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: orderNo})
@@ -459,7 +464,7 @@ func TestReconcilePaidOrdersHandleArchivedBenignRace(t *testing.T) {
 		State:   asynq.TaskStateArchived,
 	}
 
-	action, state, err := logic.handleArchived(context.Background(), orderNo, taskID, fakeInfo)
+	action, state, err := handler.handleArchived(context.Background(), orderNo, taskID, fakeInfo)
 	if err != nil {
 		t.Fatalf("handleArchived: %v", err)
 	}
@@ -476,7 +481,7 @@ func TestReconcilePaidOrdersHandleArchivedTypeMismatchReturnsError(t *testing.T)
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
 	payload, _ := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: orderNo})
@@ -488,7 +493,7 @@ func TestReconcilePaidOrdersHandleArchivedTypeMismatchReturnsError(t *testing.T)
 		State:   asynq.TaskStateArchived,
 	}
 
-	_, _, err := logic.handleArchived(context.Background(), orderNo, taskID, fakeInfo)
+	_, _, err := handler.handleArchived(context.Background(), orderNo, taskID, fakeInfo)
 	if err == nil {
 		t.Fatal("expected error for type mismatch")
 	}
@@ -499,7 +504,7 @@ func TestReconcilePaidOrdersHandleArchivedOrderNoMismatchReturnsError(t *testing
 	deps, _ := newReconcileTestContext(t, []*orderEntity.Order{
 		{Id: 1, OrderNo: orderNo, Status: OrderStatusPaid},
 	})
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 	taskID := taskqueue.ActivationTaskID(orderNo)
 
 	wrongPayload, _ := json.Marshal(taskqueue.ForthwithActivateOrderPayload{OrderNo: "some-other-order"})
@@ -511,7 +516,7 @@ func TestReconcilePaidOrdersHandleArchivedOrderNoMismatchReturnsError(t *testing
 		State:   asynq.TaskStateArchived,
 	}
 
-	_, _, err := logic.handleArchived(context.Background(), orderNo, taskID, fakeInfo)
+	_, _, err := handler.handleArchived(context.Background(), orderNo, taskID, fakeInfo)
 	if err == nil {
 		t.Fatal("expected error for OrderNo mismatch")
 	}
@@ -528,9 +533,9 @@ func TestReconcilePaidOrdersMultipleBatches(t *testing.T) {
 		})
 	}
 	deps, _ := newReconcileTestContext(t, orders)
-	logic := NewReconcilePaidOrdersLogic(deps)
+	handler := deps.handler()
 
-	if err := logic.ProcessTask(context.Background(), nil); err != nil {
+	if err := handler.ProcessTask(context.Background(), nil); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 	tasks, err := deps.Inspector.ListPendingTasks("default", asynq.PageSize(n+1))

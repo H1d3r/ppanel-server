@@ -6,12 +6,8 @@ on:
 
 jobs:
   # Nothing is released unless the tagged commit passes the same checks as CI.
-  # Lint is skipped: it reports only changed lines, which were linted when they
-  # merged.
   verify:
     uses: ./.github/workflows/checks.yml
-    with:
-      lint: false
 
   # Creates the GitHub release the other two jobs publish into, and resolves
   # the metadata every artifact of this release carries.

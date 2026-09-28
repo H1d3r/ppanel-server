@@ -1,5 +1,3 @@
-// Package activation owns the paid-order business workflow. The task adapter
-// only decodes a message and invokes the billing facade.
 package activation
 
 import (
@@ -47,6 +45,10 @@ type WorkflowDeps struct {
 	NotificationsEnabled func() bool
 }
 
+// Workflow activates a paid order: it has identity create a guest buyer's
+// account, credits a recharge or has subscription fulfil the order, settles
+// the referral commission, finalizes the order and sends the notices. Every
+// stage is idempotent, so a failed activation is retried from the start.
 type Workflow struct {
 	deps   WorkflowDeps
 	stages *Service
@@ -56,20 +58,20 @@ func NewWorkflow(deps WorkflowDeps, stages *Service) *Workflow {
 	return &Workflow{deps: deps, stages: stages}
 }
 
-func (l *Workflow) ensureGuestAccount(ctx context.Context, orderInfo *order.Order) error {
-	if l.deps.GuestAccounts == nil {
+func (w *Workflow) ensureGuestAccount(ctx context.Context, orderInfo *order.Order) error {
+	if w.deps.GuestAccounts == nil {
 		return fmt.Errorf("guest account service is not configured")
 	}
-	userID, found, err := l.deps.GuestAccounts.FindGuestAccount(ctx, orderInfo.OrderNo)
+	userID, found, err := w.deps.GuestAccounts.FindGuestAccount(ctx, orderInfo.OrderNo)
 	if err != nil {
 		return err
 	}
 	if !found {
-		guest, err := l.getGuestOrderInfo(ctx, orderInfo)
+		guest, err := w.getGuestOrderInfo(ctx, orderInfo)
 		if err != nil {
 			return err
 		}
-		userID, err = l.deps.GuestAccounts.EnsureGuestAccount(ctx, identity.GuestAccountCommand{
+		userID, err = w.deps.GuestAccounts.EnsureGuestAccount(ctx, identity.GuestAccountCommand{
 			OrderNo: orderInfo.OrderNo, AuthType: guest.AuthType, Identifier: guest.Identifier,
 			PasswordHash: guest.PasswordHash, LegacyPassword: guest.Password, InviteCode: guest.InviteCode,
 		})
@@ -78,11 +80,11 @@ func (l *Workflow) ensureGuestAccount(ctx context.Context, orderInfo *order.Orde
 		}
 	}
 	orderInfo.UserId = userID
-	return l.deps.Orders.Update(ctx, orderInfo)
+	return w.deps.Orders.Update(ctx, orderInfo)
 }
 
-func (l *Workflow) Activate(ctx context.Context, orderNo string) error {
-	orderInfo, err := l.deps.Orders.FindOneByOrderNo(ctx, orderNo)
+func (w *Workflow) Activate(ctx context.Context, orderNo string) error {
+	orderInfo, err := w.deps.Orders.FindOneByOrderNo(ctx, orderNo)
 	if err != nil {
 		return err
 	}
@@ -94,14 +96,14 @@ func (l *Workflow) Activate(ctx context.Context, orderNo string) error {
 	}
 
 	if orderInfo.Type == order.TypeSubscribe && orderInfo.UserId == 0 {
-		if err := l.ensureGuestAccount(ctx, orderInfo); err != nil {
+		if err := w.ensureGuestAccount(ctx, orderInfo); err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Guest account stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
 	}
 
 	if orderInfo.Type == order.TypeRecharge {
-		balance, err := l.stages.ActivateRecharge(ctx, orderInfo.OrderNo)
+		balance, err := w.stages.ActivateRecharge(ctx, orderInfo.OrderNo)
 		if err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Recharge stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
@@ -109,27 +111,27 @@ func (l *Workflow) Activate(ctx context.Context, orderNo string) error {
 		// Load the notification context BEFORE the finalize CAS: once the
 		// order is Finished a retry short-circuits, so failing here (all
 		// prior stages are idempotent) keeps the notice at-least-once.
-		userInfo, err := l.deps.Profiles.FindOne(ctx, orderInfo.UserId)
+		userInfo, err := w.deps.Profiles.FindOne(ctx, orderInfo.UserId)
 		if err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Load user for recharge notify failed", logger.Field("error", err.Error()))
 			return err
 		}
-		if err := l.stages.FinalizeOrder(ctx, orderInfo.OrderNo); err != nil {
+		if err := w.stages.FinalizeOrder(ctx, orderInfo.OrderNo); err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Finalize stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
-		l.sendRechargeNotifications(ctx, orderInfo, userInfo, balance)
+		w.sendRechargeNotifications(ctx, orderInfo, userInfo, balance)
 		return nil
 	}
 
-	outcome, err := l.deps.Subscriptions.FulfillPaidOrder(ctx, orderInfo.OrderNo)
+	outcome, err := w.deps.Subscriptions.FulfillPaidOrder(ctx, orderInfo.OrderNo)
 	if err != nil {
 		logger.WithContext(ctx).Error("[ActivateOrderLogic] Fulfillment stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 		return err
 	}
 
 	if orderInfo.Type == order.TypeSubscribe || orderInfo.Type == order.TypeRenewal {
-		if err := l.stages.SettleOrderCommission(ctx, orderInfo.OrderNo, outcome.UserID); err != nil {
+		if err := w.stages.SettleOrderCommission(ctx, orderInfo.OrderNo, outcome.UserID); err != nil {
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Commission stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
@@ -137,24 +139,24 @@ func (l *Workflow) Activate(ctx context.Context, orderNo string) error {
 
 	// Load the notification context BEFORE the finalize CAS (see the
 	// recharge branch above for why).
-	userInfo, err := l.deps.Profiles.FindOne(ctx, orderInfo.UserId)
+	userInfo, err := w.deps.Profiles.FindOne(ctx, orderInfo.UserId)
 	if err != nil {
 		logger.WithContext(ctx).Error("[ActivateOrderLogic] Load user for notify failed", logger.Field("error", err.Error()))
 		return err
 	}
 
-	if err := l.stages.FinalizeOrder(ctx, orderInfo.OrderNo); err != nil {
+	if err := w.stages.FinalizeOrder(ctx, orderInfo.OrderNo); err != nil {
 		logger.WithContext(ctx).Error("[ActivateOrderLogic] Finalize stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 		return err
 	}
 
-	l.notifyFulfillment(ctx, orderInfo, userInfo, outcome)
+	w.notifyFulfillment(ctx, orderInfo, userInfo, outcome)
 	return nil
 }
 
 // notifyFulfillment dispatches the post-activation notices using the
 // fulfillment outcome's notification context.
-func (l *Workflow) notifyFulfillment(ctx context.Context, orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome) {
+func (w *Workflow) notifyFulfillment(ctx context.Context, orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome) {
 	if outcome == nil {
 		return
 	}
@@ -169,13 +171,13 @@ func (l *Workflow) notifyFulfillment(ctx context.Context, orderInfo *order.Order
 	default:
 		return
 	}
-	l.sendNotifications(ctx, orderInfo, userInfo, outcome, notifyType)
+	w.sendNotifications(ctx, orderInfo, userInfo, outcome, notifyType)
 }
 
 // getTempOrderInfo retrieves temporary order information from Redis cache
-func (l *Workflow) getTempOrderInfo(ctx context.Context, orderNo string) (*order.TemporaryOrderInfo, error) {
+func (w *Workflow) getTempOrderInfo(ctx context.Context, orderNo string) (*order.TemporaryOrderInfo, error) {
 	cacheKey := fmt.Sprintf(order.TempOrderCacheKey, orderNo)
-	data, err := l.deps.LegacyGuestCache.Get(ctx, cacheKey).Result()
+	data, err := w.deps.LegacyGuestCache.Get(ctx, cacheKey).Result()
 	if err != nil {
 		logger.WithContext(ctx).Error("Get temp order cache failed",
 			logger.Field("error", err.Error()),
@@ -196,7 +198,7 @@ func (l *Workflow) getTempOrderInfo(ctx context.Context, orderNo string) (*order
 	return &tempOrder, nil
 }
 
-func (l *Workflow) getGuestOrderInfo(ctx context.Context, orderInfo *order.Order) (*order.TemporaryOrderInfo, error) {
+func (w *Workflow) getGuestOrderInfo(ctx context.Context, orderInfo *order.Order) (*order.TemporaryOrderInfo, error) {
 	if orderInfo.GuestAuthType != "" && orderInfo.GuestIdentifier != "" && orderInfo.GuestPasswordHash != "" {
 		return &order.TemporaryOrderInfo{
 			OrderNo:      orderInfo.OrderNo,
@@ -206,26 +208,26 @@ func (l *Workflow) getGuestOrderInfo(ctx context.Context, orderInfo *order.Order
 			InviteCode:   orderInfo.GuestInviteCode,
 		}, nil
 	}
-	return l.getTempOrderInfo(ctx, orderInfo.OrderNo)
+	return w.getTempOrderInfo(ctx, orderInfo.OrderNo)
 }
 
 // sendNotifications sends both user and admin notifications for order completion
-func (l *Workflow) sendNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome, notifyType string) {
+func (w *Workflow) sendNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome, notifyType string) {
 	// Send user notification
-	templateData := l.buildUserNotificationData(orderInfo, outcome)
+	templateData := w.buildUserNotificationData(orderInfo, outcome)
 	if text, err := notification.RenderTelegramMarkdown(notifyType, templateData); err == nil {
-		l.sendUserNotifyWithTelegram(ctx, userInfo.Id, text)
+		w.sendUserNotifyWithTelegram(ctx, userInfo.Id, text)
 	}
 
 	// Send admin notification
-	adminData := l.buildAdminNotificationData(orderInfo, userInfo, outcome)
+	adminData := w.buildAdminNotificationData(orderInfo, userInfo, outcome)
 	if text, err := notification.RenderTelegramMarkdown(notification.AdminOrderNotify, adminData); err == nil {
-		l.sendAdminNotifyWithTelegram(ctx, text)
+		w.sendAdminNotifyWithTelegram(ctx, text)
 	}
 }
 
 // sendRechargeNotifications sends specific notifications for balance recharge orders
-func (l *Workflow) sendRechargeNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User, balance int64) {
+func (w *Workflow) sendRechargeNotifications(ctx context.Context, orderInfo *order.Order, userInfo *user.User, balance int64) {
 	// Send user notification
 	templateData := map[string]string{
 		"OrderAmount":   payment.FormatAmount(orderInfo.Price),
@@ -234,7 +236,7 @@ func (l *Workflow) sendRechargeNotifications(ctx context.Context, orderInfo *ord
 		"Balance":       payment.FormatAmount(balance),
 	}
 	if text, err := notification.RenderTelegramMarkdown(notification.RechargeNotify, templateData); err == nil {
-		l.sendUserNotifyWithTelegram(ctx, userInfo.Id, text)
+		w.sendUserNotifyWithTelegram(ctx, userInfo.Id, text)
 	}
 
 	// Send admin notification
@@ -249,12 +251,12 @@ func (l *Workflow) sendRechargeNotifications(ctx context.Context, orderInfo *ord
 		"PaymentMethod": orderInfo.Method,
 	}
 	if text, err := notification.RenderTelegramMarkdown(notification.AdminOrderNotify, adminData); err == nil {
-		l.sendAdminNotifyWithTelegram(ctx, text)
+		w.sendAdminNotifyWithTelegram(ctx, text)
 	}
 }
 
 // buildUserNotificationData creates template data for user notifications
-func (l *Workflow) buildUserNotificationData(orderInfo *order.Order, outcome *subscription.FulfillmentOutcome) map[string]string {
+func (w *Workflow) buildUserNotificationData(orderInfo *order.Order, outcome *subscription.FulfillmentOutcome) map[string]string {
 	data := map[string]string{
 		"OrderNo":       orderInfo.OrderNo,
 		"SubscribeName": outcome.PlanName,
@@ -270,7 +272,7 @@ func (l *Workflow) buildUserNotificationData(orderInfo *order.Order, outcome *su
 }
 
 // buildAdminNotificationData creates template data for admin notifications
-func (l *Workflow) buildAdminNotificationData(orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome) map[string]string {
+func (w *Workflow) buildAdminNotificationData(orderInfo *order.Order, userInfo *user.User, outcome *subscription.FulfillmentOutcome) map[string]string {
 	subscribeName := outcome.PlanName
 	if orderInfo.Type == order.TypeResetTraffic {
 		subscribeName = noticeResetTrafficName
@@ -290,11 +292,11 @@ func (l *Workflow) buildAdminNotificationData(orderInfo *order.Order, userInfo *
 
 // sendUserNotifyWithTelegram delivers rendered MarkdownV2 to the buyer's
 // bound Telegram; "no binding" and "no bot" both just mean nothing to send.
-func (l *Workflow) sendUserNotifyWithTelegram(ctx context.Context, userID int64, text string) {
-	if l.deps.NotificationsEnabled == nil || !l.deps.NotificationsEnabled() {
+func (w *Workflow) sendUserNotifyWithTelegram(ctx context.Context, userID int64, text string) {
+	if w.deps.NotificationsEnabled == nil || !w.deps.NotificationsEnabled() {
 		return
 	}
-	if err := l.deps.Notifications.NotifyTelegramUser(ctx, userID, text); err != nil {
+	if err := w.deps.Notifications.NotifyTelegramUser(ctx, userID, text); err != nil {
 		logger.WithContext(ctx).Info("Telegram user notice skipped",
 			logger.Field("reason", err.Error()), logger.Field("user_id", userID))
 	}
@@ -303,11 +305,11 @@ func (l *Workflow) sendUserNotifyWithTelegram(ctx context.Context, userID int64,
 // sendAdminNotifyWithTelegram posts into the admin group's notification
 // topic - the group is the only administrator channel, so an unconfigured
 // group means the notice is skipped.
-func (l *Workflow) sendAdminNotifyWithTelegram(ctx context.Context, text string) {
-	if l.deps.NotificationsEnabled == nil || !l.deps.NotificationsEnabled() {
+func (w *Workflow) sendAdminNotifyWithTelegram(ctx context.Context, text string) {
+	if w.deps.NotificationsEnabled == nil || !w.deps.NotificationsEnabled() {
 		return
 	}
-	if err := l.deps.Notifications.NotifyAdminsTelegram(ctx, text); err != nil {
+	if err := w.deps.Notifications.NotifyAdminsTelegram(ctx, text); err != nil {
 		logger.WithContext(ctx).Info("Telegram admin notice skipped", logger.Field("reason", err.Error()))
 	}
 }

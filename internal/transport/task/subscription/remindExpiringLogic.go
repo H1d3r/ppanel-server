@@ -7,16 +7,16 @@ import (
 	module "github.com/perfect-panel/server/internal/module/subscription"
 )
 
-// RemindExpiringLogic is the queue shell for the pre-expiry reminder; the
-// business logic lives in the subscription module.
-type RemindExpiringLogic struct {
+// RemindExpiringHandler is the queue shell of the pre-expiry reminder.
+type RemindExpiringHandler struct {
 	service module.Service
 }
 
-func NewRemindExpiringLogic(service module.Service) *RemindExpiringLogic {
-	return &RemindExpiringLogic{service: service}
+// NewRemindExpiringHandler builds the shell over the subscription facade.
+func NewRemindExpiringHandler(service module.Service) *RemindExpiringHandler {
+	return &RemindExpiringHandler{service: service}
 }
 
-func (l *RemindExpiringLogic) ProcessTask(ctx context.Context, _ *asynq.Task) error {
-	return l.service.RemindExpiringSubscriptions(ctx)
+func (h *RemindExpiringHandler) ProcessTask(ctx context.Context, _ *asynq.Task) error {
+	return h.service.RemindExpiringSubscriptions(ctx)
 }

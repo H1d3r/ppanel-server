@@ -17,7 +17,6 @@ import (
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
-	"github.com/pkg/errors"
 )
 
 // Checkout starts the payment of a pending order: a gateway checkout the
@@ -28,7 +27,7 @@ func (s *Service) Checkout(ctx context.Context, req *dto.CheckoutOrderRequest) (
 		return nil, err
 	}
 	if !order.CanCheckout(orderInfo.Status) {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order status error: %v", orderInfo.Status)
+		return nil, xerr.Errorf(xerr.OrderStatusError, "order status error: %v", orderInfo.Status)
 	}
 	if err := s.authorizeCheckout(ctx, orderInfo, req.CheckoutToken); err != nil {
 		return nil, err
@@ -38,7 +37,7 @@ func (s *Service) Checkout(ctx context.Context, req *dto.CheckoutOrderRequest) (
 		return nil, err
 	}
 	if method.Platform != orderInfo.Method {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "order %s is bound to %s, not %s", orderInfo.OrderNo, orderInfo.Method, method.Platform)
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "order %s is bound to %s, not %s", orderInfo.OrderNo, orderInfo.Method, method.Platform)
 	}
 	if gateway.IsBalance(method) {
 		return s.payWithBalance(ctx, orderInfo)
@@ -53,7 +52,7 @@ func (s *Service) authorizeCheckout(ctx context.Context, orderInfo *order.Order,
 	if orderInfo.UserId != 0 {
 		currentUser, ok := user.FromContext(ctx)
 		if !ok || currentUser.Id != orderInfo.UserId {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "order does not belong to the current user")
+			return xerr.Errorf(xerr.InvalidAccess, "order does not belong to the current user")
 		}
 		return nil
 	}
@@ -64,30 +63,30 @@ func (s *Service) authorizeCheckout(ctx context.Context, orderInfo *order.Order,
 // created.
 func (s *Service) authorizeGuest(ctx context.Context, orderInfo *order.Order, checkoutToken string) error {
 	if checkoutToken == "" {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is required")
+		return xerr.Errorf(xerr.InvalidAccess, "guest checkout token is required")
 	}
 	if orderInfo.GuestCheckoutTokenHash != "" {
 		if subtle.ConstantTimeCompare([]byte(orderInfo.GuestCheckoutTokenHash), []byte(order.CheckoutTokenHash(checkoutToken))) != 1 {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+			return xerr.Errorf(xerr.InvalidAccess, "guest checkout token is invalid")
 		}
 		return nil
 	}
 	// Compatibility for guest orders created before checkout capabilities were
 	// persisted on the order itself.
 	if s.deps.GuestCheckoutCache == nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+		return xerr.Errorf(xerr.InvalidAccess, "guest checkout token is invalid")
 	}
 	value, err := s.deps.GuestCheckoutCache.Get(ctx, fmt.Sprintf(order.TempOrderCacheKey, orderInfo.OrderNo)).Result()
 	if err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+		return xerr.Errorf(xerr.InvalidAccess, "guest checkout token is invalid")
 	}
 	var tempOrder order.TemporaryOrderInfo
 	if err := tempOrder.Unmarshal([]byte(value)); err != nil {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+		return xerr.Errorf(xerr.InvalidAccess, "guest checkout token is invalid")
 	}
 	if tempOrder.OrderNo != orderInfo.OrderNo || tempOrder.CheckoutToken == "" ||
 		subtle.ConstantTimeCompare([]byte(tempOrder.CheckoutToken), []byte(checkoutToken)) != 1 {
-		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "guest checkout token is invalid")
+		return xerr.Errorf(xerr.InvalidAccess, "guest checkout token is invalid")
 	}
 	return nil
 }
@@ -105,7 +104,7 @@ func (s *Service) payThroughGateway(ctx context.Context, orderInfo *order.Order,
 	// when it closes.
 	var notifyURL string
 	if gw.NeedsNotifyURL(orderInfo) {
-		if notifyURL, err = gateway.NotifyURL(method, gateway.NotifyHosts{Host: s.deps.Config.Host, SiteHost: s.siteHost()}); err != nil {
+		if notifyURL, err = gateway.NotifyURL(method, s.siteHost()); err != nil {
 			logger.WithContext(ctx).Errorw("[PurchaseCheckout] payment notify URL is not configured; set the payment method domain or the site host",
 				logger.Field("payment", method.Id), logger.Field("platform", method.Platform))
 			return nil, err
@@ -160,10 +159,10 @@ func (s *Service) expectedCharge(ctx context.Context, gw gateway.Gateway, orderI
 		return gateway.Charge{}, xerr.Wrapf(err, xerr.DatabaseQueryError, "reload payment expectation of order %s", orderInfo.OrderNo)
 	}
 	if !order.CanCheckout(latest.Status) {
-		return gateway.Charge{}, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+		return gateway.Charge{}, xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 	}
 	if latest.PaymentCurrency == "" {
-		return gateway.Charge{}, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "payment checkout is being initialized; retry")
+		return gateway.Charge{}, xerr.Errorf(xerr.OrderStatusError, "payment checkout is being initialized; retry")
 	}
 	orderInfo.PaymentAmount, orderInfo.PaymentCurrency, orderInfo.TradeNo = latest.PaymentAmount, latest.PaymentCurrency, latest.TradeNo
 	return s.recordedCharge(gw, orderInfo)
@@ -177,7 +176,7 @@ func (s *Service) recordedCharge(gw gateway.Gateway, orderInfo *order.Order) (ga
 		currency = s.currencyUnit()
 	}
 	if !strings.EqualFold(orderInfo.PaymentCurrency, currency) {
-		return gateway.Charge{}, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "payment expectation does not match existing checkout")
+		return gateway.Charge{}, xerr.Errorf(xerr.OrderStatusError, "payment expectation does not match existing checkout")
 	}
 	return gateway.Charge{Amount: orderInfo.PaymentAmount, Currency: strings.ToUpper(orderInfo.PaymentCurrency)}, nil
 }
@@ -199,7 +198,7 @@ func (s *Service) claimTrade(orderInfo *order.Order) func(context.Context, strin
 			return "", xerr.Wrapf(err, xerr.DatabaseQueryError, "reload order %s", orderInfo.OrderNo)
 		}
 		if !order.CanCheckout(latest.Status) || latest.TradeNo == "" {
-			return "", errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order no longer has a pending gateway payment")
+			return "", xerr.Errorf(xerr.OrderStatusError, "order no longer has a pending gateway payment")
 		}
 		orderInfo.TradeNo = latest.TradeNo
 		return latest.TradeNo, nil
@@ -215,10 +214,10 @@ func (s *Service) payWithBalance(ctx context.Context, orderInfo *order.Order) (*
 	// checkout spends gift credit first, so paying a recharge with it would
 	// turn gift credit into regular balance.
 	if orderInfo.Type == order.TypeRecharge {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.PaymentMethodNotFound), "balance cannot pay for a recharge")
+		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "balance cannot pay for a recharge")
 	}
 	if orderInfo.UserId == 0 {
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserNotExist), "user not found")
+		return nil, xerr.Errorf(xerr.UserNotExist, "user not found")
 	}
 	if err := s.debitBalance(ctx, orderInfo); err != nil {
 		return nil, err
@@ -242,7 +241,7 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "mark order %s paid", o.OrderNo)
 		}
 		if !updated {
-			return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+			return xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 		}
 		return nil
 	}
@@ -255,7 +254,7 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "lock order %s", o.OrderNo)
 		}
 		if !order.CanCheckout(current.Status) {
-			return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+			return xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 		}
 		// Read the wallet under its row lock, never from a cached user.
 		wallet, err := tx.Wallet().FindOneForUpdate(ctx, o.UserId)
@@ -263,7 +262,7 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "lock wallet of user %d", o.UserId)
 		}
 		if available := wallet.Balance + wallet.GiftAmount; available < o.Amount {
-			return errors.Wrapf(xerr.NewErrCode(xerr.InsufficientBalance), "Insufficient balance: required %d, available %d", o.Amount, available)
+			return xerr.Errorf(xerr.InsufficientBalance, "Insufficient balance: required %d, available %d", o.Amount, available)
 		}
 		giftUsed := min(wallet.GiftAmount, o.Amount)
 		balanceUsed := o.Amount - giftUsed
@@ -297,7 +296,7 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "mark order %s paid", o.OrderNo)
 		}
 		if !updated {
-			return errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order is no longer pending")
+			return xerr.Errorf(xerr.OrderStatusError, "order is no longer pending")
 		}
 		paid = wallet
 		return nil
@@ -306,7 +305,7 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 		return err
 	}
 	if s.deps.UserCache != nil {
-		if err := s.deps.UserCache.ClearUserCache(ctx, &user.User{Id: paid.UserId}); err != nil {
+		if err := s.deps.UserCache.ClearUserCache(ctx, paid.UserId); err != nil {
 			logger.WithContext(ctx).Errorw("[PurchaseCheckout] Clear user cache error", logger.Field("error", err.Error()), logger.Field("userId", paid.UserId))
 		}
 	}

@@ -15,43 +15,43 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-// owners is a compile-checked OwnerReader over a fixed set of accounts.
-type owners map[int64]*user.User
+// owners is a compile-checked OwnerReader over a fixed set of accounts; it
+// records the account cache refreshes the admin flows ask for.
+type owners struct {
+	accounts  map[int64]*user.User
+	refreshed []int64
+}
 
-var _ OwnerReader = owners{}
+var _ OwnerReader = (*owners)(nil)
 
-func (o owners) FindOne(_ context.Context, id int64) (*user.User, error) {
-	if u, ok := o[id]; ok {
+func newOwners(accounts ...*user.User) *owners {
+	o := &owners{accounts: make(map[int64]*user.User, len(accounts))}
+	for _, u := range accounts {
+		o.accounts[u.Id] = u
+	}
+	return o
+}
+
+func (o *owners) FindOne(_ context.Context, id int64) (*user.User, error) {
+	if u, ok := o.accounts[id]; ok {
 		return u, nil
 	}
 	return nil, errors.New("user not found")
 }
 
-// accountCache records the account cache refreshes the admin flows ask for.
-type accountCache struct {
-	subs    CacheInvalidator
-	updated []int64
-}
-
-var _ CacheInvalidator = (*accountCache)(nil)
-
-func (c *accountCache) ClearUserCache(_ context.Context, users ...*user.User) error {
+func (o *owners) ClearUserCacheOf(_ context.Context, users ...*user.User) error {
 	for _, u := range users {
-		c.updated = append(c.updated, u.Id)
+		o.refreshed = append(o.refreshed, u.Id)
 	}
 	return nil
-}
-
-func (c *accountCache) ClearSubscribeCache(ctx context.Context, subs ...*usersub.Subscribe) error {
-	return c.subs.ClearSubscribeCache(ctx, subs...)
 }
 
 func newAdminService(f *subtest.Fixture, singleModel bool) *Service {
 	return NewService(Deps{
 		Plans:       f.Store.Subscribe(),
 		UserSubs:    f.Store.UserSubscription(),
-		Users:       owners{7: {Id: 7}},
-		Cache:       &accountCache{subs: f.Store.UserCache()},
+		Users:       newOwners(&user.User{Id: 7}),
+		Cache:       f.Store.UserSubscription(),
 		Store:       f.Store,
 		SingleModel: func() bool { return singleModel },
 	})
@@ -298,8 +298,8 @@ func TestCreateUserSubscribeHonoursSingleSubscriptionMode(t *testing.T) {
 	if err := f.DB.Model(&usersub.Subscribe{}).Where("user_id = 7").Update("status", usersub.SubscribeStatusDeducted).Error; err != nil {
 		t.Fatal(err)
 	}
-	cache := &accountCache{subs: f.Store.UserCache()}
-	svc := NewService(Deps{Plans: f.Store.Subscribe(), UserSubs: f.Store.UserSubscription(), Users: owners{7: {Id: 7}}, Cache: cache, Store: f.Store, SingleModel: func() bool { return true }})
+	accounts := newOwners(&user.User{Id: 7})
+	svc := NewService(Deps{Plans: f.Store.Subscribe(), UserSubs: f.Store.UserSubscription(), Users: accounts, Cache: f.Store.UserSubscription(), Store: f.Store, SingleModel: func() bool { return true }})
 	if err := svc.CreateUserSubscribe(ctx, &dto.CreateUserSubscribeRequest{UserId: 7, SubscribeId: 1, ExpiredAt: time.Now().Add(time.Hour).UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestCreateUserSubscribeHonoursSingleSubscriptionMode(t *testing.T) {
 	if err := f.DB.Where("user_id = 7 AND status = ?", usersub.SubscribeStatusActive).First(&created).Error; err != nil {
 		t.Fatal(err)
 	}
-	if created.Traffic != 50 || created.Token == "" || created.UUID == "" || len(cache.updated) != 1 {
-		t.Fatalf("created %+v, account cache refreshes %v", created, cache.updated)
+	if created.Traffic != 50 || created.Token == "" || created.UUID == "" || len(accounts.refreshed) != 1 {
+		t.Fatalf("created %+v, account cache refreshes %v", created, accounts.refreshed)
 	}
 }

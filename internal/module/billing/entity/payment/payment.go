@@ -1,3 +1,5 @@
+// Package payment holds the billing domain's payment method entity and the
+// stored configuration of each gateway it can be bound to.
 package payment
 
 import (
@@ -95,7 +97,7 @@ func (l *AlipayF2FConfig) Marshal() ([]byte, error) {
 
 func (l *AlipayF2FConfig) Unmarshal(data []byte) error {
 	// First try to unmarshal into a map to handle string "true"/"false" for sandbox
-	var rawMap map[string]interface{}
+	var rawMap map[string]any
 	if err := json.Unmarshal(data, &rawMap); err != nil {
 		return err
 	}
