@@ -59,19 +59,32 @@ func New(deps Deps) *Flow {
 // that comes back to redirect. The state it issues is redeemed only by a
 // callback of the same scope: a sign-in's state cannot complete a binding,
 // and a binding's state completes only for the account it was issued for.
-func (f *Flow) AuthURL(ctx context.Context, scope oauthstate.Scope, method, redirect string) (string, error) {
+// A non-empty nonce, chosen by the client, binds the state to that client:
+// the callback must present it again (Identify).
+//
+// A method that sends the browser to redirect itself (Apple's form post,
+// Telegram's widget) has its redirect pinned to the site host, or to the
+// request's own host while no site host is configured; without either the
+// sign-in is refused, since an unpinned redirect would hand a victim's
+// callback to whoever started the round trip.
+func (f *Flow) AuthURL(ctx context.Context, scope oauthstate.Scope, method, redirect, nonce string) (string, error) {
 	spec, provider, err := f.provider(ctx, method)
 	if err != nil {
 		return "", err
 	}
 	if spec.PinRedirect {
-		if err := oauthstate.ValidateRedirect(redirect, f.siteHost()); err != nil {
+		if err := oauthstate.ValidateRedirect(redirect, oauthstate.ResolvePin(ctx, f.siteHost())); err != nil {
+			if errors.Is(err, oauthstate.ErrUnpinned) {
+				logger.WithContext(ctx).Errorw("oauth sign-in refused: no site host to pin its redirect to",
+					logger.Field("method", method), logger.Field("error", err.Error()))
+				return "", xerr.Wrapf(err, xerr.OAuthProviderMisconfigured, "%s sign-in needs the site host configured", method)
+			}
 			return "", xerr.Wrapf(err, xerr.InvalidParams, "invalid %s redirect", method)
 		}
 	}
 	state := ""
 	if spec.State {
-		if state, err = oauthstate.Issue(ctx, f.deps.Redis, method, scope, redirect); err != nil {
+		if state, err = oauthstate.Issue(ctx, f.deps.Redis, method, scope, redirect, nonce); err != nil {
 			return "", xerr.Wrapf(err, xerr.ERROR, "store %s state", method)
 		}
 	}
@@ -84,9 +97,10 @@ func (f *Flow) AuthURL(ctx context.Context, scope oauthstate.Scope, method, redi
 
 // Identify completes the round trip of a callback through method, in scope,
 // and returns the identity the provider vouches for. A state-based callback
-// redeems its state, which must have been issued in the same scope; a
-// single-use one (Telegram) is redeemed here too.
-func (f *Flow) Identify(ctx context.Context, scope oauthstate.Scope, method string, fields map[string]any) (*oauthprovider.Identity, error) {
+// redeems its state, which must have been issued in the same scope and, when
+// it was issued with a nonce, with the same nonce; a single-use one
+// (Telegram) is redeemed here too.
+func (f *Flow) Identify(ctx context.Context, scope oauthstate.Scope, method string, fields map[string]any, nonce string) (*oauthprovider.Identity, error) {
 	spec, ok := f.deps.Providers.Lookup(method)
 	if !ok {
 		return nil, notSupported(method)
@@ -98,9 +112,9 @@ func (f *Flow) Identify(ctx context.Context, scope oauthstate.Scope, method stri
 		if strings.TrimSpace(state) == "" || strings.TrimSpace(code) == "" {
 			return nil, xerr.Errorf(xerr.InvalidParams, "%s callback needs a code and a state", method)
 		}
-		redirect, err := oauthstate.Consume(ctx, f.deps.Redis, method, scope, state)
+		redirect, err := oauthstate.Consume(ctx, f.deps.Redis, method, scope, state, nonce)
 		if err != nil {
-			if errors.Is(err, oauthstate.ErrUnknown) || errors.Is(err, oauthstate.ErrScope) {
+			if errors.Is(err, oauthstate.ErrUnknown) || errors.Is(err, oauthstate.ErrScope) || errors.Is(err, oauthstate.ErrNonce) {
 				return nil, xerr.Wrapf(err, xerr.OAuthStateInvalid, "redeem %s state", method)
 			}
 			return nil, xerr.Wrapf(err, xerr.ERROR, "redeem %s state", method)
@@ -128,15 +142,16 @@ func (f *Flow) Identify(ctx context.Context, scope oauthstate.Scope, method stri
 	return identity, nil
 }
 
-// redeem enforces single use of a callback without a state. A Redis outage
-// must not lock users out, so it degrades to the callback's own signature
-// and freshness checks.
+// redeem enforces single use of a callback without a state. The check fails
+// closed: while Redis is unavailable a signed callback cannot be told from a
+// replay of one, so the sign-in is refused rather than accepted on the
+// callback's signature and freshness alone.
 func (f *Flow) redeem(ctx context.Context, method, key string) error {
 	allowed, err := oauthstate.ClaimSingleUse(ctx, f.deps.Redis, key, timeutil.Now(), replayGrace, oauthprovider.CallbackLifetime)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("oauth callback replay check unavailable",
+		logger.WithContext(ctx).Errorw("oauth callback replay check unavailable; refusing the callback",
 			logger.Field("method", method), logger.Field("error", err.Error()))
-		return nil
+		return xerr.Wrapf(err, xerr.ERROR, "%s callback replay check unavailable", method)
 	}
 	if !allowed {
 		return xerr.Errorf(xerr.OAuthCallbackReplayed, "%s callback has already been used", method)

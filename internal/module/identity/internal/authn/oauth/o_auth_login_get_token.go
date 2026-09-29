@@ -34,7 +34,7 @@ func (s *Service) OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGet
 		}
 	}()
 
-	identity, err := s.deps.Flow.Identify(ctx, oauthstate.LoginScope(), req.Method, fields)
+	identity, err := s.deps.Flow.Identify(ctx, oauthstate.LoginScope(), req.Method, fields, req.Nonce)
 	if err != nil {
 		return nil, err
 	}

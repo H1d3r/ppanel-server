@@ -71,11 +71,22 @@ type GetOAuthMethodsResponse struct {
 
 type LoginResponse struct {
 	Token string `json:"token"`
+	// ThirdPartyBindings lists the types of the third-party sign-in methods
+	// (OAuth providers, Telegram) still bound to the account after a
+	// password reset, so the client can show them: a binding made during a
+	// compromise keeps signing in until its owner removes it. Empty for
+	// every other sign-in.
+	ThirdPartyBindings []string `json:"third_party_bindings,omitempty"`
 }
 
 type OAuthLoginRequest struct {
 	Method   string `json:"method" validate:"required"` // google, facebook, apple, telegram, github etc.
 	Redirect string `json:"redirect"`
+	// Nonce is an optional random value the client generates and keeps (for
+	// example in session storage) for this sign-in; it is presented again on
+	// the token exchange, so a sign-in another browser started cannot be
+	// completed in this one. At least 16 random characters are recommended.
+	Nonce string `json:"nonce" validate:"max=128"`
 } // @name dto.OAthLoginRequest
 
 type OAuthLoginGetTokenRequest struct {
@@ -83,6 +94,10 @@ type OAuthLoginGetTokenRequest struct {
 	Callback any    `json:"callback" validate:"required"`
 	Invite   string `json:"invite"`
 	CfToken  string `json:"cf_token"`
+	// Nonce is the value the client sent when it started this sign-in; a
+	// sign-in started with a nonce is completed only with the same one, and
+	// one started without a nonce only without one.
+	Nonce string `json:"nonce" validate:"max=128"`
 }
 
 type OAuthLoginResponse struct {
@@ -100,6 +115,10 @@ type ResetPasswordRequest struct {
 type SendCodeRequest struct {
 	Email string `json:"email" validate:"required,email"`
 	Type  uint8  `json:"type" validate:"required,oneof=1 2"`
+	// CfToken is the Turnstile response an anonymous request for a
+	// registration code (type 1) carries while registration verification is
+	// on; other requests leave it empty.
+	CfToken string `json:"cf_token"`
 }
 
 type SendCodeResponse struct {
@@ -111,6 +130,10 @@ type SendSmsCodeRequest struct {
 	Type              uint8  `json:"type" validate:"required,oneof=1 2"`
 	Telephone         string `json:"telephone" validate:"required"`
 	TelephoneAreaCode string `json:"telephone_area_code" validate:"required"`
+	// CfToken is the Turnstile response an anonymous request for a
+	// registration code (type 1) carries while registration verification is
+	// on; other requests leave it empty.
+	CfToken string `json:"cf_token"`
 }
 
 type TelephoneCheckUserRequest struct {

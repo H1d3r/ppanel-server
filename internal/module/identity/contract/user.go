@@ -17,7 +17,7 @@ type CreateUserRequest struct {
 	Password           string `json:"password"`
 	ProductId          int64  `json:"product_id"`
 	Duration           int64  `json:"duration"`
-	ReferralPercentage uint8  `json:"referral_percentage"`
+	ReferralPercentage uint8  `json:"referral_percentage" validate:"lte=100"`
 	OnlyFirstPurchase  bool   `json:"only_first_purchase"`
 	RefererUser        string `json:"referer_user"`
 	ReferCode          string `json:"refer_code"`
@@ -113,7 +113,7 @@ type UpdateUserBasicInfoRequest struct {
 	// movements made since the form was loaded.
 	Balance            *int64 `json:"balance"`
 	Commission         *int64 `json:"commission"`
-	ReferralPercentage uint8  `json:"referral_percentage"`
+	ReferralPercentage uint8  `json:"referral_percentage" validate:"lte=100"`
 	OnlyFirstPurchase  bool   `json:"only_first_purchase"`
 	GiftAmount         *int64 `json:"gift_amount"`
 	Telegram           int64  `json:"telegram"`
@@ -148,6 +148,15 @@ type UpdateUserPasswordRequest struct {
 	// password nor a bound email or phone number (OAuth or device sign-in
 	// only) sets its first password without it.
 	CurrentCode string `json:"current_code"`
+}
+
+// UpdateUserPasswordResponse reports what a password change leaves in place.
+type UpdateUserPasswordResponse struct {
+	// ThirdPartyBindings lists the types of the third-party sign-in methods
+	// (OAuth providers, Telegram) still bound to the account, so the client
+	// can show them: a binding made during a compromise keeps signing in
+	// until its owner removes it.
+	ThirdPartyBindings []string `json:"third_party_bindings"`
 }
 
 type UpdateUserRulesRequest struct {

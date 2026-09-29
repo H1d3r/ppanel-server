@@ -83,6 +83,10 @@ type Deps struct {
 	// VerifyTurnstile overrides the Cloudflare Turnstile client; nil selects
 	// it.
 	VerifyTurnstile registerpolicy.TurnstileVerifier
+	// NotifyPasswordChanged tells the account, best effort, that its
+	// password was reset and which third-party sign-in methods stay bound;
+	// optional.
+	NotifyPasswordChanged func(ctx context.Context, userID int64, bindings []string) error
 }
 
 // Service is the authentication subdomain entry point used by the identity

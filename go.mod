@@ -12,7 +12,6 @@ require (
 	github.com/andybalholm/brotli v1.1.1
 	github.com/cloudwego/hertz v0.10.4
 	github.com/fatih/color v1.18.0
-	github.com/forgoer/openssl v1.6.0
 	github.com/go-playground/locales v0.14.1
 	github.com/go-playground/universal-translator v0.18.1
 	github.com/go-playground/validator/v10 v10.24.0

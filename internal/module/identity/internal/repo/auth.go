@@ -73,14 +73,21 @@ func (m *authRepo) FindOne(ctx context.Context, id int64) (*auth.Auth, error) {
 	return &resp, nil
 }
 
+// Update writes the method's configuration and, when the snapshot carries
+// one, its enabled flag. Only those columns are written: a whole-row save of
+// a stale snapshot would revert the method name and creation time to what
+// the caller loaded.
 func (m *authRepo) Update(ctx context.Context, data *auth.Auth) error {
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
+	columns := map[string]any{"config": data.Config}
+	if data.Enabled != nil {
+		columns["enabled"] = *data.Enabled
+	}
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		return db.Save(data).Error
+		return conn.Model(&auth.Auth{}).Where("id = ?", data.Id).Updates(columns).Error
 	}, m.getCacheKeys(old)...)
 	return err
 }

@@ -77,5 +77,22 @@ func (s *Service) resetPassword(ctx context.Context, reset passwordReset) (resp 
 		return nil, xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
 	}
 	account.ClearPasswordAttempts(ctx, s.deps.Redis, userInfo.Id)
-	return s.signIn(ctx, userInfo.Id, epoch, reset.device)
+	// The reset is audited in the login history, and the third-party
+	// bindings it does not touch are reported and notified: one made during
+	// the compromise keeps signing in until its owner removes it.
+	if err := account.RecordCredentialChange(ctx, s.deps.Store.Log(), userInfo.Id, account.PasswordReset); err != nil {
+		return nil, err
+	}
+	methods, err := s.deps.Store.UserAuth().FindUserAuthMethods(ctx, userInfo.Id)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list the bindings of user %d", userInfo.Id)
+	}
+	bindings := account.ThirdPartyBindings(methods)
+	account.NotifyPasswordChanged(ctx, s.deps.NotifyPasswordChanged, userInfo.Id, bindings)
+	resp, err = s.signIn(ctx, userInfo.Id, epoch, reset.device)
+	if err != nil {
+		return nil, err
+	}
+	resp.ThirdPartyBindings = bindings
+	return resp, nil
 }

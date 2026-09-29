@@ -21,6 +21,9 @@ func (s *Service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBa
 	// then leaves the money untouched. A failure after the profile commit
 	// leaves the money unadjusted for the admin to retry — the same
 	// partial-failure surface the flows will have as services.
+	if err := validateReferralPercentage(req.ReferralPercentage); err != nil {
+		return err
+	}
 	accessStateChanged := false
 	passwordChanged := false
 	err := s.deps.Store.InIdentityTx(ctx, func(store repository.IdentityStore) error {
@@ -30,6 +33,15 @@ func (s *Service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBa
 		}
 		if err := validateAvatarUpdate(userInfo.Avatar, req.Avatar); err != nil {
 			return err
+		}
+		// The last enabled administrator keeps the panel administrable: it
+		// is neither demoted nor disabled. The check runs in the transaction
+		// that locked the row, so two edits cannot each see the other as
+		// the remaining administrator.
+		if isEnabledAdministrator(userInfo) && (!req.IsAdmin || !req.Enable) {
+			if err := ensureAnotherAdministrator(ctx, store.User(), userInfo.Id); err != nil {
+				return err
+			}
 		}
 		accessStateChanged = userInfo.Enable == nil || *userInfo.Enable != req.Enable
 		columns := map[string]any{

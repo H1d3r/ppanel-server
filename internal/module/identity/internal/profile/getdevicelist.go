@@ -9,7 +9,9 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-// GetDeviceList lists the calling account's devices.
+// GetDeviceList lists the calling account's devices, their identifiers
+// masked: an identifier signs the device in, so a web session must not read
+// it back in full.
 func (s *Service) GetDeviceList(ctx context.Context) (*dto.GetDeviceListResponse, error) {
 	userInfo, ok := user.FromContext(ctx)
 	if !ok {
@@ -25,6 +27,6 @@ func (s *Service) GetDeviceList(ctx context.Context) (*dto.GetDeviceListResponse
 	}
 	return &dto.GetDeviceListResponse{
 		Total: count,
-		List:  userRespList,
+		List:  maskDevices(userRespList),
 	}, nil
 }

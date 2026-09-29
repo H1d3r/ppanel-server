@@ -77,6 +77,21 @@ func (m *UserRepo) FindAccountState(ctx context.Context, id int64) (*user.Accoun
 	return &state, err
 }
 
+// FindAccountStateForAuth reads the account gate request authentication
+// applies (enabled, deleted, administrator) from the database, never from the
+// cache: the cached account row lives for days and its invalidation is best
+// effort, so a session gate reading it could serve a banned, deleted or
+// demoted account long after the change. One primary-key read of four
+// columns per authenticated request is the price.
+func (m *UserRepo) FindAccountStateForAuth(ctx context.Context, id int64) (*user.AccountState, error) {
+	var state user.AccountState
+	err := m.QueryNoCacheCtx(ctx, &state, func(conn *gorm.DB, v any) error {
+		return conn.Model(&user.User{}).Unscoped().
+			Select("id", "enable", "is_admin", "updated_at", "deleted_at").Where("id = ?", id).First(v).Error
+	})
+	return &state, err
+}
+
 // FindEnabledUserIDs is the batch account-state gate used by node hot paths.
 // GORM's default scope excludes soft-deleted users; the explicit enable
 // predicate keeps disabled accounts from retaining service credentials.
@@ -118,7 +133,9 @@ func (m *UserRepo) UpdateColumns(ctx context.Context, id int64, columns map[stri
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+	// The columns carry the account gate (enable, is_admin), so a failed
+	// invalidation is retried rather than dropped.
+	return m.execInvalidating(ctx, func(conn *gorm.DB) error {
 		return conn.Model(&user.User{}).Where("id = ?", id).Updates(columns).Error
 	}, m.getCacheKeys(old)...)
 }
@@ -155,22 +172,15 @@ func (m *UserRepo) Delete(ctx context.Context, id int64) error {
 		return err
 	}
 
-	// Use batch related cache cleaning, including a cache of all relevant data
-	defer func() {
-		if clearErr := m.BatchClearRelatedCache(ctx, data); clearErr != nil {
-			// Record cache cleaning errors, but do not block deletion operations
-			logger.Errorf("failed to clear related cache for user %d: %v", id, clearErr.Error())
-		}
-	}()
-
-	return m.TransactCtx(ctx, func(db *gorm.DB) error {
-		// Soft deletion of user information without any processing of other information (Determine whether to allow login/subscription based on the user's deletion status)
-		if err := db.Model(&user.User{}).Where("id = ?", id).Delete(&user.User{}).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
+	// Every cached projection of the account goes, its subscriptions'
+	// included; a failed invalidation is retried, so the deleted account is
+	// not served from the cache meanwhile.
+	keys := m.relatedCacheKeys(ctx, data)
+	return m.execInvalidating(ctx, func(conn *gorm.DB) error {
+		// Soft deletion of the account row alone: sign-in and subscriptions
+		// read the deletion state.
+		return conn.Model(&user.User{}).Where("id = ?", id).Delete(&user.User{}).Error
+	}, keys...)
 }
 
 // --- user queries / page list ---
@@ -424,7 +434,9 @@ func (m *UserRepo) BatchDeleteUser(ctx context.Context, ids []int64) error {
 	if err != nil {
 		return err
 	}
-	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+	// The deleted accounts' rows leave the cache with a retried invalidation,
+	// so the deletion is not served from it meanwhile.
+	return m.execInvalidating(ctx, func(conn *gorm.DB) error {
 		return conn.Where("id in ?", ids).Delete(&user.User{}).Error
 	}, m.batchGetCacheKeys(users...)...)
 }
@@ -722,7 +734,11 @@ func (m *UserRepo) UpdateUserAuthMethods(ctx context.Context, data *user.AuthMet
 		if err = guardEmailIdentityWrite(conn, data); err != nil {
 			return err
 		}
-		err = conn.Model(&user.AuthMethods{}).Where("user_id = ? AND auth_type = ?", data.UserId, data.AuthType).Save(data).Error
+		// Only the columns a binding update changes are written: a whole-row
+		// save of a stale snapshot would revert the user id, the type or the
+		// creation time to what the caller loaded.
+		err = conn.Model(&user.AuthMethods{}).Where("user_id = ? AND auth_type = ?", data.UserId, data.AuthType).
+			Updates(map[string]any{"auth_identifier": data.AuthIdentifier, "verified": data.Verified}).Error
 		if err != nil {
 			return err
 		}

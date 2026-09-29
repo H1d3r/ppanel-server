@@ -2,6 +2,8 @@ package authn
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/auth/password"
@@ -9,6 +11,7 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/internal/module/identity/internal/identitytest"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -43,8 +46,52 @@ func TestResetPasswordRevokesEarlierSessions(t *testing.T) {
 	if f.sessionUser(t, resp.Token) != owner.Id {
 		t.Fatal("the session issued by the reset does not work")
 	}
-	if audits := f.loginAudits(t, owner.Id); len(audits) != 1 || !audits[0].Success || audits[0].Method != "email" {
-		t.Fatalf("login audits = %+v, want the reset's sign-in", audits)
+	// The reset itself is audited, then the sign-in it ends with.
+	audits := f.loginAudits(t, owner.Id)
+	if len(audits) != 2 || audits[0].Method != account.PasswordReset || !audits[0].Success || audits[0].LoginIP != identitytest.ClientIP ||
+		!audits[1].Success || audits[1].Method != "email" {
+		t.Fatalf("login audits = %+v, want the reset then its sign-in", audits)
+	}
+	if len(resp.ThirdPartyBindings) != 0 {
+		t.Fatalf("third-party bindings = %v, want none for an email-only account", resp.ThirdPartyBindings)
+	}
+}
+
+// A reset reports the third-party sign-in methods it leaves bound, so the
+// account can revisit a binding made during a compromise, and tells the
+// account about the change.
+func TestResetPasswordReportsTheThirdPartyBindings(t *testing.T) {
+	f := newFixture(t)
+	owner := f.account(t, "email", "owner@example.com", "old-password")
+	for _, binding := range []user.AuthMethods{
+		{UserId: owner.Id, AuthType: "telegram", AuthIdentifier: "10001", Verified: true},
+		{UserId: owner.Id, AuthType: "github", AuthIdentifier: "583231", Verified: true},
+		{UserId: owner.Id, AuthType: "device", AuthIdentifier: "device-1", Verified: true},
+	} {
+		if err := f.DB.Create(&binding).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var notified struct {
+		userID   int64
+		bindings []string
+	}
+	f.svc.deps.NotifyPasswordChanged = func(_ context.Context, userID int64, bindings []string) error {
+		notified.userID, notified.bindings = userID, bindings
+		return errors.New("bot unavailable")
+	}
+	f.saveCode(t, verification.EmailCodeKey(auth.Security, "owner@example.com"), "123456")
+
+	resp, err := f.svc.ResetPassword(identitytest.Context(), &dto.ResetPasswordRequest{Email: "owner@example.com", Code: "123456", Password: "new-password-1"})
+	if err != nil {
+		t.Fatalf("ResetPassword() error = %v", err)
+	}
+	want := []string{"github", "telegram"}
+	if !slices.Equal(resp.ThirdPartyBindings, want) {
+		t.Fatalf("third-party bindings = %v, want %v (device and email are the account's own)", resp.ThirdPartyBindings, want)
+	}
+	if notified.userID != owner.Id || !slices.Equal(notified.bindings, want) {
+		t.Fatalf("notified %d of %v, want %d of %v", notified.userID, notified.bindings, owner.Id, want)
 	}
 }
 

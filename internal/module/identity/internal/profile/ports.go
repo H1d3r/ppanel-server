@@ -41,6 +41,10 @@ type Deps struct {
 	// NotifyUnbind sends the best-effort Telegram unbind notice through the
 	// runtime-configured bot.
 	NotifyUnbind func(ctx context.Context, userID, chatID int64) error
+	// NotifyPasswordChanged tells the account, best effort, that its
+	// password changed and which third-party sign-in methods stay bound;
+	// optional.
+	NotifyPasswordChanged func(ctx context.Context, userID int64, bindings []string) error
 	// KickDevice force-disconnects a device once its binding is removed.
 	KickDevice func(userID int64, identifier string)
 }

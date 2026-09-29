@@ -142,6 +142,14 @@ func PasswordAlgoForHash(hash string) string {
 	return "default"
 }
 
+// IsLegacyHash reports whether a stored hash is in one of the older formats
+// (PPanel's PBKDF2 or an imported md5, sha256 or bcrypt hash) rather than
+// argon2id. Such a hash is still accepted for its owner's next sign-in,
+// which rehashes it; until then it stays weaker than the current format.
+func IsLegacyHash(hash string) bool {
+	return !strings.HasPrefix(hash, argon2idPrefix)
+}
+
 func verifyLegacyPBKDF2(password, hash string) bool {
 	if !strings.HasPrefix(hash, legacyPBKDF2Prefix) {
 		return false

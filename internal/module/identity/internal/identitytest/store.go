@@ -19,6 +19,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
@@ -75,9 +76,12 @@ func New(t testing.TB) *Env {
 	mini := miniredis.RunT(t)
 	rds := redis.NewClient(&redis.Options{Addr: mini.Addr(), MaxRetries: -1})
 	t.Cleanup(func() { _ = rds.Close() })
+	// One retrier per store, as the module's builder creates it, so failed
+	// account-cache invalidations are redone as in production.
+	retrier := cache.NewInvalidationRetrier(rds)
 	store := repository.NewGormStoreWithBuilders(db, rds, repository.Builders{
 		Identity: func(c repository.ModuleConn, bridges repository.IdentityBridges) repository.IdentityRepos {
-			users := repo.NewUserRepo(c.Conn(), bridges)
+			users := repo.NewUserRepo(c.Conn(), bridges, repo.WithInvalidationRetrier(retrier))
 			return repository.IdentityRepos{Users: users, UserAuths: users, Devices: users, UserCache: users, Auths: repo.NewAuthRepo(c.Conn())}
 		},
 		Platform: platform.NewRepoBuilder(),

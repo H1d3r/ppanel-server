@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"strings"
 
 	"github.com/perfect-panel/server/internal/module/identity"
+	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/perfect-panel/server/pkg/logger"
 )
@@ -41,6 +43,9 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 		TelegramBotName: func() string { return srv.Runtime.Config().Telegram.BotName },
 		NotifyTelegramUnbind: func(ctx context.Context, userID, chatID int64) error {
 			return srv.Notification.NotifyTelegramUnbind(ctx, userID, chatID)
+		},
+		NotifyPasswordChanged: func(ctx context.Context, userID int64, bindings []string) error {
+			return notifyPasswordChanged(ctx, srv.Notification, userID, bindings)
 		},
 		AuthConfig: func() identity.AuthSnapshot {
 			c := srv.Runtime.Config()
@@ -100,12 +105,56 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 	})
 }
 
+// passwordChangedNotice is the Telegram message an account gets when its
+// password changed; the bindings are data and escaped by the renderer.
+const passwordChangedNotice = `🔐 *您的账户密码已更改*
+
+如果这不是您本人的操作，请立即重置密码并检查账户绑定。
+仍绑定的第三方登录方式: {{.Bindings}}`
+
+// notifyPasswordChanged tells the account, through its Telegram binding if it
+// has one, that its password changed and which third-party sign-in methods
+// stay bound. An account without a binding reports nothing to deliver.
+func notifyPasswordChanged(ctx context.Context, notifier notification.Service, userID int64, bindings []string) error {
+	if notifier == nil {
+		return nil
+	}
+	list := "无"
+	if len(bindings) > 0 {
+		list = strings.Join(bindings, ", ")
+	}
+	text, err := notification.RenderTelegramMarkdown(passwordChangedNotice, map[string]string{"Bindings": list})
+	if err != nil {
+		return err
+	}
+	return notifier.NotifyTelegramUser(ctx, userID, text)
+}
+
+// startupChecks are the identity module's start-up warnings beyond
+// IdentityStartup: the facade provides them, and they only log.
+type startupChecks interface {
+	WarnUnpinnedOAuthRedirects(ctx context.Context) error
+	ReportLegacyAdministratorPasswords(ctx context.Context) error
+}
+
 // normalizeIdentityData runs the identity module's idempotent startup data
 // fix-ups once the schema is current; the module logs what they changed.
 // They repair stored identifiers, so a failure is logged and the server still
-// starts.
+// starts. The start-up warnings run here too: the sign-in methods whose
+// redirects need a site host, and the administrators on a legacy password
+// hash.
 func normalizeIdentityData(ctx context.Context, accounts IdentityStartup) {
 	if err := accounts.NormalizePhoneNumbers(ctx); err != nil {
 		logger.Errorw("[Identity] normalize stored phone numbers failed", logger.Field("error", err.Error()))
+	}
+	checks, ok := accounts.(startupChecks)
+	if !ok {
+		return
+	}
+	if err := checks.WarnUnpinnedOAuthRedirects(ctx); err != nil {
+		logger.Errorw("[Identity] check the OAuth redirect pins failed", logger.Field("error", err.Error()))
+	}
+	if err := checks.ReportLegacyAdministratorPasswords(ctx); err != nil {
+		logger.Errorw("[Identity] check the administrators' password hashes failed", logger.Field("error", err.Error()))
 	}
 }

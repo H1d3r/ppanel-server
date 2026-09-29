@@ -11,6 +11,9 @@ import (
 // CheckUserTelephone reports whether an account signs in with the phone
 // number.
 func (s *Service) CheckUserTelephone(ctx context.Context, req *dto.TelephoneCheckUserRequest) (*dto.TelephoneCheckUserResponse, error) {
+	if err := s.takeExistenceCheckPermit(ctx); err != nil {
+		return nil, err
+	}
 	phoneNumber, err := identifier.FormatToE164(req.TelephoneAreaCode, req.Telephone)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.TelephoneError, "invalid phone number")

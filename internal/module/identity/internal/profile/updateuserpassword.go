@@ -9,6 +9,7 @@ import (
 	"github.com/perfect-panel/server/internal/auth/usersession"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verification"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"gorm.io/gorm"
@@ -22,38 +23,64 @@ import (
 // cannot bootstrap a password and then use it to move the account. An
 // account with neither a password nor a bound address (OAuth or device only)
 // has nothing else to prove and sets its password with the session.
-func (s *Service) UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) error {
+//
+// The change is audited in the account's login history and the account is
+// told about it, with the third-party sign-in methods still bound to it: a
+// binding made during a compromise keeps signing in until its owner removes
+// it, so the response names them for the client to show.
+func (s *Service) UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) (*dto.UpdateUserPasswordResponse, error) {
 	userInfo, ok := user.FromContext(ctx)
 	if !ok {
-		return xerr.Errorf(xerr.InvalidAccess, "Invalid Access")
+		return nil, xerr.Errorf(xerr.InvalidAccess, "Invalid Access")
 	}
 	var proofKey string
 	if userInfo.Password != "" {
 		// The current password, under the same guess limit as sign-in.
 		if err := s.checkPassword(ctx, userInfo, req.OldPassword); err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		var err error
 		if proofKey, err = s.proveBoundAddress(ctx, userInfo.Id, req.CurrentCode); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if proofKey != "" {
 		if err := verification.ValidateVerificationCode(ctx, s.deps.Redis, proofKey, req.CurrentCode, true); err != nil {
-			return xerr.Wrapf(err, xerr.VerifyCodeError, "check the bound address code")
+			return nil, xerr.Wrapf(err, xerr.VerifyCodeError, "check the bound address code")
 		}
 	}
 	// The new hash always uses the current algorithm; a migrated user would
 	// otherwise keep verifying it with the old legacy algorithm.
 	if err := s.deps.Users.UpdateColumns(ctx, userInfo.Id, password.UserColumns(req.Password)); err != nil {
-		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update password of user %d", userInfo.Id)
+		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update password of user %d", userInfo.Id)
 	}
 	// Every session from before the change ends, including a stolen one.
 	if err := usersession.Revoke(ctx, s.deps.Redis, userInfo.Id); err != nil {
-		return xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
+		return nil, xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
 	}
-	return nil
+	if err := account.RecordCredentialChange(ctx, s.deps.Logs, userInfo.Id, account.PasswordChange); err != nil {
+		return nil, err
+	}
+	bindings, err := s.thirdPartyBindings(ctx, userInfo.Id)
+	if err != nil {
+		return nil, err
+	}
+	account.NotifyPasswordChanged(ctx, s.deps.NotifyPasswordChanged, userInfo.Id, bindings)
+	return &dto.UpdateUserPasswordResponse{ThirdPartyBindings: bindings}, nil
+}
+
+// thirdPartyBindings lists the types of the third-party sign-in methods
+// bound to the account; none without the bindings wired (a test double).
+func (s *Service) thirdPartyBindings(ctx context.Context, userID int64) ([]string, error) {
+	if s.deps.UserAuth == nil {
+		return []string{}, nil
+	}
+	methods, err := s.deps.UserAuth.FindUserAuthMethods(ctx, userID)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "list the bindings of user %d", userID)
+	}
+	return account.ThirdPartyBindings(methods), nil
 }
 
 // proveBoundAddress checks code against the security codes sent to the

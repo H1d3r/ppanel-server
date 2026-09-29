@@ -32,18 +32,15 @@ func (s *Service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginReq
 		}
 	}()
 
+	if req.Password == "" && req.TelephoneCode == "" {
+		return nil, xerr.NewErrCodeMsg(xerr.InvalidParams, "password and telephone code is empty")
+	}
 	userInfo, err := s.findAccount(ctx, identifier.Mobile, phoneNumber)
 	if err != nil {
 		return nil, err
 	}
 	attempt.Identify(userInfo.Id)
-	if err := account.EnsureActive(userInfo); err != nil {
-		return nil, err
-	}
 
-	if req.Password == "" && req.TelephoneCode == "" {
-		return nil, xerr.NewErrCodeMsg(xerr.InvalidParams, "password and telephone code is empty")
-	}
 	// The epoch is read before the credential check, so a reset that lands
 	// while the credential is checked ends this sign-in too.
 	epoch, err := account.ReadEpoch(ctx, s.deps.Redis, userInfo.Id)
@@ -54,12 +51,20 @@ func (s *Service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginReq
 		if err := s.checkPassword(ctx, userInfo, req.Password); err != nil {
 			return nil, err
 		}
-		upgradePasswordAfterLogin(ctx, s.deps.Store.User(), userInfo, req.Password)
 	} else {
 		key := verification.MobileCodeKey(auth.Security, phoneNumber)
 		if err := verification.ValidateVerificationCode(ctx, s.deps.Redis, key, req.TelephoneCode, true); err != nil {
 			return nil, xerr.Wrapf(err, xerr.VerifyCodeError, "check sign-in code")
 		}
+	}
+	// The account state is only revealed to the owner of the credential, as
+	// the email sign-in does: whether a number's account is disabled or
+	// deleted is not for anyone who knows the number.
+	if err := account.EnsureActive(userInfo); err != nil {
+		return nil, err
+	}
+	if req.TelephoneCode == "" {
+		upgradePasswordAfterLogin(ctx, s.deps.Store.User(), userInfo, req.Password)
 	}
 
 	return s.signIn(ctx, userInfo.Id, epoch, req.Identifier)

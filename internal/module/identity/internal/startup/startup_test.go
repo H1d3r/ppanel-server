@@ -65,6 +65,43 @@ func TestCreateInitialAdministratorSeedsADatabaseWithoutAccounts(t *testing.T) {
 	}
 }
 
+// The configured email is stored in its canonical form, the one sign-in
+// looks up, however the operator wrote it; an address that is not one is
+// refused before anything is written. Seeding is idempotent: a second run
+// against the seeded database creates nothing, so it may run on every start.
+func TestCreateInitialAdministratorCanonicalizesTheEmailAndRunsOnce(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	if created, err := f.svc.CreateInitialAdministrator(ctx, "not-an-email", "first-secret"); err == nil || created {
+		t.Fatalf("CreateInitialAdministrator(invalid email) = %t, %v, want a refusal", created, err)
+	}
+	if users := f.Users(t); len(users) != 0 {
+		t.Fatalf("accounts = %+v, want none after the refusal", users)
+	}
+
+	created, err := f.svc.CreateInitialAdministrator(ctx, " Admin@Example.COM ", "first-secret")
+	if err != nil || !created {
+		t.Fatalf("CreateInitialAdministrator() = %t, %v, want an administrator created", created, err)
+	}
+	identities := f.Identities(t, f.Users(t)[0].Id)
+	if len(identities) != 1 || identities[0].AuthIdentifier != "admin@example.com" {
+		t.Fatalf("identities = %+v, want the canonical email", identities)
+	}
+	if _, err := f.Store.User().FindOneByEmail(ctx, "admin@example.com"); err != nil {
+		t.Fatalf("the administrator is not found by its email: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if created, err := f.svc.CreateInitialAdministrator(ctx, "admin@example.com", "another-secret"); err != nil || created {
+			t.Fatalf("run %d: CreateInitialAdministrator() = %t, %v, want nothing created", i+2, created, err)
+		}
+	}
+	if users := f.Users(t); len(users) != 1 {
+		t.Fatalf("accounts = %+v, want the one administrator", users)
+	}
+}
+
 // Once the database holds an account, no administrator is seeded.
 func TestCreateInitialAdministratorLeavesADatabaseWithAccounts(t *testing.T) {
 	f := newFixture(t)

@@ -224,7 +224,7 @@ func TestBindOAuthCallbackRedeemsOnlyTheCallersOwnBindingState(t *testing.T) {
 		t.Fatalf("victim identities = %d, want none", n)
 	}
 
-	loginState, err := oauthstate.Issue(context.Background(), env.Redis, "github", oauthstate.LoginScope(), "https://panel.example/login")
+	loginState, err := oauthstate.Issue(context.Background(), env.Redis, "github", oauthstate.LoginScope(), "https://panel.example/login", "")
 	if err != nil {
 		t.Fatal(err)
 	}

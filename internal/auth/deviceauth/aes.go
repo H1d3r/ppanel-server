@@ -1,15 +1,22 @@
 package deviceauth
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
-
-	"github.com/forgoer/openssl"
 )
+
+// errPadding reports a ciphertext whose length or PKCS#7 padding is not
+// that of a CBC message; the message is not described further, so a wrong
+// key and a tampered message read the same.
+var errPadding = errors.New("invalid ciphertext")
 
 // Encrypt encrypts plainText for the device transport with AES-256-CBC and
 // PKCS#7 padding. It returns the base64 ciphertext and the nonce, the current
@@ -18,23 +25,68 @@ import (
 // envelope carries it as its time.
 func Encrypt(plainText []byte, keyStr string) (string, string, error) {
 	nonce := fmt.Sprintf("%x", time.Now().UnixNano())
-	key := generateKey(keyStr)
-	iv := generateIv(nonce, keyStr)
-	dst, err := openssl.AesCBCEncrypt(plainText, key, iv, openssl.PKCS7_PADDING)
-	return base64.StdEncoding.EncodeToString(dst), nonce, err
+	ciphertext, err := encryptWithNonce(plainText, keyStr, nonce)
+	return ciphertext, nonce, err
+}
+
+// encryptWithNonce is Encrypt with the nonce given, so the output is
+// reproducible; the device clients derive the same bytes.
+func encryptWithNonce(plainText []byte, keyStr, nonce string) (string, error) {
+	block, err := aes.NewCipher(generateKey(keyStr))
+	if err != nil {
+		return "", err
+	}
+	padded := pkcs7Pad(plainText, block.BlockSize())
+	dst := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, generateIv(nonce, keyStr)[:block.BlockSize()]).CryptBlocks(dst, padded)
+	return base64.StdEncoding.EncodeToString(dst), nil
 }
 
 // Decrypt reverses Encrypt: cipherText is the base64 ciphertext and ivStr the
 // nonce Encrypt returned with it.
 func Decrypt(cipherText string, keyStr string, ivStr string) (string, error) {
-	decode, err := base64.StdEncoding.DecodeString(cipherText)
+	decoded, err := base64.StdEncoding.DecodeString(cipherText)
 	if err != nil {
 		return "", err
 	}
-	key := generateKey(keyStr)
-	iv := generateIv(ivStr, keyStr)
-	dst, err := openssl.AesCBCDecrypt(decode, key, iv, openssl.PKCS7_PADDING)
-	return string(dst), err
+	block, err := aes.NewCipher(generateKey(keyStr))
+	if err != nil {
+		return "", err
+	}
+	if len(decoded) == 0 || len(decoded)%block.BlockSize() != 0 {
+		return "", errPadding
+	}
+	dst := make([]byte, len(decoded))
+	cipher.NewCBCDecrypter(block, generateIv(ivStr, keyStr)[:block.BlockSize()]).CryptBlocks(dst, decoded)
+	plain, err := pkcs7Unpad(dst, block.BlockSize())
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
+}
+
+// pkcs7Pad appends the PKCS#7 padding that brings data to a whole number of
+// blocks; data that already is gets a full block of padding.
+func pkcs7Pad(data []byte, blockSize int) []byte {
+	padding := blockSize - len(data)%blockSize
+	return append(append(make([]byte, 0, len(data)+padding), data...), bytes.Repeat([]byte{byte(padding)}, padding)...)
+}
+
+// pkcs7Unpad strips PKCS#7 padding, refusing padding that is not well formed.
+func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
+	if len(data) == 0 || len(data)%blockSize != 0 {
+		return nil, errPadding
+	}
+	padding := int(data[len(data)-1])
+	if padding == 0 || padding > blockSize || padding > len(data) {
+		return nil, errPadding
+	}
+	for _, b := range data[len(data)-padding:] {
+		if int(b) != padding {
+			return nil, errPadding
+		}
+	}
+	return data[:len(data)-padding], nil
 }
 
 // generateKey hashes key with SHA-256, so a secret of any length yields the

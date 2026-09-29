@@ -37,8 +37,11 @@ type User struct {
 // AccountState is the minimal account gate used on request hot paths that do
 // not need credentials, devices, notification settings, or auth methods.
 type AccountState struct {
-	Id        int64
-	Enable    *bool
+	Id     int64
+	Enable *bool
+	// IsAdmin is read by request authentication (FindAccountStateForAuth);
+	// the cached node-side gate leaves it nil.
+	IsAdmin   *bool
 	UpdatedAt time.Time
 	DeletedAt gorm.DeletedAt
 }
