@@ -11,15 +11,16 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-var errorIsExistActiveUser = errors.New("subscription ID belongs to an active user subscription")
+var errorIsExistActiveUser = errors.New("subscription ID belongs to a current user subscription")
 
-// BatchDeleteSubscribe deletes the plans, all or none: one plan with an
-// active user subscription keeps every plan of the batch.
+// BatchDeleteSubscribe deletes the plans, all or none: one plan with a
+// current user subscription (see DeleteSubscribe) keeps every plan of the
+// batch.
 func (s *Service) BatchDeleteSubscribe(ctx context.Context, req *dto.BatchDeleteSubscribeRequest) error {
 	log := logger.WithContext(ctx)
 	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		for _, id := range req.Ids {
-			count, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(ctx, id, int64(usersub.SubscribeStatusActive))
+			count, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(ctx, id, usersub.CurrentStatuses.Values()...)
 			if err != nil {
 				log.Error("[BatchDeleteSubscribe] Query Subscribe Error: ", logger.Field("error", err.Error()))
 				return err

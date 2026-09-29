@@ -2,6 +2,7 @@ package storefront
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
+	"gorm.io/gorm"
 )
 
 // QueryUserSubscribeNodeList lists the owner's subscriptions in their term
@@ -80,7 +82,8 @@ func subscribeFromDetails(item *usersub.SubscribeDetails) *usersub.Subscribe {
 }
 
 // subscriptionNodes returns the nodes the subscription may use now: none
-// unless it is servable, otherwise the enabled nodes of its plan.
+// unless it is servable, otherwise the enabled nodes of its plan. A
+// subscription whose plan was deleted has no nodes left to list.
 func (s *Service) subscriptionNodes(ctx context.Context, userSub *usersub.Subscribe, plan *subscribe.Subscribe, nodesByPlan map[int64][]*node.Node, now time.Time) ([]*dto.UserSubscribeNodeInfo, error) {
 	if !userSub.ServableAt(now) {
 		return nil, nil
@@ -88,6 +91,10 @@ func (s *Service) subscriptionNodes(ctx context.Context, userSub *usersub.Subscr
 	if plan == nil {
 		var err error
 		if plan, err = s.deps.Plans.FindOne(ctx, userSub.SubscribeId); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.WithContext(ctx).Infow("[QueryUserSubscribeNodeList] Plan of the subscription no longer exists", logger.Field("subscribe_id", userSub.SubscribeId), logger.Field("user_subscribe_id", userSub.Id))
+				return nil, nil
+			}
 			logger.WithContext(ctx).Errorw("[QueryUserSubscribeNodeList] Find plan failed", logger.Field("error", err.Error()), logger.Field("subscribe_id", userSub.SubscribeId))
 			return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find plan %d", userSub.SubscribeId)
 		}

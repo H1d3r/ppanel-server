@@ -13,6 +13,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription"
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // Deliverer is the part of the subscription facade the delivery endpoints
@@ -115,6 +116,12 @@ func writeSubscribeResponse(c context.Context, ctx *app.RequestContext, service 
 		ClientIP:   ctx.ClientIP(),
 	}, &req)
 	if err != nil {
+		// A client over its fetch limit backs off on 429; every other
+		// refusal stays the one plain-text server error.
+		if xerr.CodeOf(err) == xerr.TooManyRequests {
+			ctx.String(consts.StatusTooManyRequests, "Too Many Requests")
+			return
+		}
 		ctx.String(consts.StatusInternalServerError, "Internal Server")
 		return
 	}

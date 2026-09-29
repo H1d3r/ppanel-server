@@ -24,6 +24,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/trial"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Service is the only surface other code may depend on; the implementation
@@ -132,6 +133,17 @@ type RequestMeta = delivery.RequestMeta
 // DeliveryConfig re-exports the delivery subdomain's runtime snapshot.
 type DeliveryConfig = delivery.Config
 
+// DeliveryLimiter re-exports the delivery subdomain's per-address fetch
+// limiter port.
+type DeliveryLimiter = delivery.FetchLimiter
+
+// NewDeliveryLimiter returns the per-address fetch limiter of subscription
+// delivery over rds: delivery.FetchRateQuota fetches per
+// delivery.FetchRateWindow and address.
+func NewDeliveryLimiter(rds *redis.Client) DeliveryLimiter {
+	return delivery.NewFetchLimiter(rds)
+}
+
 // SubscriptionTransactor re-exports the plan subdomain's transaction port.
 type SubscriptionTransactor = plan.SubscriptionTransactor
 
@@ -152,6 +164,9 @@ type Deps struct {
 	Logs    repository.LogRepo
 	// DeliveryConfig reads the runtime-mutable delivery configuration.
 	DeliveryConfig func() DeliveryConfig
+	// DeliveryLimiter bounds the subscription fetches per client address
+	// (NewDeliveryLimiter); nil admits every fetch.
+	DeliveryLimiter DeliveryLimiter
 
 	// Accounts is the identity port of delivery, administration, lifecycle
 	// and quota use cases: owners, their devices and email bindings, and
@@ -268,6 +283,7 @@ func New(deps Deps) Service {
 			Nodes:          deps.Nodes,
 			Logs:           deps.Logs,
 			ConfigSnapshot: deps.DeliveryConfig,
+			Limiter:        deps.DeliveryLimiter,
 		}),
 		selfSubs: selfsub.NewService(selfsub.Deps{
 			UserSubs:    deps.UserSubs,

@@ -11,13 +11,18 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-// DeleteSubscribe deletes a plan no active user subscription holds. The
-// check and the delete share one transaction.
+// DeleteSubscribe deletes a plan no current user subscription holds: none
+// that is pending, active or exhausted inside its term (usersub
+// CurrentStatuses), since such a subscription may still be reset, renewed or
+// delivered from the plan. Ended subscriptions (expired, refunded, stopped)
+// keep pointing at the deleted plan; delivery and the owner's node list treat
+// a missing plan as a subscription without nodes. The check and the delete
+// share one transaction.
 func (s *Service) DeleteSubscribe(ctx context.Context, req *dto.DeleteSubscribeRequest) error {
 	// phase tells a failed check from a failed delete for the error code.
 	phase := "check"
 	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
-		total, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(ctx, req.Id, int64(usersub.SubscribeStatusActive))
+		total, err := store.UserSubscription().CountUserSubscribesBySubscribeIdAndStatus(ctx, req.Id, usersub.CurrentStatuses.Values()...)
 		if err != nil {
 			return err
 		}

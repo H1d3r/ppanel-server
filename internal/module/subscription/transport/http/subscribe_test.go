@@ -293,6 +293,22 @@ func TestSubscribeHandlerAnswersDeliveryFailuresWithInternalServer(t *testing.T)
 	}
 }
 
+// A fetch over the per-address limit is answered with 429, so the client
+// backs off instead of retrying a server error; it carries no delivery
+// headers.
+func TestSubscribeHandlerAnswersARateLimitedDeliveryWithTooManyRequests(t *testing.T) {
+	facade := &recordingDeliverer{err: xerr.Errorf(xerr.TooManyRequests, "too many subscription fetches")}
+	w := serveSubscribe(SubscribeDeps{Service: facade, Config: subscribeSettings(config.SubscribeConfig{})},
+		"/v1/subscribe/config?token=tok-1", userAgent("ClashMeta/1.18.0"))
+
+	if w.Code != http.StatusTooManyRequests || w.Body.String() != "Too Many Requests" {
+		t.Fatalf("response = %d %q, want 429 Too Many Requests", w.Code, w.Body.String())
+	}
+	if w.Header().Get("subscription-userinfo") != "" || w.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("a refused fetch carries delivery headers: %s", w.Header().Header())
+	}
+}
+
 // realDelivery is the subscription facade over the module's test harness with
 // the delivery dependencies it reads before the owner's account: the client
 // applications, plans, subscriptions and the audit log. The identity and
