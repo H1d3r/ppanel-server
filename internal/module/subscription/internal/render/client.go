@@ -21,15 +21,13 @@ type Proxy struct {
 	Network string
 
 	// Security Options
-	Security          string
-	SNI               string // Server Name Indication for TLS
-	ALPN              []string
-	AllowInsecure     bool   // Allow insecure connections (skip certificate verification)
-	Fingerprint       string // Client fingerprint for TLS connections
-	RealityServerAddr string // Reality server address
-	RealityServerPort int    // Reality server port
-	RealityPublicKey  string // Reality public key for authentication
-	RealityShortId    string // Reality short ID for authentication
+	Security         string
+	SNI              string // Server Name Indication for TLS
+	ALPN             []string
+	AllowInsecure    bool   // Allow insecure connections (skip certificate verification)
+	Fingerprint      string // Client fingerprint for TLS connections
+	RealityPublicKey string // Reality public key for authentication
+	RealityShortId   string // Reality short ID for authentication
 	// Transport Options
 	Transport   string // Transport protocol (e.g., ws, http, grpc)
 	Host        string // For WebSocket/HTTP/HTTPS
@@ -92,11 +90,13 @@ type Proxy struct {
 	EchEnable     bool   // ECH enable
 	EchServerName string // ECH SNI
 
-	Ratio           float64 // Traffic ratio, default is 1
-	CertMode        string  // Certificate mode, `none`|`http`|`dns`|`self`
-	CertDNSProvider string  // DNS provider for certificate
-	CertDNSEnv      string  // Environment for DNS provider
-	CertPinSHA256   string  // SHA256 fingerprint of the self-signed certificate (lowercase hex)
+	Ratio    float64 // Traffic ratio, default is 1
+	CertMode string  // Certificate mode, `none`|`http`|`dns`|`self`
+	// The DNS provider and its credentials (CertDNSProvider, CertDNSEnv) and
+	// the REALITY handshake target (RealityServerAddr, RealityServerPort)
+	// stay on the server: a client only needs the pin below, the SNI and the
+	// REALITY public key and short id.
+	CertPinSHA256 string // SHA256 fingerprint of the self-signed certificate (lowercase hex)
 }
 
 type User struct {

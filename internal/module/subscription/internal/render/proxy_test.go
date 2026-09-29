@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -12,10 +13,13 @@ import (
 
 // serverOnlyFields are the protocol settings a client never receives: the
 // node's own listening port (clients use the node entry's), the switch, the
-// plugin in its server form, and the server secrets.
+// plugin in its server form, the server secrets, the REALITY handshake
+// target (clients connect to the node and send the SNI) and the DNS provider
+// with the credentials the node's ACME client uses.
 var serverOnlyFields = map[string]bool{
 	"Port": true, "Enable": true, "Plugin": true, "PluginOptions": true,
 	"RealityPrivateKey": true, "EncryptionTicket": true, "EncryptionServerPadding": true, "EncryptionPrivateKey": true,
+	"RealityServerAddr": true, "RealityServerPort": true, "CertDNSProvider": true, "CertDNSEnv": true,
 }
 
 // renamedFields maps protocol fields to the proxy field templates read them
@@ -67,6 +71,55 @@ func TestNewProxyMapsEveryClientField(t *testing.T) {
 	protocol.CertPinSHA256 = "pin"
 	if newProxy(&node.Node{}, protocol).AllowInsecure {
 		t.Error("a pinned certificate still allows insecure connections")
+	}
+}
+
+// A template may dump whole proxies (toJson, toPrettyJson, printf "%+v"), so
+// the proxies handed to it must not carry the server's secrets or targets at
+// all.
+// The rendering takes the path a subscription fetch takes, from the stored
+// protocol JSON, which is not normalized on read: a row written by an older
+// version still holds every field it was given.
+func TestTemplatesCannotReachServerOnlySettings(t *testing.T) {
+	protocols, err := json.Marshal([]node.Protocol{{
+		Type: "vless", Port: 443, Enable: true, Security: "reality", SNI: "cdn.example",
+		RealityServerAddr: "dest.example", RealityServerPort: 8443, RealityPrivateKey: "REALITY-PRIVATE-KEY",
+		RealityPublicKey: "reality-public-key", RealityShortId: "0123abcd",
+		CertMode: "dns", CertDNSProvider: "cloudflare", CertDNSEnv: "CF_DNS_API_TOKEN=cloudflare-secret-token",
+		Encryption: "mlkem768x25519plus", EncryptionTicket: "ENCRYPTION-TICKET", EncryptionPrivateKey: "ENCRYPTION-PRIVATE-KEY",
+		EncryptionServerPadding: "SERVER-PADDING",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := []*node.Node{{
+		Id: 1, Name: "edge", Address: "edge.example", Port: 443, Protocol: "vless",
+		Server: &node.Server{Id: 1, Protocols: string(protocols)},
+	}}
+	client, err := NewAdapter(
+		`{{ range .Proxies }}{{ toJson . }}{{ "\n" }}{{ toPrettyJson . }}{{ "\n" }}{{ printf "%+v" . }}{{ end }}`,
+		WithServers(servers), WithOutputFormat("text"),
+	).Client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := client.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := string(out)
+	if !strings.Contains(rendered, "reality-public-key") || !strings.Contains(rendered, "cdn.example") {
+		t.Fatalf("the client settings did not render:\n%s", rendered)
+	}
+	for _, secret := range []string{
+		"dest.example", "8443", "REALITY-PRIVATE-KEY",
+		"cloudflare", "CF_DNS_API_TOKEN", "cloudflare-secret-token",
+		"ENCRYPTION-TICKET", "ENCRYPTION-PRIVATE-KEY", "SERVER-PADDING",
+		"RealityServerAddr", "RealityServerPort", "CertDNSProvider", "CertDNSEnv",
+	} {
+		if strings.Contains(rendered, secret) {
+			t.Errorf("template output carries the server-only %q:\n%s", secret, rendered)
+		}
 	}
 }
 
