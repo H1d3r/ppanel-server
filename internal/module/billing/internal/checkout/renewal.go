@@ -59,17 +59,20 @@ func (s *Service) Renewal(ctx context.Context, req *dto.RenewalOrderRequest) (*d
 		return nil, err
 	}
 	orderInfo := &order.Order{
-		UserId:         u.Id,
-		ParentId:       userSubscribe.OrderId,
-		OrderNo:        order.GenerateTradeNo(),
-		Type:           order.TypeRenewal,
-		Quantity:       quantity,
-		Coupon:         req.Coupon,
-		PaymentId:      terms.Method.Id,
-		Method:         terms.Method.Platform,
-		Status:         order.StatusPending,
-		SubscribeId:    userSubscribe.SubscribeId,
-		SubscribeToken: userSubscribe.Token,
+		UserId:      u.Id,
+		ParentId:    userSubscribe.OrderId,
+		OrderNo:     order.GenerateTradeNo(),
+		Type:        order.TypeRenewal,
+		Quantity:    quantity,
+		Coupon:      req.Coupon,
+		PaymentId:   terms.Method.Id,
+		Method:      terms.Method.Platform,
+		Status:      order.StatusPending,
+		SubscribeId: userSubscribe.SubscribeId,
+		// The subscription is referenced by its id, which survives a token
+		// rotation; the token stays for the fulfillment of older releases.
+		UserSubscribeId: userSubscribe.Id,
+		SubscribeToken:  userSubscribe.Token,
 	}
 	ordercontext.ApplyIdempotency(ctx, orderInfo)
 	err = s.deps.Tx.InBillingTx(ctx, func(tx repository.BillingStore) error {

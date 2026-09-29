@@ -55,15 +55,18 @@ func (s *Service) ResetTraffic(ctx context.Context, req *dto.ResetTrafficOrderRe
 	}
 	input := pricing.Input{UnitPrice: userSubscribe.Subscribe.Replacement, Quantity: 1, Fee: pricing.FeeTerms(method)}
 	orderInfo := &order.Order{
-		ParentId:       userSubscribe.OrderId,
-		UserId:         u.Id,
-		OrderNo:        order.GenerateTradeNo(),
-		Type:           order.TypeResetTraffic,
-		PaymentId:      method.Id,
-		Method:         method.Platform,
-		Status:         order.StatusPending,
-		SubscribeId:    userSubscribe.SubscribeId,
-		SubscribeToken: userSubscribe.Token,
+		ParentId:    userSubscribe.OrderId,
+		UserId:      u.Id,
+		OrderNo:     order.GenerateTradeNo(),
+		Type:        order.TypeResetTraffic,
+		PaymentId:   method.Id,
+		Method:      method.Platform,
+		Status:      order.StatusPending,
+		SubscribeId: userSubscribe.SubscribeId,
+		// The subscription is referenced by its id, which survives a token
+		// rotation; the token stays for the fulfillment of older releases.
+		UserSubscribeId: userSubscribe.Id,
+		SubscribeToken:  userSubscribe.Token,
 	}
 	ordercontext.ApplyIdempotency(ctx, orderInfo)
 	err = s.deps.Tx.InBillingTx(ctx, func(tx repository.BillingStore) error {

@@ -77,16 +77,27 @@ func (m *couponRepo) FindOneByCode(ctx context.Context, code string) (*coupon.Co
 	return &resp, nil
 }
 
+// couponEditableColumns are the columns an administrator's edit writes. The
+// whole-row save it replaced also rewrote the creation time and, for a row
+// loaded before a concurrent reservation, the use count.
+var couponEditableColumns = []string{"name", "code", "count", "type", "discount", "start_time", "expire_time", "user_limit", "subscribe", "used_count", "enable", "updated_at"}
+
+// Update writes the editable columns of the coupon. Enable must be set: a
+// nil value would clear the column, so the caller defaults it first.
 func (m *couponRepo) Update(ctx context.Context, data *coupon.Coupon) error {
+	if data == nil || data.Id == 0 {
+		return errors.New("coupon update needs the coupon id")
+	}
+	if data.Enable == nil {
+		return errors.New("coupon update needs the enable flag")
+	}
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		return db.Save(data).Error
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		return conn.Model(&coupon.Coupon{}).Where("id = ?", data.Id).Select(couponEditableColumns).Updates(data).Error
 	}, m.getCacheKeys(old)...)
-	return err
 }
 
 func (m *couponRepo) Delete(ctx context.Context, id int64) error {
@@ -131,13 +142,20 @@ func (m *couponRepo) BatchDelete(ctx context.Context, ids []int64) error {
 	return nil
 }
 
+// UpdateCount counts one more use of the coupon when an order that had not
+// reserved its use settles. The increment happens in the database, so
+// concurrent settlements and reservations never lose a count to a stale
+// read-modify-write.
 func (m *couponRepo) UpdateCount(ctx context.Context, code string) error {
 	data, err := m.FindOneByCode(ctx, code)
 	if err != nil {
 		return err
 	}
-	data.UsedCount++
-	return m.Update(ctx, data)
+	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+		return conn.Model(&coupon.Coupon{}).
+			Where("code = ?", code).
+			UpdateColumn("used_count", gorm.Expr("used_count + 1")).Error
+	}, m.getCacheKeys(data)...)
 }
 
 // ReserveUsage atomically reserves one coupon use for a pending order.  A

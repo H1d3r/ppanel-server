@@ -18,8 +18,11 @@ import (
 
 // ------------------------------------------------------ balance payment
 
-// The wallet pays gift credit first; the order keeps the credit it consumed
-// on top of what it reserved at creation, and each movement is recorded.
+// The wallet pays gift credit first. The credit it consumes moves from the
+// amount paid with money to the order's gift credit, alongside what it
+// reserved at creation, so the order's columns keep their meaning (Amount
+// paid with money, GiftAmount consumed gift credit) and a refund of both
+// returns exactly what was paid; each movement is recorded.
 func TestBalanceCheckoutSpendsGiftCreditFirst(t *testing.T) {
 	f := newPortalFixture(t)
 	u, ctx := f.buyer(2300, 200)
@@ -33,8 +36,8 @@ func TestBalanceCheckoutSpendsGiftCreditFirst(t *testing.T) {
 		t.Fatalf("wallet = %+v, want emptied", w)
 	}
 	paid := f.h.ReloadOrder(o.OrderNo)
-	if paid.Status != order.StatusPaid || paid.GiftAmount != 500 {
-		t.Fatalf("order = %+v, want paid holding 500 gift credit", paid)
+	if paid.Status != order.StatusPaid || paid.GiftAmount != 500 || paid.Amount != 2300 {
+		t.Fatalf("order = %+v, want paid with 2300 of balance and 500 of gift credit", paid)
 	}
 	gifts := f.h.GiftLogs(u.Id)
 	if len(gifts) != 1 || gifts[0].Amount != 200 || gifts[0].Balance != 0 || gifts[0].Remark != ledger.RemarkBalancePayment || gifts[0].Timestamp == 0 {

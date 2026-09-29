@@ -129,6 +129,40 @@ func TestSettleUnsubscribeRefundRollsBackAFailure(t *testing.T) {
 	}
 }
 
+// A gateway-paid order consumed its gift credit at creation just as a
+// balance-paid one did: the refund returns that share to the gift amount
+// first and only the rest, what was paid with money, to the balance. Paying
+// the gift share out as balance would turn gift credit into money.
+func TestSettleUnsubscribeRefundReturnsTheGiftShareOfAGatewayPaidOrderFirst(t *testing.T) {
+	f := newFacade(t)
+	buyer := f.h.User()
+	f.wallet(t, buyer.Id, 500, 0, 0)
+	o := f.h.Order(&order.Order{OrderNo: "A", UserId: buyer.Id, Type: order.TypeSubscribe, Status: order.StatusFinished, Method: "stripe", Amount: 6000, GiftAmount: 1000})
+	ctx := context.Background()
+
+	if err := f.svc.SettleUnsubscribeRefund(ctx, buyer.Id, refundSubscription, o.Id, 3000); err != nil {
+		t.Fatalf("SettleUnsubscribeRefund: %v", err)
+	}
+	if got := f.h.ReloadWallet(buyer.Id); got.Balance != 2500 || got.GiftAmount != 1000 {
+		t.Fatalf("buyer wallet = %+v, want 1000 back to the gift amount and 2000 to the balance", got)
+	}
+	if logs := f.h.BalanceLogs(buyer.Id); len(logs) != 1 || logs[0].Amount != 2000 || logs[0].Balance != 2500 {
+		t.Fatalf("balance logs = %+v, want the 2000 balance share", logs)
+	}
+	if logs := f.h.GiftLogs(buyer.Id); len(logs) != 1 || logs[0].Type != logEntity.GiftTypeIncrease || logs[0].Amount != 1000 || logs[0].Balance != 1000 {
+		t.Fatalf("gift logs = %+v, want the 1000 gift share", logs)
+	}
+
+	// A refund smaller than the gift share goes to the gift amount alone.
+	small := f.h.Order(&order.Order{OrderNo: "B", UserId: buyer.Id, Type: order.TypeSubscribe, Status: order.StatusFinished, Method: "EPay", Amount: 6000, GiftAmount: 1000})
+	if err := f.svc.SettleUnsubscribeRefund(ctx, buyer.Id, refundSubscription+1, small.Id, 400); err != nil {
+		t.Fatalf("SettleUnsubscribeRefund: %v", err)
+	}
+	if got := f.h.ReloadWallet(buyer.Id); got.Balance != 2500 || got.GiftAmount != 1400 || len(f.h.BalanceLogs(buyer.Id)) != 1 {
+		t.Fatalf("buyer wallet = %+v, want the 400 on the gift amount only", got)
+	}
+}
+
 // A refund takes back the commission its orders earned, in proportion, so a
 // buy-and-refund loop on recycled balance cannot farm commission. Paid
 // renewals count; a traffic reset is neither refunded nor part of the basis.

@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/auth/password"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
+	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/billing/internal/checkout"
 	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
@@ -125,6 +126,73 @@ func EnsureNoMailboxAlias(ctx context.Context, reader GuestAccountReader, authTy
 	return nil
 }
 
+// FindExistingAccount returns the account a guest identity already belongs
+// to, under its exact spelling or, for an email, under another spelling of
+// the same mailbox (as EnsureNoMailboxAlias checks it); zero when the
+// identity has none. The guest account stage uses it to find the account a
+// paid order can no longer open one beside.
+func FindExistingAccount(ctx context.Context, reader GuestAccountReader, authType, guestIdentifier string) (int64, error) {
+	if reader == nil {
+		return 0, nil
+	}
+	userAuth, err := reader.FindUserAuthMethodByOpenID(ctx, authType, guestIdentifier)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user auth")
+	}
+	if userAuth != nil && userAuth.UserId != 0 {
+		return userAuth.UserId, nil
+	}
+	if authType != identifier.Email {
+		return 0, nil
+	}
+	aliases, ok := reader.(EmailAliasReader)
+	if !ok {
+		return 0, nil
+	}
+	alias, err := aliases.FindEmailAlias(ctx, guestIdentifier)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, xerr.Wrapf(err, xerr.DatabaseQueryError, "find email aliases")
+	}
+	if alias == nil {
+		return 0, nil
+	}
+	return alias.UserId, nil
+}
+
+// GuestCouponUsageCounter counts a guest identity's uses of a coupon; the
+// order repository provides it. Guest orders carry no user id until they are
+// activated, so their coupon uses are counted by the identity they name.
+type GuestCouponUsageCounter interface {
+	CountGuestCouponUsage(ctx context.Context, authType, identifier, coupon string) (int64, error)
+}
+
+// ensureGuestCouponLimit applies the coupon's per-user limit to a guest
+// identity: its pending orders hold a reservation each and its settled
+// orders consumed a use, whether the account exists yet or not. Without a
+// counter the limit cannot be checked, and a limited coupon is refused
+// rather than granted without limit. Like the buyer's check, the one before
+// the transaction is a fast path; the one inside narrows the window.
+func ensureGuestCouponLimit(ctx context.Context, orders any, authType, guestIdentifier string, c *coupon.Coupon) error {
+	if c == nil || c.UserLimit <= 0 {
+		return nil
+	}
+	counter, ok := orders.(GuestCouponUsageCounter)
+	if !ok {
+		return xerr.Errorf(xerr.CouponNotApplicable, "the coupon's per-user limit cannot be checked for a guest")
+	}
+	count, err := counter.CountGuestCouponUsage(ctx, authType, guestIdentifier, c.Code)
+	if err != nil {
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "count coupon uses of guest")
+	}
+	if count >= c.UserLimit {
+		return xerr.Errorf(xerr.CouponInsufficientUsage, "coupon limit exceeded")
+	}
+	return nil
+}
+
 // verifyGuestHuman applies the registration Turnstile check to a guest
 // purchase before it touches any account or reservation.
 func (s *Service) verifyGuestHuman(ctx context.Context, token string) error {
@@ -206,6 +274,9 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	if gateway.IsBalance(terms.Method) {
 		return nil, xerr.Errorf(xerr.PaymentMethodNotFound, "balance error")
 	}
+	if err := ensureGuestCouponLimit(ctx, s.deps.Orders, authType, guestIdentifier, terms.Coupon); err != nil {
+		return nil, err
+	}
 	checkoutToken := ordercontext.GuestCheckoutToken(ctx)
 	if checkoutToken == "" {
 		checkoutToken = random.KeyNew(32, 1)
@@ -231,6 +302,9 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	// Billing-domain transaction: coupon reservation and order creation
 	// settle together.
 	err = s.deps.Tx.InBillingTx(ctx, func(tx repository.BillingStore) error {
+		if err := ensureGuestCouponLimit(ctx, tx.Order(), authType, guestIdentifier, terms.Coupon); err != nil {
+			return err
+		}
 		if err := checkout.ReserveCoupon(ctx, tx, orderInfo); err != nil {
 			return err
 		}

@@ -238,10 +238,18 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 
 // calculateCommission is percentage percent of price, rounded down to whole
 // minor units. The float product it replaced under-paid a unit whenever the
-// percentage has no exact binary fraction (29% of 100 came out as 28).
+// percentage has no exact binary fraction (29% of 100 came out as 28). A
+// percentage above 100, which an older administration API accepted, pays the
+// whole price at most: a commission must never exceed what the buyer paid.
 func calculateCommission(price int64, percentage uint8) int64 {
+	if percentage > maxCommissionPercentage {
+		percentage = maxCommissionPercentage
+	}
 	return price * int64(percentage) / 100
 }
+
+// maxCommissionPercentage caps the referral percentage at the whole price.
+const maxCommissionPercentage uint8 = 100
 
 // UnfulfillableRefunded reports whether the order was refunded because the
 // subscription domain could not fulfil it.
@@ -263,6 +271,26 @@ func (s *Service) UnfulfillableRefunded(ctx context.Context, orderNo string) (bo
 // transaction with the inbox marker, so a redelivered activation refunds
 // once; the order row lock serializes concurrent deliveries.
 func (s *Service) RefundUnfulfillable(ctx context.Context, orderNo string) error {
+	return s.refundUnfulfillable(ctx, orderNo, 0)
+}
+
+// RefundUnfulfillableToAccount refunds a paid guest order whose identity
+// already belongs to account accountID, so the order can open no account of
+// its own: the buyer who paid twice under one identity, or paid for an
+// identity registered meanwhile. The order is bound to that account and its
+// payment returned to the account's wallet in the one transaction that
+// closes it, so a redelivery finds it closed and refunded, never bound but
+// unpaid back.
+func (s *Service) RefundUnfulfillableToAccount(ctx context.Context, orderNo string, accountID int64) error {
+	if accountID == 0 {
+		return errors.New("an account is required to refund a guest order")
+	}
+	return s.refundUnfulfillable(ctx, orderNo, accountID)
+}
+
+// refundUnfulfillable is RefundUnfulfillable; a non-zero accountID first
+// binds an order without an account to it.
+func (s *Service) refundUnfulfillable(ctx context.Context, orderNo string, accountID int64) error {
 	return s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		mark, err := store.Inbox().Find(ctx, inboxUnfulfillableRefund, orderNo)
 		if err != nil {
@@ -277,6 +305,15 @@ func (s *Service) RefundUnfulfillable(ctx context.Context, orderNo string) error
 		}
 		if current.Status != order.StatusPaid {
 			return ErrInvalidOrderStatus
+		}
+		if accountID != 0 && current.UserId == 0 {
+			current.UserId = accountID
+			if err := store.Order().Update(ctx, current); err != nil {
+				return err
+			}
+		}
+		if current.UserId == 0 {
+			return errors.New("the order has no account to refund to")
 		}
 		if err := s.refundTx(ctx, store, current); err != nil {
 			return err
@@ -293,9 +330,12 @@ func (s *Service) RefundUnfulfillable(ctx context.Context, orderNo string) error
 }
 
 // refundTx moves the order's money back under the wallet lock: Amount is
-// what the buyer paid at checkout and returns to the balance, as a
-// cancellation refund returns it; GiftAmount is the gift credit the order
-// held and returns to the gift balance, as a close returns it.
+// what the buyer paid with money (a gateway charge or the wallet balance) and
+// returns to the balance, as a cancellation refund returns it; GiftAmount is
+// the gift credit the order consumed, at creation or at its balance checkout,
+// and returns to the gift balance, as a close returns it. A balance checkout
+// moves the gift credit it spends out of Amount, so the two never hold the
+// same unit and the refund pays back exactly what was paid.
 func (s *Service) refundTx(ctx context.Context, store repository.BillingStore, o *order.Order) error {
 	wallet, err := store.Wallet().FindOneForUpdate(ctx, o.UserId)
 	if err != nil {

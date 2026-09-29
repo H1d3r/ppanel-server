@@ -131,7 +131,10 @@ func (g *stripeGateway) intentOrder(orderNo, subscribe string, charge Charge) *s
 func (g *stripeGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconciliation, error) {
 	o := req.Order
 	if o.TradeNo == "" {
-		return Reconciliation{}, nil
+		// No intent was claimed. The checkout records its expectation before
+		// it creates the intent, so the close must find the order unchanged
+		// when it commits.
+		return Reconciliation{RequireStableCheckout: true}, nil
 	}
 	charge := Charge{Amount: o.PaymentAmount, Currency: o.PaymentCurrency}
 	if o.PaymentCurrency == "" {

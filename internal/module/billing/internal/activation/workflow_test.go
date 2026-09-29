@@ -10,7 +10,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
-	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -118,15 +117,17 @@ func (a aliasIdentities) FindEmailAlias(context.Context, string) (*user.AuthMeth
 }
 
 // A mailbox that gained an account under another spelling since the purchase
-// must not get a second account; the stage fails for an operator instead.
+// must not get a second account; the stage reports the account the identity
+// belongs to, so the order is refunded to it.
 func TestGuestAccountStageRefusesAMailboxAlias(t *testing.T) {
 	ctx := context.Background()
 	guestOrder := &order.Order{OrderNo: "aliased", GuestAuthType: "email", GuestIdentifier: "gu.est@gmail.com", GuestPasswordHash: "durable-hash"}
 	guests := &workflowGuests{}
 	taken := aliasIdentities{alias: &user.AuthMethods{UserId: 5, AuthType: "email", AuthIdentifier: "guest@gmail.com"}}
 	workflow := NewWorkflow(WorkflowDeps{Orders: &workflowOrders{}, GuestAccounts: guests, GuestIdentities: taken}, nil)
-	if err := workflow.ensureGuestAccount(ctx, guestOrder); xerr.CodeOf(err) != xerr.UserExist || guests.creates != 0 {
-		t.Fatalf("ensureGuestAccount = %v with %d accounts created, want UserExist and none", err, guests.creates)
+	var owned *guestAccountTaken
+	if err := workflow.ensureGuestAccount(ctx, guestOrder); !errors.As(err, &owned) || owned.userID != 5 || guests.creates != 0 {
+		t.Fatalf("ensureGuestAccount = %v with %d accounts created, want the identity reported as user 5's and none created", err, guests.creates)
 	}
 
 	orders := &workflowOrders{}

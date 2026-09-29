@@ -67,24 +67,13 @@ func (s *Service) refund(ctx context.Context, store repository.BillingStore, use
 	// A refund never exceeds what was paid, whatever amount an older
 	// cancellation marker recorded.
 	remainingAmount = min(remainingAmount, orderInfo.RefundBasis())
-	// Calculate refund distribution based on payment method and gift amount priority
-	var balance, gift int64
-	if orderInfo.Method == "balance" {
-		// For balance-paid orders, prioritize refunding to gift amount first
-		if orderInfo.GiftAmount >= remainingAmount {
-			// Gift amount covers the entire refund - refund all to gift balance
-			gift = remainingAmount
-			balance = lockedUser.Balance // Regular balance remains unchanged
-		} else {
-			// Gift amount insufficient - refund to gift first, remainder to regular balance
-			gift = orderInfo.GiftAmount
-			balance = lockedUser.Balance + (remainingAmount - orderInfo.GiftAmount)
-		}
-	} else {
-		// For non-balance payment orders, refund entirely to regular balance
-		balance = remainingAmount + lockedUser.Balance
-		gift = 0
-	}
+	// The gift credit the order consumed returns to the gift balance first,
+	// the rest to the regular balance, whatever method paid the rest: a
+	// gateway-paid order consumed its gift credit at creation just as a
+	// balance-paid one did, and refunding that share as balance would turn
+	// gift credit into money.
+	gift := min(orderInfo.GiftAmount, remainingAmount)
+	balance := lockedUser.Balance + (remainingAmount - gift)
 
 	now := timeutil.Now()
 	// Create balance log entry only if there's an actual regular balance refund

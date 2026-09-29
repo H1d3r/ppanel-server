@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/auth/password"
+	"github.com/perfect-panel/server/internal/auth/ratelimit"
 	"github.com/perfect-panel/server/internal/auth/token"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -25,6 +26,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/ordercontext"
 	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"gorm.io/gorm"
 )
@@ -49,6 +51,22 @@ type Orders interface {
 	FindOneByIdempotencyKey(ctx context.Context, key string) (*order.Order, error)
 }
 
+// ReplayLimiter grants a bounded number of permits per key and period; the
+// auth rate limiter provides it, with its permit states.
+type ReplayLimiter interface {
+	Take(ctx context.Context, key string) (int, error)
+}
+
+// GuestReplayLimits bound how often an anonymous create request may be
+// replayed under an existing idempotency key. A replay proves the guest
+// password against the order, so an unlimited replay is a password oracle
+// for whoever holds the key; the limits apply per key and per client IP. A
+// nil limiter applies no limit.
+type GuestReplayLimits struct {
+	PerKey ReplayLimiter
+	PerIP  ReplayLimiter
+}
+
 // Deps declares the orchestration's dependencies: sibling subdomains are
 // invoked directly, never through the facade.
 type Deps struct {
@@ -57,6 +75,8 @@ type Deps struct {
 	Portal       *portal.Service
 	JwtSecret    string
 	CurrencyUnit func() string
+	// GuestReplays bounds the replays of anonymous create requests.
+	GuestReplays GuestReplayLimits
 	// Stream serves the order event streams.
 	Stream StreamDeps
 }
@@ -85,14 +105,7 @@ func (s *Service) CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderR
 
 	orderInfo, err := s.deps.Orders.FindOneByIdempotencyKey(ctx, idempotencyKey)
 	if err == nil {
-		if !sameIdempotencyHash(orderInfo.IdempotencyHash, hash) {
-			return nil, ErrIdempotencyKeyReused
-		}
-		checkoutToken := s.guestCheckoutToken(idempotencyKey, orderInfo)
-		if err := s.authorizeExistingCreate(ctx, orderInfo, req, checkoutToken); err != nil {
-			return nil, err
-		}
-		return s.checkoutResponse(ctx, orderInfo, checkoutToken, req.ReturnURL)
+		return s.replayExistingCreate(ctx, orderInfo, req, idempotencyKey, hash)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find idempotent order")
@@ -110,14 +123,7 @@ func (s *Service) CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderR
 		// before returning the duplicate-key error.
 		existing, findErr := s.deps.Orders.FindOneByIdempotencyKey(ctx, idempotencyKey)
 		if findErr == nil {
-			if !sameIdempotencyHash(existing.IdempotencyHash, hash) {
-				return nil, ErrIdempotencyKeyReused
-			}
-			checkoutToken := s.guestCheckoutToken(idempotencyKey, existing)
-			if err := s.authorizeExistingCreate(ctx, existing, req, checkoutToken); err != nil {
-				return nil, err
-			}
-			return s.checkoutResponse(ctx, existing, checkoutToken, req.ReturnURL)
+			return s.replayExistingCreate(ctx, existing, req, idempotencyKey, hash)
 		}
 		return nil, err
 	}
@@ -129,6 +135,53 @@ func (s *Service) CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderR
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "load created order")
 	}
 	return s.checkoutResponse(ctx, orderInfo, checkoutToken, req.ReturnURL)
+}
+
+// replayExistingCreate answers a create request whose idempotency key
+// already produced orderInfo: the same request resumes that order's
+// checkout, a different one is refused. An anonymous replay is rate limited
+// first: it proves the guest password against the order, and the refusal
+// tells a correct guess from a wrong one.
+func (s *Service) replayExistingCreate(ctx context.Context, orderInfo *order.Order, req *dto.V2CreateOrderRequest, idempotencyKey, hash string) (*dto.V2OrderResponse, error) {
+	if currentUser(ctx) == nil {
+		if err := s.allowGuestReplay(ctx, idempotencyKey); err != nil {
+			return nil, err
+		}
+	}
+	if !sameIdempotencyHash(orderInfo.IdempotencyHash, hash) {
+		return nil, ErrIdempotencyKeyReused
+	}
+	checkoutToken := s.guestCheckoutToken(idempotencyKey, orderInfo)
+	if err := s.authorizeExistingCreate(ctx, orderInfo, req, checkoutToken); err != nil {
+		return nil, err
+	}
+	return s.checkoutResponse(ctx, orderInfo, checkoutToken, req.ReturnURL)
+}
+
+// allowGuestReplay takes one permit for the replay from the per-key and the
+// per-IP limit; over either, the replay is refused as too many requests. A
+// limiter that cannot answer refuses too: an oracle must not open when the
+// limit store is down.
+func (s *Service) allowGuestReplay(ctx context.Context, idempotencyKey string) error {
+	if err := takeReplayPermit(ctx, s.deps.GuestReplays.PerKey, idempotencyKey); err != nil {
+		return err
+	}
+	metadata, _ := requestmeta.From(ctx)
+	return takeReplayPermit(ctx, s.deps.GuestReplays.PerIP, metadata.ClientIP)
+}
+
+func takeReplayPermit(ctx context.Context, limiter ReplayLimiter, key string) error {
+	if limiter == nil || key == "" {
+		return nil
+	}
+	state, err := limiter.Take(ctx, key)
+	if err != nil {
+		return xerr.Wrapf(err, xerr.TooManyRequests, "the replay limit could not be checked")
+	}
+	if state == ratelimit.OverQuota || state == ratelimit.Unknown {
+		return xerr.Errorf(xerr.TooManyRequests, "too many replays of this order request; retry later")
+	}
+	return nil
 }
 
 // Checkout resumes the payment of a pending order.

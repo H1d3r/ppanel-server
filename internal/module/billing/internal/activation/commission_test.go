@@ -152,6 +152,30 @@ func TestCalculateCommissionIsExact(t *testing.T) {
 	}
 }
 
+// A referral percentage above 100, which an older administration API
+// accepted, pays the whole price at most; 150% must not pay 1.5 times the
+// order as withdrawable commission.
+func TestCalculateCommissionClampsThePercentage(t *testing.T) {
+	for _, percentage := range []uint8{101, 150, 255} {
+		if got := calculateCommission(1000, percentage); got != 1000 {
+			t.Fatalf("calculateCommission(1000, %d) = %d, want the whole price", percentage, got)
+		}
+	}
+	f := newCommissionFixture(t, false)
+	// The referrer's own percentage applies, with its default of paying the
+	// first purchase only.
+	if err := f.h.Store.User().UpdateColumns(context.Background(), f.referrer.Id, map[string]any{"referral_percentage": 150}); err != nil {
+		t.Fatal(err)
+	}
+	f.paidOrder("A", true)
+	if err := f.svc.SettleOrderCommission(context.Background(), "A", f.buyer.Id); err != nil {
+		t.Fatalf("SettleOrderCommission: %v", err)
+	}
+	if got := f.h.ReloadWallet(f.referrer.Id).Commission; got != 10000 {
+		t.Fatalf("referrer commission = %d, want the 10000 paid, not 150%% of it", got)
+	}
+}
+
 // The referrer's commission is computed on what the buyer paid for the plan,
 // without the gateway fee.
 func TestSettleOrderCommissionExcludesTheFee(t *testing.T) {

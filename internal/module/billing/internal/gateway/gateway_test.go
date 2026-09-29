@@ -2,7 +2,12 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -159,8 +164,13 @@ func TestRegistryDescribesThePlatforms(t *testing.T) {
 			t.Fatalf("Open(%q) = %v, want ErrNotGateway", platform, err)
 		}
 	}
-	if !registry.CloseWithoutCheckout("Cryptomus").RequireStableCheckout || registry.CloseWithoutCheckout("EPay").RequireStableCheckout {
-		t.Fatal("only Cryptomus guards a close before its checkout started")
+	// Every gateway records the payment expectation before it creates the
+	// payment, so a close of an order whose checkout "never started" must
+	// find it still not started when it commits, whatever the platform.
+	for _, platform := range []string{"EPay", "AlipayF2F", "Stripe", "Cryptomus"} {
+		if !registry.CloseWithoutCheckout(platform).RequireStableCheckout {
+			t.Fatalf("%s: a close before the checkout started does not require a stable checkout", platform)
+		}
 	}
 }
 
@@ -197,16 +207,42 @@ func TestRegistryValidatesConfigurations(t *testing.T) {
 	}
 }
 
-// A Cryptomus checkout that never started closes, but only if it is still
-// not started when the close commits; the other gateways need no guard.
-func TestCryptomusReconcileWithoutCheckoutRequiresStableCheckout(t *testing.T) {
-	gw, err := NewRegistry().Open(&payment.Payment{Platform: "Cryptomus", Config: `{"merchant_id":"m","api_key":"k"}`})
+// alipayTestConfig is a face-to-face configuration whose keys parse; the
+// gateway is never contacted.
+func alipayTestConfig(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verdict, err := gw.Reconcile(context.Background(), CloseRequest{Order: &order.Order{OrderNo: "o"}})
-	if err != nil || !verdict.RequireStableCheckout || verdict.TradeNo != "" {
-		t.Fatalf("Reconcile = (%+v, %v)", verdict, err)
+	public, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf(`{"app_id":"app","private_key":%q,"public_key":%q,"sandbox":true}`,
+		base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)), base64.StdEncoding.EncodeToString(public))
+}
+
+// A checkout that never started closes, but only if it is still not started
+// when the close commits: every gateway records the expectation before it
+// creates the payment, so the snapshot the verdict was made on may be stale.
+func TestReconcileWithoutCheckoutRequiresStableCheckoutForEveryGateway(t *testing.T) {
+	for platform, config := range map[string]string{
+		"Cryptomus": `{"merchant_id":"m","api_key":"k"}`,
+		"EPay":      `{"pid":"1","url":"https://pay.example","key":"k","type":"alipay"}`,
+		"Stripe":    `{"secret_key":"sk","payment":"card"}`,
+		"AlipayF2F": alipayTestConfig(t),
+	} {
+		t.Run(platform, func(t *testing.T) {
+			gw, err := NewRegistry().Open(&payment.Payment{Platform: platform, Config: config})
+			if err != nil {
+				t.Fatal(err)
+			}
+			verdict, err := gw.Reconcile(context.Background(), CloseRequest{Order: &order.Order{OrderNo: "o"}})
+			if err != nil || !verdict.RequireStableCheckout || verdict.TradeNo != "" {
+				t.Fatalf("Reconcile = (%+v, %v), want a stable-checkout close", verdict, err)
+			}
+		})
 	}
 }
 

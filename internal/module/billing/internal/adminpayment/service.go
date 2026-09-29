@@ -115,7 +115,7 @@ func (s *Service) createStripeMethod(ctx context.Context, method *paymentModel.P
 	if err != nil {
 		return xerr.Wrapf(err, xerr.ERROR, "create stripe webhook endpoint")
 	}
-	config.WebhookSecret = secret
+	config.WebhookSecret, config.WebhookEndpointID = secret, endpointID
 	content, err := config.Marshal()
 	if err == nil {
 		method.Config = string(content)
@@ -129,6 +129,93 @@ func (s *Service) createStripeMethod(ctx context.Context, method *paymentModel.P
 		return xerr.Wrapf(err, xerr.DatabaseInsertError, "insert payment method")
 	}
 	return nil
+}
+
+// stripeUpdate is the webhook side of a Stripe method's update. A secret key
+// that changed selects another Stripe account: the webhook endpoint the
+// method's callbacks arrive through lives in the old account, so a new one
+// is registered in the new account, its secret stored with the method, and
+// the old one removed once the method is saved. An unchanged key keeps the
+// endpoint, whose secret and id an administrator's form need not carry.
+type stripeUpdate struct {
+	old, updated paymentModel.StripeConfig
+	webhooks     gateway.StripeWebhooks
+	endpointID   string // the endpoint registered by this update, if any
+}
+
+// prepareStripeUpdate reads both configurations and, for a changed key,
+// registers the webhook endpoint in the new account. It returns the
+// configuration to store.
+func (s *Service) prepareStripeUpdate(ctx context.Context, method *paymentModel.Payment, config string) (string, *stripeUpdate, error) {
+	update := &stripeUpdate{}
+	if err := update.old.Unmarshal([]byte(method.Config)); err != nil {
+		return "", nil, xerr.Wrapf(err, xerr.InvalidPaymentConfig, "invalid stored Stripe config")
+	}
+	if err := update.updated.Unmarshal([]byte(config)); err != nil {
+		return "", nil, xerr.Wrapf(err, xerr.InvalidPaymentConfig, "invalid Stripe config")
+	}
+	if update.updated.SecretKey == "" {
+		return "", nil, xerr.Errorf(xerr.InvalidPaymentConfig, "stripe secret key is empty")
+	}
+	if update.updated.SecretKey == update.old.SecretKey {
+		if update.updated.WebhookSecret == "" {
+			update.updated.WebhookSecret = update.old.WebhookSecret
+		}
+		if update.updated.WebhookEndpointID == "" {
+			update.updated.WebhookEndpointID = update.old.WebhookEndpointID
+		}
+	} else {
+		notifyURL, err := gateway.NotifyURL(method, s.siteHost())
+		if err != nil {
+			return "", nil, err
+		}
+		update.webhooks = s.deps.Gateways.StripeWebhooks(update.updated.SecretKey)
+		endpointID, secret, err := update.webhooks.CreateWebhookEndpoint(ctx, notifyURL)
+		if err != nil {
+			return "", nil, xerr.Wrapf(err, xerr.ERROR, "create stripe webhook endpoint")
+		}
+		update.endpointID = endpointID
+		update.updated.WebhookSecret, update.updated.WebhookEndpointID = secret, endpointID
+	}
+	content, err := update.updated.Marshal()
+	if err != nil {
+		update.rollback(ctx)
+		return "", nil, xerr.Wrapf(err, xerr.InvalidPaymentConfig, "encode Stripe config")
+	}
+	return string(content), update, nil
+}
+
+// rollback removes the endpoint this update registered when the method could
+// not be saved, so no orphaned endpoint keeps receiving events.
+func (u *stripeUpdate) rollback(ctx context.Context) {
+	if u == nil || u.endpointID == "" {
+		return
+	}
+	if err := u.webhooks.DeleteWebhookEndpoint(ctx, u.endpointID); err != nil {
+		logger.WithContext(ctx).Errorw("[UpdatePaymentMethod] remove the Stripe webhook endpoint of an unsaved payment method by hand",
+			logger.Field("endpoint", u.endpointID), logger.Field("error", err.Error()))
+	}
+}
+
+// retireOldEndpoint removes the endpoint of the old account once the method
+// uses the new one. It is best effort: the old account may already have
+// revoked the key, and an endpoint registered before its id was recorded
+// cannot be found; both are left for the administrator.
+func (s *Service) retireOldEndpoint(ctx context.Context, u *stripeUpdate) {
+	if u == nil || u.endpointID == "" {
+		return
+	}
+	if u.old.WebhookEndpointID == "" {
+		logger.WithContext(ctx).Infow("[UpdatePaymentMethod] the webhook endpoint of the previous Stripe account is not recorded; remove it in the Stripe dashboard by hand")
+		return
+	}
+	if u.old.SecretKey == "" {
+		return
+	}
+	if err := s.deps.Gateways.StripeWebhooks(u.old.SecretKey).DeleteWebhookEndpoint(ctx, u.old.WebhookEndpointID); err != nil {
+		logger.WithContext(ctx).Errorw("[UpdatePaymentMethod] remove the webhook endpoint of the previous Stripe account by hand",
+			logger.Field("endpoint", u.old.WebhookEndpointID), logger.Field("error", err.Error()))
+	}
 }
 
 func (s *Service) Update(ctx context.Context, req *dto.UpdatePaymentMethodRequest) (*dto.PaymentConfig, error) {
@@ -152,12 +239,20 @@ func (s *Service) Update(ctx context.Context, req *dto.UpdatePaymentMethodReques
 	// to validate and no callback URL, so toggling it must neither parse a
 	// platform config nor be blocked by the pending-order guard.
 	config := method.Config
+	var stripe *stripeUpdate
 	if payment.ParsePlatform(req.Platform) != payment.Balance {
 		if config, err = s.deps.Gateways.NormalizeConfig(req.Platform, req.Config); err != nil {
 			return nil, xerr.Wrapf(err, xerr.InvalidPaymentConfig, "invalid payment config")
 		}
 		if method.Config != config || method.Domain != req.Domain {
 			if err := s.ensureNoPendingOrders(ctx, method.Id); err != nil {
+				return nil, err
+			}
+		}
+		if payment.ParsePlatform(req.Platform) == payment.Stripe {
+			// The webhook endpoint follows the account the secret key
+			// selects; the call happens outside any transaction.
+			if config, stripe, err = s.prepareStripeUpdate(ctx, method, config); err != nil {
 				return nil, err
 			}
 		}
@@ -175,8 +270,10 @@ func (s *Service) Update(ctx context.Context, req *dto.UpdatePaymentMethodReques
 	method.Sort = req.Sort
 	method.Enable = req.Enable
 	if err := s.deps.Payments.Update(ctx, method); err != nil {
+		stripe.rollback(ctx)
 		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update payment method %d", req.Id)
 	}
+	s.retireOldEndpoint(ctx, stripe)
 	return paymentConfigResponse(method), nil
 }
 

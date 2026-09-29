@@ -63,13 +63,26 @@ func (m *paymentRepo) FindOne(ctx context.Context, id int64) (*payment.Payment, 
 	return &resp, nil
 }
 
+// paymentEditableColumns are the columns an administrator's edit writes. The
+// platform is fixed at creation and the notify token never changes: a
+// whole-row save could rewrite both from a stale or forged row.
+var paymentEditableColumns = []string{"name", "icon", "domain", "config", "description", "fee_mode", "fee_percent", "fee_amount", "sort", "enable"}
+
+// Update writes the editable columns of the payment method. Enable must be
+// set: a nil value would clear the column, so the caller defaults it first.
 func (m *paymentRepo) Update(ctx context.Context, data *payment.Payment) error {
+	if data == nil || data.Id == 0 {
+		return errors.New("payment method update needs the method id")
+	}
+	if data.Enable == nil {
+		return errors.New("payment method update needs the enable flag")
+	}
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Save(data).Error
+		return conn.Model(&payment.Payment{}).Where("id = ?", data.Id).Select(paymentEditableColumns).Updates(data).Error
 	}, m.getCacheKeys(old)...)
 }
 

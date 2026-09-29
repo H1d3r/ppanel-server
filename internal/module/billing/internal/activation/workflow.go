@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
+	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -68,6 +69,20 @@ func NewWorkflow(deps WorkflowDeps, stages *Service) *Workflow {
 	return &Workflow{deps: deps, stages: stages}
 }
 
+// guestAccountTaken reports that the identity a guest order names already
+// belongs to an account, so the order cannot open one: the same guest paid
+// another of the pending orders the identity may hold, or the identity was
+// registered between the purchase and the payment. The order is refunded to
+// that account instead of waiting for an account that can never be created.
+type guestAccountTaken struct {
+	authType, identifier string
+	userID               int64
+}
+
+func (e *guestAccountTaken) Error() string {
+	return fmt.Sprintf("guest identity %s %s already belongs to user %d", e.authType, e.identifier, e.userID)
+}
+
 func (w *Workflow) ensureGuestAccount(ctx context.Context, orderInfo *order.Order) error {
 	if w.deps.GuestAccounts == nil {
 		return fmt.Errorf("guest account service is not configured")
@@ -81,24 +96,46 @@ func (w *Workflow) ensureGuestAccount(ctx context.Context, orderInfo *order.Orde
 		if err != nil {
 			return err
 		}
-		// A mailbox that gained an account under another spelling since the
-		// purchase must not get a second one; the stage fails for an
-		// operator instead, as it does for the exact identifier.
-		if w.deps.GuestIdentities != nil {
-			if err := portal.EnsureNoMailboxAlias(ctx, w.deps.GuestIdentities, guest.AuthType, guest.Identifier); err != nil {
-				return err
-			}
+		// An identity that gained an account since the purchase, under its
+		// exact spelling or another spelling of the same mailbox, must not
+		// get a second one: the order is refunded to that account.
+		if err := w.ensureIdentityFree(ctx, guest); err != nil {
+			return err
 		}
 		userID, err = w.deps.GuestAccounts.EnsureGuestAccount(ctx, identity.GuestAccountCommand{
 			OrderNo: orderInfo.OrderNo, AuthType: guest.AuthType, Identifier: guest.Identifier,
 			PasswordHash: guest.PasswordHash, LegacyPassword: guest.Password, InviteCode: guest.InviteCode,
 		})
+		if xerr.CodeOf(err) == xerr.UserExist {
+			// Another request registered the identity between the check and
+			// the creation; the account it made is the one to refund to.
+			if takenErr := w.ensureIdentityFree(ctx, guest); takenErr != nil {
+				return takenErr
+			}
+		}
 		if err != nil {
 			return err
 		}
 	}
 	orderInfo.UserId = userID
 	return w.deps.Orders.Update(ctx, orderInfo)
+}
+
+// ensureIdentityFree reports a guestAccountTaken error when the identity of
+// the guest order already belongs to an account; without an identity reader
+// the check is skipped and identity's own uniqueness rule applies.
+func (w *Workflow) ensureIdentityFree(ctx context.Context, guest *order.TemporaryOrderInfo) error {
+	if w.deps.GuestIdentities == nil {
+		return nil
+	}
+	existing, err := portal.FindExistingAccount(ctx, w.deps.GuestIdentities, guest.AuthType, guest.Identifier)
+	if err != nil {
+		return err
+	}
+	if existing != 0 {
+		return &guestAccountTaken{authType: guest.AuthType, identifier: guest.Identifier, userID: existing}
+	}
+	return nil
 }
 
 func (w *Workflow) Activate(ctx context.Context, orderNo string) error {
@@ -125,6 +162,12 @@ func (w *Workflow) Activate(ctx context.Context, orderNo string) error {
 
 	if orderInfo.Type == order.TypeSubscribe && orderInfo.UserId == 0 {
 		if err := w.ensureGuestAccount(ctx, orderInfo); err != nil {
+			var taken *guestAccountTaken
+			if errors.As(err, &taken) && gateway.Collects(orderInfo.Method) {
+				// The order can never open its account; the payment billing
+				// collected goes back to the account the identity has.
+				return w.refundToExistingAccount(ctx, orderInfo, taken)
+			}
 			logger.WithContext(ctx).Error("[ActivateOrderLogic] Guest account stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 			return err
 		}
@@ -195,6 +238,23 @@ func unfulfillable(orderInfo *order.Order, err error) bool {
 		return false
 	}
 	return orderInfo.UserId != 0 && gateway.Collects(orderInfo.Method)
+}
+
+// refundToExistingAccount ends a paid guest order whose identity already
+// has an account: the payment goes to that account's wallet and the order
+// closes bound to it, which completes the activation instead of leaving a
+// paid order that can never create its account.
+func (w *Workflow) refundToExistingAccount(ctx context.Context, orderInfo *order.Order, taken *guestAccountTaken) error {
+	if err := w.stages.RefundUnfulfillableToAccount(ctx, orderInfo.OrderNo, taken.userID); err != nil {
+		logger.WithContext(ctx).Error("[ActivateOrderLogic] Refund of a guest order to the identity's existing account failed",
+			logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo), logger.Field("user_id", taken.userID))
+		return err
+	}
+	logger.WithContext(ctx).Infow("[ActivateOrderLogic] Paid guest order names an identity that already has an account; refunded to that account's wallet",
+		logger.Field("order_no", orderInfo.OrderNo), logger.Field("user_id", taken.userID),
+		logger.Field("amount", orderInfo.Amount), logger.Field("gift_amount", orderInfo.GiftAmount),
+		logger.Field("reason", taken.Error()))
+	return nil
 }
 
 // refundUnfulfillable ends a paid order the subscription domain cannot

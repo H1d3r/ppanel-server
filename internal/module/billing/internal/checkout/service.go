@@ -211,6 +211,16 @@ func ensureCouponUserLimit(ctx context.Context, orders couponUserLimiter, userID
 	return nil
 }
 
+// EnsureCouponUserLimit is ensureCouponUserLimit for the order creators of
+// other subdomains, such as an administrator's.
+func EnsureCouponUserLimit(ctx context.Context, orders CouponUserLimiter, userID int64, c *coupon.Coupon) error {
+	return ensureCouponUserLimit(ctx, orders, userID, c)
+}
+
+// CouponUserLimiter counts a buyer's uses of a coupon; the order repository
+// satisfies it both outside and inside a transaction.
+type CouponUserLimiter = couponUserLimiter
+
 // ReserveCoupon claims one use of the order's coupon inside its creation
 // transaction.
 func ReserveCoupon(ctx context.Context, tx repository.BillingStore, o *orderEntity.Order) error {
