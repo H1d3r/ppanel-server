@@ -77,7 +77,7 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
    ```bash
    ./bin/ppanel-server-linux-amd64 run --config etc/ppanel.yaml
    ```
-   配置文件为空时，首次启动会在 `http://127.0.0.1:8080/init` 提供安装向导，只能从本机访问。远程主机请建立 SSH 隧道
+   配置文件为空时，首次启动会在 `127.0.0.1` 的配置端口 `Port` 上提供安装向导（默认 `http://127.0.0.1:8080/init`），只能从本机访问。远程主机请建立 SSH 隧道
    （`ssh -L 8080:127.0.0.1:8080 user@host`），或设置 `PPANEL_DB` 与 `PPANEL_REDIS` 进行无人值守安装；两种方式都在
    [安装指南](docs/guide/install-zh.md#4-首次启动)中说明。
 
@@ -133,6 +133,7 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
          timeout: 5s
          retries: 3
          start_period: 30s
+       stop_grace_period: 20s
        restart: always
    ```
    首次 `docker compose up` 之前，`./etc/ppanel.yaml` 必须以**文件**形式存在（否则 Docker 会创建同名目录），且对 uid 65532 可写；
@@ -141,6 +142,8 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
    mkdir -p etc && touch etc/ppanel.yaml && sudo chown 65532:65532 etc/ppanel.yaml
    docker compose up -d
    ```
+   `stop_grace_period` 为优雅停机（先排空 HTTP，再依次停止调度器、任务 worker 和链路追踪导出，最长约 18 秒）留出时间；直接用 `docker run`
+   启动的容器请用 `docker stop --time 20` 停止。
 
 4. **拉取已发布的镜像**：`ppanel/ppanel-server:lts` 跟随 LTS 线（`master`），`:latest` 跟随功能线，`:beta` 为预发布，
    `ghcr.io/perfect-panel/ppanel-server:nightly` 是 `dev` 分支的每日构建：

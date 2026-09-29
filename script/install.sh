@@ -124,6 +124,9 @@ EnvironmentFile=-${INSTALL_DIR}/etc/ppanel.env
 ExecStart=${INSTALL_DIR}/ppanel-server run --config ${INSTALL_DIR}/etc/ppanel.yaml
 Restart=on-failure
 RestartSec=5s
+# Shutdown drains HTTP, then the scheduler, the task worker and the trace
+# exporter, which can take up to about 18 s.
+TimeoutStopSec=25
 # The server writes only under its own directory.
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -162,9 +165,11 @@ else
 	cat <<EOF
 Finish the installation in ONE of two ways / 请用以下两种方式之一完成安装：
 
-1. Setup wizard. It listens on 127.0.0.1:8080 of this server only (never on a public
-   interface), so open an SSH tunnel from your computer and use the browser there:
-   安装向导只监听本机的 127.0.0.1:8080（绝不监听公网），请在自己的电脑上建立 SSH 隧道后用浏览器访问：
+1. Setup wizard. It listens on 127.0.0.1 of this server only, at the configured Port (8080
+   by default) and never on a public interface, so open an SSH tunnel from your computer and
+   use the browser there (administrator password: at least 8 characters):
+   安装向导只监听本机的 127.0.0.1（端口为配置的 Port，默认 8080，绝不监听公网），请在自己的电脑上
+   建立 SSH 隧道后用浏览器访问（管理员密码至少 8 个字符）：
      ssh -L 8080:127.0.0.1:8080 root@<this-server>
      http://127.0.0.1:8080/init
 

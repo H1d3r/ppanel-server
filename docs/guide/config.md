@@ -53,7 +53,7 @@ Trace: # OpenTelemetry tracing (see 3.4)
   Endpoint: ""                      # Collector endpoint; empty = no export
   Sampler: 0.1                      # Fraction of traces sampled
   Batcher: "jaeger"                 # jaeger, zipkin, otlpgrpc, otlphttp or file
-  Insecure: true                    # OTLP/gRPC without TLS; false = TLS to the collector
+  OtlpGrpcSecure: false             # TLS for the otlpgrpc exporter; false = plaintext gRPC
   OtlpHeaders: {}                   # Extra headers for the OTLP exporters
   OtlpHttpPath: ""                  # Path for otlphttp with a host:port Endpoint
   OtlpHttpSecure: false             # HTTPS for otlphttp with a host:port Endpoint
@@ -203,9 +203,9 @@ OpenTelemetry tracing of the HTTP requests, the database calls and the queued ta
   - Default: `jaeger`.
   - `zipkin` uses an exporter its upstream has deprecated; prefer an OTLP endpoint (`otlpgrpc`, `otlphttp` or
     `jaeger`) for new deployments.
-- **`Insecure`**: Transport security of the `otlpgrpc` exporter.
-  - Default: `true`: the gRPC connection to the collector is made without TLS, as the server always did. Set it to
-    `false` for a collector that serves TLS; the system's root certificates verify it. `otlphttp` selects TLS through
+- **`OtlpGrpcSecure`**: Transport security of the `otlpgrpc` exporter.
+  - Default: `false`: the gRPC connection to the collector is made without TLS, as the server always did. Set it to
+    `true` for a collector that serves TLS; the system's root certificates verify it. `otlphttp` selects TLS through
     the URL scheme or `OtlpHttpSecure` instead.
 - **`OtlpHeaders`**: Headers sent with every OTLP export, for example an `uptrace-dsn` or an `Authorization` header
   for a hosted collector.
@@ -230,11 +230,15 @@ OpenTelemetry tracing of the HTTP requests, the database calls and the queued ta
   - Required.
 - **`Config`**: Dialect-specific connection parameters.
   - MySQL default: `charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true`.
-  - PostgreSQL default: `sslmode=prefer&TimeZone=Asia/Shanghai&application_name=perfect-panel`.
-  - PostgreSQL: `prefer` uses TLS when the server offers it and otherwise falls back to plaintext without a
-    warning. For a database reached over a network set `sslmode=require`, or `sslmode=verify-full` together with
-    the server's CA certificate, explicitly; `sslmode=disable` is only for a database on the same host or in a
-    private network.
+  - PostgreSQL default: `sslmode=prefer&TimeZone=<AppLocation>&application_name=perfect-panel`, for example
+    `sslmode=prefer&TimeZone=Asia/Shanghai&application_name=perfect-panel`.
+  - PostgreSQL: `prefer` encrypts the connection when the server offers TLS, but does not verify the server's
+    certificate, and falls back to plaintext without a warning when it does not. For a database reached over a
+    network set `sslmode=verify-full` (with the server's CA certificate), or at least `sslmode=require`,
+    explicitly; `sslmode=disable` is only for a database on the same host or in a private network.
+  - PostgreSQL: a `Config` without `TimeZone` gets `TimeZone=<AppLocation>` added automatically. With a custom
+    `Config` and an `AppLocation` other than `Asia/Shanghai`, still write `TimeZone=<AppLocation>` into it
+    explicitly; the server logs an error at start-up when it cannot determine the database zone.
   - The zone in these parameters is the database time zone; see `AppLocation`.
 - **`MaxIdleConns`**: Maximum idle connections.
   - Default: `10`.
@@ -252,16 +256,20 @@ OpenTelemetry tracing of the HTTP requests, the database calls and the queued ta
 The MaxMind GeoLite2 city database gives the login and audit logs a location for each address. Without it the
 server runs normally and records the addresses alone.
 
-- **`Path`**: Path of the `GeoLite2-City.mmdb` file, relative to the working directory.
+- **`Path`**: Path of the `GeoLite2-City.mmdb` file, relative to the working directory. The ASN database
+  (`GeoLite2-ASN.mmdb`) is expected next to it, in the same directory.
   - Default: `./cache/GeoLite2-City.mmdb`. The container image ships a writable `/app/cache` for it.
-- **`Download`**: Download the database at startup when the file at `Path` is missing.
+- **`Download`**: Download the city database at startup when the file at `Path` is missing or fails the `SHA256`
+  check. With `DownloadURL` empty the ASN database is downloaded from the built-in mirror as well; with a custom
+  `DownloadURL` only the city database is fetched, and the ASN database has to be placed next to it by hand.
   - Default: `true`.
-- **`DownloadURL`**: Where to download it from.
+- **`DownloadURL`**: Where to download the city database from.
   - Default: empty, the built-in mirror (a copy of GeoLite2-City published on GitHub). Point it at your own copy,
     or at MaxMind's download link with your licence key, to control what the server loads.
-- **`SHA256`**: Hex SHA-256 digest the file must have; a downloaded or present file with another digest is rejected.
+- **`SHA256`**: Hex SHA-256 digest the city database must have. An existing file with another digest is
+  downloaded again when `Download` is on, and a download with another digest never replaces the file.
   - Default: empty, no check. Set it when `DownloadURL` names a file you control.
-- **`Required`**: Make a missing or invalid database fatal at startup.
+- **`Required`**: Make a missing or invalid city database fatal at startup.
   - Default: `false`: the server starts without geolocation and logs why.
 
 ### 3.7 Redis (`Redis`)
@@ -279,13 +287,16 @@ server runs normally and records the addresses alone.
 
 ### 3.8 Admin Login (`Administrator`)
 
-Used once, to create the first administrator when the database has no users.
+Seeds the first administrator: at every start, when the database has no administrator, one is created from these
+values. The setup wizard writes the installer's email here and never the password.
 
 - **`Email`**: Admin login email.
   - Default: `admin@ppanel.dev`.
 - **`Password`**: Admin login password.
   - Default: empty. When it is empty, a random password is generated and printed once in the startup log
     (`docker logs`, `journalctl -u ppanel`). Sign in with it and change it. A configured value is used as given.
+  - Remove it once the administrator exists: a `Password` still in the file at that point is reported in the log
+    at every start, since the file then holds a credential nothing needs.
 
 ### 3.9 Email Delivery (SMTP)
 
@@ -325,14 +336,15 @@ installations, where the setup wizard (which listens on `127.0.0.1` only) is out
 | Endpoint | Meaning | Response |
 |---|---|---|
 | `GET /healthz` | Liveness: the process and its listener are up. | `200` |
-| `GET /readyz` | Readiness: start-up has completed and the database and Redis answer (the ping result is cached for a few seconds). | `200`, or `503` with a short JSON reason |
+| `GET /readyz` | Readiness: start-up has completed and the database and Redis answer (the probe result is cached for 5 seconds). | `200`, or `503` with `{"status":"unavailable","reason":"…"}`, the reason being `database unreachable`, `redis unreachable`, `runtime bootstrap not finished` or `runtime bootstrap failed` |
 
 Both are unauthenticated and disclose nothing beyond the reason, so they can be exposed to monitoring and load
 balancers; point load-balancer health checks at `/readyz`. Neither is served while the setup wizard is running.
 
-`ppanel-server healthcheck [--config etc/ppanel.yaml]` reads `Port` from the configuration file, requests
-`http://127.0.0.1:<Port>/healthz` and exits with a non-zero status when it gets no answer within 3 seconds. The
-container image's `HEALTHCHECK` runs it, and a systemd or cron watchdog can too.
+`ppanel-server healthcheck [--config etc/ppanel.yaml] [--timeout 3s]` reads the listener settings from the
+configuration file and requests `/healthz` on it: `127.0.0.1:<Port>`, or `<Host>:<Port>` when `Host` is not
+`0.0.0.0`, over HTTPS when `TLS.Enable` is on. It exits with a non-zero status when it gets no healthy answer
+within the timeout. The container image's `HEALTHCHECK` runs it, and a systemd or cron watchdog can too.
 
 ## 6. Best Practices
 

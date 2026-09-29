@@ -30,4 +30,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # Shutdown drains HTTP, then the scheduler, the task worker and the trace
+    # exporter, up to about 18 s; Docker's default 10 s would kill it midway.
+    stop_grace_period: 20s
     restart: always

@@ -95,6 +95,8 @@ EnvironmentFile=-/opt/ppanel-server/etc/ppanel.env
 ExecStart=/opt/ppanel-server/ppanel-server run --config /opt/ppanel-server/etc/ppanel.yaml
 Restart=on-failure
 RestartSec=5s
+# 停止时依次排空 HTTP、调度器、任务 worker 与链路追踪导出，最长约 18 秒。
+TimeoutStopSec=25
 # 服务只在自己的目录下写文件。
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -115,8 +117,8 @@ sudo systemctl enable --now ppanel
 
 ### 4. 首次启动
 
-配置文件为空时服务不会启动 API，而是启动**只监听 `127.0.0.1:8080` 的安装向导**，绝不监听公网接口，因此浏览器无法访问
-`http://服务器地址:8080/init`。请用以下两种方式之一完成安装。
+配置文件为空时服务不会启动 API，而是启动**只监听 `127.0.0.1` 的安装向导**（端口为配置的 `Port`，默认 8080），绝不监听公网接口，
+因此浏览器无法访问 `http://服务器地址:8080/init`。请用以下两种方式之一完成安装。
 
 **A. 通过 SSH 隧道使用向导。** 在自己的电脑上执行：
 
@@ -124,8 +126,9 @@ sudo systemctl enable --now ppanel
 ssh -L 8080:127.0.0.1:8080 user@your-server
 ```
 
-然后在浏览器打开 <http://127.0.0.1:8080/init>，填写数据库、Redis 与首位管理员。向导会测试连接、执行数据库迁移、创建管理员、写入
-`etc/ppanel.yaml`，随后交给 API 服务，后者监听 `Host:Port`（默认 `0.0.0.0:8080`）。
+然后在浏览器打开 <http://127.0.0.1:8080/init>，填写数据库、Redis 与首位管理员（密码至少 8 个字符）。向导会测试连接、执行数据库迁移、创建管理员、写入
+`etc/ppanel.yaml`（只写入管理员邮箱，绝不写入密码），随后交给 API 服务，后者监听 `Host:Port`（默认 `0.0.0.0:8080`）。若在写入文件之后某一步失败，
+重启服务即可从文件继续完成安装。
 
 **B. 通过环境变量无人值守安装。** 在首次启动时用 `PPANEL_DB` 与 `PPANEL_REDIS` 提供连接信息（格式见
 [config-zh.md 第 4 节](config-zh.md#4-环境变量)）。服务会用它们和生成的 `JwtAuth.AccessSecret` 补全空的配置文件——不论 `--config`
@@ -150,10 +153,12 @@ PostgreSQL：`PPANEL_DB=postgres://ppanel:secret@127.0.0.1:5432/ppanel?sslmode=r
 systemctl status ppanel
 curl -fsS http://127.0.0.1:8080/healthz    # 存活探针：进程及其监听器已启动
 curl -fsS http://127.0.0.1:8080/readyz     # 就绪探针：启动完成，数据库与 Redis 均有响应（否则 503）
-/opt/ppanel-server/ppanel-server healthcheck --config /opt/ppanel-server/etc/ppanel.yaml
+/opt/ppanel-server/ppanel-server healthcheck --config /opt/ppanel-server/etc/ppanel.yaml --timeout 3s
 ```
 
-`healthcheck` 向配置端口上的 `/healthz` 发起请求，服务 3 秒内没有响应即以非零状态退出，可用于看门狗。请用首位管理员登录管理面板并修改其密码。
+`healthcheck` 向配置的监听地址（`Host` 不是 `0.0.0.0` 时使用 `Host`，开启 `TLS` 时使用 HTTPS）上的 `/healthz` 发起请求，`--timeout`
+内没有响应即以非零状态退出，可用于看门狗。`/readyz` 返回 `503` 时会以 JSON 给出原因（`database unreachable`、`redis unreachable`、
+`runtime bootstrap not finished`、`runtime bootstrap failed`）。请用首位管理员登录管理面板并修改其密码。
 
 ## 运维
 
@@ -170,6 +175,10 @@ curl -fsS http://127.0.0.1:8080/readyz     # 就绪探针：启动完成，数�
   ```
 
   迁移在启动时执行。迁移一旦执行就不支持降级，唯一的回滚手段是恢复数据库备份。重新运行 `script/install.sh` 会执行同样的升级。
+- **停止**：`systemctl stop ppanel`（容器则为 `docker stop --time 20`）会等待优雅停机：先排空 HTTP，再依次停止调度器、任务 worker 和链路追踪导出，请预留约 20 秒再强制结束。
+- **从 MySQL 迁移到 PostgreSQL**：`ppanel-server migrate mysql2postgres` 把 MySQL 数据库复制到一个空的 PostgreSQL 数据库。请用
+  `--location <IANA 时区>`（默认 `Asia/Shanghai`）指定 MySQL `DATETIME` 值所在的时区，以保证每个时间点不变；详见
+  [tools/mysql2postgres/README.md](../../tools/mysql2postgres/README.md)。
 - **配置**：`etc/ppanel.yaml` 的每个配置项都在 [config-zh.md](config-zh.md) 中说明。文件保存着 JWT 密钥和数据库凭据，请保持权限为 `0600`。
 
 ## Docker
@@ -177,6 +186,7 @@ curl -fsS http://127.0.0.1:8080/readyz     # 就绪探针：启动完成，数�
 容器镜像见 [README_ZH](../../README_ZH.md#-docker-部署)。简而言之：镜像以 uid 65532 运行，`HEALTHCHECK` 运行 `ppanel healthcheck`；
 由于安装向导在容器内只监听 `127.0.0.1`，容器部署必须设置 `PPANEL_DB` 与 `PPANEL_REDIS`，或挂载预先填好的 `etc/ppanel.yaml`。使用仓库中的
 `docker-compose.yml` 时，首次 `docker compose up` 之前 `./etc/ppanel.yaml` 必须以文件形式存在（否则 Docker 会创建同名目录），且 uid 65532 可写。
+停止容器请用 `docker stop --time 20`（compose 文件已设置 `stop_grace_period: 20s`），让优雅停机得以完成。
 
 ## NGINX 反向代理配置
 

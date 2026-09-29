@@ -101,6 +101,9 @@ EnvironmentFile=-/opt/ppanel-server/etc/ppanel.env
 ExecStart=/opt/ppanel-server/ppanel-server run --config /opt/ppanel-server/etc/ppanel.yaml
 Restart=on-failure
 RestartSec=5s
+# Shutdown drains HTTP, then the scheduler, the task worker and the trace
+# exporter, which can take up to about 18 s.
+TimeoutStopSec=25
 # The server writes only under its own directory.
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -124,9 +127,9 @@ sudo systemctl enable --now ppanel
 
 ### 4. First start
 
-With an empty configuration file the server does not start the API. It starts the **setup wizard on
-`127.0.0.1:8080` only**, never on a public interface, so `http://<server>:8080/init` is not reachable from your
-browser. Complete the installation in one of two ways.
+With an empty configuration file the server does not start the API. It starts the **setup wizard on `127.0.0.1`
+only**, at the configured `Port` (8080 by default) and never on a public interface, so `http://<server>:8080/init`
+is not reachable from your browser. Complete the installation in one of two ways.
 
 **A. The wizard through an SSH tunnel.** From your workstation:
 
@@ -134,9 +137,11 @@ browser. Complete the installation in one of two ways.
 ssh -L 8080:127.0.0.1:8080 user@your-server
 ```
 
-Then open <http://127.0.0.1:8080/init> in your browser and enter the database, Redis and first administrator. The
-wizard tests the connections, applies the database migrations, creates the administrator, writes
-`etc/ppanel.yaml` and hands over to the API server, which listens on `Host:Port` (`0.0.0.0:8080` by default).
+Then open <http://127.0.0.1:8080/init> in your browser and enter the database, Redis and first administrator
+(password of at least 8 characters). The wizard tests the connections, applies the database migrations, creates
+the administrator, writes `etc/ppanel.yaml` (with the administrator's email, never the password) and hands over
+to the API server, which listens on `Host:Port` (`0.0.0.0:8080` by default). Should a step fail after the file
+was written, restart the server: it resumes the installation from the file.
 
 **B. Non-interactive, with environment variables.** Give the first start the connections in `PPANEL_DB` and
 `PPANEL_REDIS` ([config.md, section 4](config.md#4-environment-variables) has the formats). The server completes
@@ -163,11 +168,14 @@ once the file has a secret, so the file may stay; delete it if you prefer not to
 systemctl status ppanel
 curl -fsS http://127.0.0.1:8080/healthz    # liveness: the process and its listener are up
 curl -fsS http://127.0.0.1:8080/readyz     # readiness: start-up finished, database and Redis answer (503 otherwise)
-/opt/ppanel-server/ppanel-server healthcheck --config /opt/ppanel-server/etc/ppanel.yaml
+/opt/ppanel-server/ppanel-server healthcheck --config /opt/ppanel-server/etc/ppanel.yaml --timeout 3s
 ```
 
-`healthcheck` requests `/healthz` on the configured port and exits non-zero when the server does not answer within
-3 seconds; use it from a watchdog. Sign in to the admin panel with the first administrator and change its password.
+`healthcheck` requests `/healthz` on the configured listener (`Host` when it is not `0.0.0.0`, HTTPS when `TLS`
+is enabled) and exits non-zero when the server does not answer within `--timeout`; use it from a watchdog. A `503`
+from `/readyz` names the reason as JSON (`database unreachable`, `redis unreachable`, `runtime bootstrap not
+finished`, `runtime bootstrap failed`). Sign in to the admin panel with the first administrator and change its
+password.
 
 ## Operations
 
@@ -186,6 +194,13 @@ curl -fsS http://127.0.0.1:8080/readyz     # readiness: start-up finished, datab
 
   The migrations run at start-up. Downgrading is not supported once a migration has run: the only rollback is
   restoring the database backup. Re-running `script/install.sh` performs the same upgrade.
+- **Stopping**: `systemctl stop ppanel` (and `docker stop --time 20` for the container) waits for the graceful
+  shutdown, which drains HTTP first, then the scheduler, the task worker and the trace exporter; allow about 20 s
+  before forcing it.
+- **Moving from MySQL to PostgreSQL**: `ppanel-server migrate mysql2postgres` copies a MySQL database into an
+  empty PostgreSQL one. Pass `--location <IANA zone>` (default `Asia/Shanghai`), the zone the MySQL `DATETIME`
+  values are stored in, so every stored time keeps its instant; see
+  [tools/mysql2postgres/README.md](../../tools/mysql2postgres/README.md).
 - **Configuration**: every key of `etc/ppanel.yaml` is documented in [config.md](config.md). The file holds the
   JWT secret and the database credentials; keep it at mode `0600`.
 
@@ -195,7 +210,9 @@ The [README](../../README.md#-docker-deployment) covers the container image. In 
 its `HEALTHCHECK` runs `ppanel healthcheck`, and because the setup wizard listens on `127.0.0.1` inside the
 container, a container deployment must either set `PPANEL_DB` and `PPANEL_REDIS` or mount a pre-filled
 `etc/ppanel.yaml`. With the repository's `docker-compose.yml`, `./etc/ppanel.yaml` must exist as a file before the
-first `docker compose up` (Docker otherwise creates a directory of that name) and be writable by uid 65532.
+first `docker compose up` (Docker otherwise creates a directory of that name) and be writable by uid 65532. Stop
+the container with `docker stop --time 20` (the compose file sets `stop_grace_period: 20s`) so the graceful
+shutdown can finish.
 
 ## NGINX reverse proxy
 

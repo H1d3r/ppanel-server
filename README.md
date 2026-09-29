@@ -79,8 +79,8 @@ Deploying a release binary instead of building? See the [installation guide](doc
    ```bash
    ./bin/ppanel-server-linux-amd64 run --config etc/ppanel.yaml
    ```
-   With an empty configuration file the first start serves the setup wizard on `http://127.0.0.1:8080/init`,
-   reachable from the same machine only. On a remote host open an SSH tunnel
+   With an empty configuration file the first start serves the setup wizard on `127.0.0.1` at the configured
+   `Port` (`http://127.0.0.1:8080/init` by default), reachable from the same machine only. On a remote host open an SSH tunnel
    (`ssh -L 8080:127.0.0.1:8080 user@host`) or set `PPANEL_DB` and `PPANEL_REDIS` for a non-interactive
    installation; both are described in the [installation guide](docs/guide/install.md#4-first-start).
 
@@ -140,6 +140,7 @@ one of two ways:
          timeout: 5s
          retries: 3
          start_period: 30s
+       stop_grace_period: 20s
        restart: always
    ```
    `./etc/ppanel.yaml` must exist as a **file** before the first `docker compose up` (Docker creates a directory of
@@ -148,6 +149,8 @@ one of two ways:
    mkdir -p etc && touch etc/ppanel.yaml && sudo chown 65532:65532 etc/ppanel.yaml
    docker compose up -d
    ```
+   `stop_grace_period` gives the graceful shutdown (HTTP first, then the scheduler, the task worker and the trace
+   exporter, up to about 18 s) the time it needs; with plain `docker run`, stop with `docker stop --time 20`.
 
 4. **Pull a published image**: `ppanel/ppanel-server:lts` follows the LTS line (`master`), `:latest` the feature
    line, `:beta` the prereleases, and `ghcr.io/perfect-panel/ppanel-server:nightly` is the nightly build of `dev`:

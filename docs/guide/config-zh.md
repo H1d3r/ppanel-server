@@ -51,7 +51,7 @@ Trace: # OpenTelemetry 链路追踪（见 3.4）
   Endpoint: ""                      # 收集器地址；空 = 不导出
   Sampler: 0.1                      # 采样比例
   Batcher: "jaeger"                 # jaeger、zipkin、otlpgrpc、otlphttp 或 file
-  Insecure: true                    # OTLP/gRPC 不使用 TLS；false = 与收集器之间启用 TLS
+  OtlpGrpcSecure: false             # otlpgrpc 导出器是否使用 TLS；false = 明文 gRPC
   OtlpHeaders: {}                   # OTLP 导出附加的请求头
   OtlpHttpPath: ""                  # Endpoint 为 host:port 时 otlphttp 的路径
   OtlpHttpSecure: false             # Endpoint 为 host:port 时 otlphttp 是否使用 HTTPS
@@ -178,8 +178,8 @@ Administrator: # 首位管理员，仅在首次启动时创建
 - **`Batcher`**：导出器：`jaeger`、`zipkin`、`otlpgrpc`、`otlphttp` 或 `file`。
   - 默认：`jaeger`。
   - `zipkin` 使用的导出器已被上游弃用，新部署请选择 OTLP 端点（`otlpgrpc`、`otlphttp` 或 `jaeger`）。
-- **`Insecure`**：`otlpgrpc` 导出器的传输安全。
-  - 默认：`true`：与收集器之间的 gRPC 连接不使用 TLS，与服务一直以来的行为相同。收集器提供 TLS 时设为 `false`，使用系统根证书校验。`otlphttp` 通过 URL scheme 或 `OtlpHttpSecure` 决定是否 TLS。
+- **`OtlpGrpcSecure`**：`otlpgrpc` 导出器的传输安全。
+  - 默认：`false`：与收集器之间的 gRPC 连接不使用 TLS，与服务一直以来的行为相同。收集器提供 TLS 时设为 `true`，使用系统根证书校验。`otlphttp` 通过 URL scheme 或 `OtlpHttpSecure` 决定是否 TLS。
 - **`OtlpHeaders`**：每次 OTLP 导出附带的请求头，例如托管收集器需要的 `uptrace-dsn` 或 `Authorization`。
 - **`OtlpHttpPath`**：`Endpoint` 为纯 `host:port` 时 OTLP/HTTP 接收端的路径，例如 `/v1/traces`。
 - **`OtlpHttpSecure`**：`Endpoint` 为纯 `host:port` 时 `otlphttp` 是否使用 HTTPS。
@@ -201,9 +201,12 @@ Administrator: # 首位管理员，仅在首次启动时创建
   - 必填。
 - **`Config`**：对应数据库的连接参数。
   - MySQL 默认：`charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true`。
-  - PostgreSQL 默认：`sslmode=prefer&TimeZone=Asia/Shanghai&application_name=perfect-panel`。
-  - PostgreSQL：`prefer` 在服务器提供 TLS 时使用 TLS，否则会静默回退到明文。经网络访问的数据库请显式设置
-    `sslmode=require`，或配合服务器 CA 证书使用 `sslmode=verify-full`；`sslmode=disable` 只适合同一主机或内网中的数据库。
+  - PostgreSQL 默认：`sslmode=prefer&TimeZone=<AppLocation>&application_name=perfect-panel`，例如
+    `sslmode=prefer&TimeZone=Asia/Shanghai&application_name=perfect-panel`。
+  - PostgreSQL：`prefer` 在服务器提供 TLS 时加密连接，但不校验服务器证书；服务器不提供 TLS 时会静默回退到明文。经网络访问的数据库请显式设置
+    `sslmode=verify-full`（配合服务器 CA 证书），至少也要 `sslmode=require`；`sslmode=disable` 只适合同一主机或内网中的数据库。
+  - PostgreSQL：`Config` 中没有 `TimeZone` 时会自动补上 `TimeZone=<AppLocation>`。自定义了 `Config` 且 `AppLocation` 不是
+    `Asia/Shanghai` 的部署，仍请显式写上 `TimeZone=<AppLocation>`；无法确定数据库时区时服务会在启动日志中记录错误。
   - 这些参数中的时区即数据库时区，见 `AppLocation`。
 - **`MaxIdleConns`**：最大空闲连接数。
   - 默认：`10`。
@@ -220,15 +223,16 @@ Administrator: # 首位管理员，仅在首次启动时创建
 
 MaxMind GeoLite2 城市库为登录与审计日志中的地址标注位置。没有它服务照常运行，只记录地址本身。
 
-- **`Path`**：`GeoLite2-City.mmdb` 文件的路径，相对于工作目录。
+- **`Path`**：`GeoLite2-City.mmdb` 文件的路径，相对于工作目录。ASN 库（`GeoLite2-ASN.mmdb`）应放在同一目录中。
   - 默认：`./cache/GeoLite2-City.mmdb`。容器镜像为它准备了可写的 `/app/cache`。
-- **`Download`**：`Path` 处没有文件时，启动时自动下载。
+- **`Download`**：`Path` 处没有文件或文件未通过 `SHA256` 校验时，启动时自动下载城市库。`DownloadURL` 为空时还会从内置镜像下载 ASN 库；
+  自定义了 `DownloadURL` 时只下载城市库，ASN 库需要手动放到城市库旁边。
   - 默认：`true`。
-- **`DownloadURL`**：下载地址。
+- **`DownloadURL`**：城市库的下载地址。
   - 默认：空，使用内置镜像（GitHub 上发布的一份 GeoLite2-City 副本）。想控制服务加载的内容，可以指向自己托管的副本，或带许可密钥的 MaxMind 下载链接。
-- **`SHA256`**：文件应有的十六进制 SHA-256 摘要；下载的或已存在的文件摘要不符即被拒绝。
+- **`SHA256`**：城市库应有的十六进制 SHA-256 摘要。已存在的文件摘要不符时，`Download` 开启则重新下载；下载得到的文件摘要不符时绝不会替换现有文件。
   - 默认：空，不校验。`DownloadURL` 指向自己控制的文件时建议设置。
-- **`Required`**：库缺失或无效时拒绝启动。
+- **`Required`**：城市库缺失或无效时拒绝启动。
   - 默认：`false`：服务在没有地理位置的情况下启动，并在日志中说明原因。
 
 ### 3.7 Redis 配置 (`Redis`)
@@ -244,13 +248,14 @@ MaxMind GeoLite2 城市库为登录与审计日志中的地址标注位置。没
 
 ### 3.8 管理员登录 (`Administrator`)
 
-仅在数据库中还没有任何用户时使用一次，用来创建首位管理员。
+用来创建首位管理员：每次启动时，只要数据库中还没有管理员，就按这里的值创建一个。安装向导会把安装者的邮箱写入这里，绝不会写入密码。
 
 - **`Email`**：管理员登录邮箱。
   - 默认：`admin@ppanel.dev`。
 - **`Password`**：管理员登录密码。
   - 默认：空。留空时会生成随机密码并在启动日志（`docker logs`、`journalctl -u ppanel`）中打印一次，请用它登录后立即修改；
     填写了则按填写的值使用。
+  - 管理员创建之后请把它删掉：管理员已存在而文件里仍留有 `Password` 时，每次启动都会在日志中提示，因为文件中保存着一份无人需要的凭据。
 
 ### 3.9 邮件发送（SMTP）
 
@@ -285,12 +290,13 @@ SMTP 中继不在本文件中配置：管理员在面板的系统设置（邮件
 | 端点 | 含义 | 响应 |
 |---|---|---|
 | `GET /healthz` | 存活探针：进程及其监听器已启动。 | `200` |
-| `GET /readyz` | 就绪探针：启动流程已完成，且数据库与 Redis 均有响应（ping 结果缓存数秒）。 | `200`，否则 `503` 并附简短的 JSON 原因 |
+| `GET /readyz` | 就绪探针：启动流程已完成，且数据库与 Redis 均有响应（探测结果缓存 5 秒）。 | `200`，否则 `503` 并返回 `{"status":"unavailable","reason":"…"}`，reason 为 `database unreachable`、`redis unreachable`、`runtime bootstrap not finished` 或 `runtime bootstrap failed` 之一 |
 
 两者都不需要认证，除原因外不泄露任何信息，可以开放给监控与负载均衡；负载均衡的健康检查请指向 `/readyz`。安装向导运行期间两者都不提供。
 
-`ppanel-server healthcheck [--config etc/ppanel.yaml]` 从配置文件读取 `Port`，请求 `http://127.0.0.1:<Port>/healthz`，
-3 秒内没有得到响应即以非零状态退出。容器镜像的 `HEALTHCHECK` 就运行它，systemd 或 cron 的看门狗也可以使用。
+`ppanel-server healthcheck [--config etc/ppanel.yaml] [--timeout 3s]` 从配置文件读取监听设置并请求其上的 `/healthz`：
+`127.0.0.1:<Port>`，`Host` 不是 `0.0.0.0` 时为 `<Host>:<Port>`，开启 `TLS.Enable` 时使用 HTTPS。超时内没有得到健康的响应即以非零状态退出。
+容器镜像的 `HEALTHCHECK` 就运行它，systemd 或 cron 的看门狗也可以使用。
 
 ## 6. 最佳实践
 
