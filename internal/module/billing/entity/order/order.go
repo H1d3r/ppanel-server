@@ -36,6 +36,7 @@ type Order struct {
 	Status                 uint8     `gorm:"type:tinyint(1);not null;default:1;comment:Order Status: 1: Pending, 2: Paid, 3:Close, 4: Failed, 5:Finished;"`
 	SubscribeId            int64     `gorm:"type:bigint;not null;default:0;comment:Subscribe Id"`
 	SubscribeToken         string    `gorm:"type:varchar(255);default:null;comment:Renewal Subscribe Token"`
+	UserSubscribeId        int64     `gorm:"column:user_subscribe_id;type:bigint;not null;default:0;comment:User subscription renewed or reset by the order"`
 	GuestAuthType          string    `gorm:"type:varchar(255);not null;default:'';comment:Guest auth type before account activation"`
 	GuestIdentifier        string    `gorm:"type:varchar(255);not null;default:'';comment:Guest auth identifier before account activation"`
 	GuestPasswordHash      string    `gorm:"type:varchar(255);not null;default:'';comment:Guest password hash before account activation"`
@@ -85,6 +86,7 @@ type Details struct {
 	Status              uint8                `gorm:"type:tinyint(1);not null;default:1;comment:Order Status: 1: Pending, 2: Paid, 3: Failed"`
 	SubscribeId         int64                `gorm:"type:bigint;not null;default:0;comment:Subscribe Id"`
 	SubscribeToken      string               `gorm:"type:varchar(255);default:null;comment:Renewal Subscribe Token"`
+	UserSubscribeId     int64                `gorm:"column:user_subscribe_id;type:bigint;not null;default:0;comment:User subscription renewed or reset by the order"`
 	Subscribe           *subscribe.Subscribe `gorm:"foreignKey:SubscribeId;references:Id"`
 	IsNew               bool                 `gorm:"type:tinyint(1);not null;default:0;comment:Is New Order"`
 	CreatedAt           time.Time            `gorm:"<-:create;comment:Create Time"`
