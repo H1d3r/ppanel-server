@@ -6,14 +6,14 @@ import (
 	"github.com/perfect-panel/server/internal/infra/taskqueue"
 )
 
-// queueRedisDB is the Redis database of the task queue. The producer, the
-// consumer and the scheduler must agree on it, so it is set here only.
-const queueRedisDB = 5
-
 // QueueRedisOpt is the task queue's Redis connection, shared by the task
-// client, the consumer and the periodic scheduler.
+// client, the consumer and the periodic scheduler. The queue lives in the
+// Redis database Redis.QueueDB names (5 unless the file says otherwise), so
+// two deployments sharing one Redis keep their queues apart by giving each
+// its own value; the producer, the consumer and the scheduler read it from
+// here only.
 func QueueRedisOpt(c config.Config) asynq.RedisClientOpt {
-	return asynq.RedisClientOpt{Addr: c.Redis.Host, Password: c.Redis.Pass, DB: queueRedisDB}
+	return asynq.RedisClientOpt{Addr: c.Redis.Host, Password: c.Redis.Pass, DB: c.Redis.QueueDB}
 }
 
 // NewAsynqClient returns the tracing asynq client: EnqueueContext stamps the
