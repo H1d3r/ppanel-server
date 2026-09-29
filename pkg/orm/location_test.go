@@ -51,7 +51,11 @@ func TestSessionLocation(t *testing.T) {
 		{"mysql parameters without loc use the driver's UTC", Mysql{Config: Config{Driver: DriverMySQL, Config: "charset=utf8mb4&parseTime=true"}}, "UTC"},
 		{"postgres defaults", Mysql{Config: Config{Driver: DriverPostgres}}, DefaultLocation},
 		{"postgres explicit zone", Mysql{Config: Config{Driver: DriverPostgres, Config: "sslmode=disable&TimeZone=UTC"}}, "UTC"},
-		{"postgres left to the server", Mysql{Config: Config{Driver: DriverPostgres, Config: "sslmode=disable"}}, ""},
+		{"postgres lower-case zone key", Mysql{Config: Config{Driver: DriverPostgres, Config: "sslmode=disable&timezone=Europe/Paris"}}, "Europe/Paris"},
+		// Custom parameters without a zone get Location's zone in the DSN.
+		{"postgres parameters without a zone", Mysql{Config: Config{Driver: DriverPostgres, Config: "sslmode=disable"}}, DefaultLocation},
+		{"postgres parameters without a zone in a location", Mysql{Config: Config{Driver: DriverPostgres, Config: "sslmode=require"}, Location: "Europe/Paris"}, "Europe/Paris"},
+		{"postgres parameters that do not parse", Mysql{Config: Config{Driver: DriverPostgres, Config: "sslmode=%zz"}}, ""},
 	} {
 		if got := tc.m.SessionLocation(); got != tc.want {
 			t.Errorf("%s: SessionLocation = %q, want %q", tc.name, got, tc.want)

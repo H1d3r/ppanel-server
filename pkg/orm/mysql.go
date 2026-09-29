@@ -58,12 +58,28 @@ func locationOrDefault(location string) string {
 	return location
 }
 
+// postgresTimeZoneKeys are the spellings of the PostgreSQL session time-zone
+// parameter the DSN may use; GORM's dialector matches all three.
+var postgresTimeZoneKeys = []string{"TimeZone", "timezone", "time_zone"}
+
+// postgresTimeZone returns the session zone params name, or "" when they
+// name none.
+func postgresTimeZone(params url.Values) string {
+	for _, key := range postgresTimeZoneKeys {
+		if zone := params.Get(key); zone != "" {
+			return zone
+		}
+	}
+	return ""
+}
+
 // SessionLocation reports the time zone the connection stores and reads
 // timestamps in: the loc parameter for MySQL (the driver's UTC when custom
 // parameters name none, the process zone's name for "Local"), the TimeZone
-// parameter for PostgreSQL ("" when custom parameters leave it to the
-// server), and the default parameters' zone otherwise. Stored times and
-// per-day statistics are in this zone.
+// parameter for PostgreSQL (Location's zone when custom parameters name
+// none, since postgresDsn adds it), and the default parameters' zone
+// otherwise. It is "" only for parameters that do not parse. Stored times
+// and per-day statistics are in this zone.
 func (m Mysql) SessionLocation() string {
 	params := m.Config.Config
 	if m.Driver() == DriverPostgres {
@@ -74,12 +90,10 @@ func (m Mysql) SessionLocation() string {
 		if err != nil {
 			return ""
 		}
-		for _, key := range []string{"TimeZone", "timezone", "time_zone"} {
-			if zone := values.Get(key); zone != "" {
-				return zone
-			}
+		if zone := postgresTimeZone(values); zone != "" {
+			return zone
 		}
-		return ""
+		return locationOrDefault(m.Location)
 	}
 	if params == "" {
 		return locationOrDefault(m.Location)
@@ -113,12 +127,21 @@ func legacyMySQLQuery(location string) string {
 	return "charset=utf8mb4&parseTime=true&loc=" + url.QueryEscape(locationOrDefault(location))
 }
 
+// DefaultPostgresSSLMode is the sslmode of the default PostgreSQL
+// parameters: the connection is encrypted when the server offers TLS and
+// falls back to plaintext when it does not, so a server without a
+// certificate still works. It does not verify the server; deployments that
+// reach the database over a network should set sslmode=verify-full in the
+// parameters. Configurations written before this default keep their
+// sslmode=disable.
+const DefaultPostgresSSLMode = "prefer"
+
 // DefaultPostgresQuery returns the default PostgreSQL connection parameters,
 // with the session time zone set to location (DefaultLocation when empty).
 // The zone's slashes stay visible; see encodePostgresParams.
 func DefaultPostgresQuery(location string) string {
 	zone := strings.ReplaceAll(url.QueryEscape(locationOrDefault(location)), "%2F", "/")
-	return "sslmode=disable&TimeZone=" + zone + "&application_name=" + defaultPostgresApplicationName
+	return "sslmode=" + DefaultPostgresSSLMode + "&TimeZone=" + zone + "&application_name=" + defaultPostgresApplicationName
 }
 
 // isDefaultMySQLQuery reports whether query is a default MySQL parameter set
@@ -153,7 +176,8 @@ type Mysql struct {
 	Config Config
 	// Location is the IANA time zone of the default connection parameters,
 	// used when Config.Config is empty or, for PostgreSQL, still a MySQL
-	// default. Empty keeps DefaultLocation.
+	// default, and the session zone of PostgreSQL parameters that name none.
+	// Empty keeps DefaultLocation.
 	Location string
 }
 
@@ -187,19 +211,30 @@ func (m Mysql) Dsn() string {
 	}
 }
 
-// MigrationDsn returns the DSN the schema migrations connect with.
+// MigrationDsn returns the DSN the schema migrations connect with. For
+// MySQL the user name and password are URL-escaped: golang-migrate's mysql
+// driver unescapes both (a compatibility remnant of when it parsed the DSN
+// with net/url), so a password with %, + or @ handed over as is would be
+// altered. The PostgreSQL DSN is a URL already, with escaped credentials.
 func (m Mysql) MigrationDsn() string {
-	return m.Dsn()
+	if m.Driver() != DriverMySQL {
+		return m.Dsn()
+	}
+	return url.QueryEscape(m.Config.Username) + ":" + url.QueryEscape(m.Config.Password) + "@tcp(" + m.Config.Addr + ")/" + m.Config.Dbname + "?" + m.mysqlQuery()
 }
 
 func (m Mysql) mysqlDsn() string {
+	return m.Config.Username + ":" + m.Config.Password + "@tcp(" + m.Config.Addr + ")/" + m.Config.Dbname + "?" + m.mysqlQuery()
+}
+
+// mysqlQuery returns the MySQL connection parameters with the defaults
+// filled in.
+func (m Mysql) mysqlQuery() string {
 	query := m.Config.Config
 	if query == "" {
-		query = DefaultMySQLQuery(m.Location)
-	} else {
-		query = withDefaultMySQLParams(query)
+		return DefaultMySQLQuery(m.Location)
 	}
-	return m.Config.Username + ":" + m.Config.Password + "@tcp(" + m.Config.Addr + ")/" + m.Config.Dbname + "?" + query
+	return withDefaultMySQLParams(query)
 }
 
 // withDefaultMySQLParams enables client-side placeholder interpolation only
@@ -246,6 +281,14 @@ func (m Mysql) postgresDsn() string {
 	} else {
 		if params.Get("application_name") == "" {
 			params.Set("application_name", defaultPostgresApplicationName)
+		}
+		// GORM registers the timestamp codec that reads timestamp columns
+		// in the DSN's zone only when the DSN names one; without it every
+		// stored time reads back labelled UTC, hours off the zone it was
+		// written in. Custom parameters that leave the zone out get
+		// Location's zone, like the default parameters.
+		if postgresTimeZone(params) == "" {
+			params.Set("TimeZone", locationOrDefault(m.Location))
 		}
 		u.RawQuery = encodePostgresParams(params)
 	}

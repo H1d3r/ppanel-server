@@ -202,7 +202,7 @@ func TestDefaultParametersFollowTheLocation(t *testing.T) {
 	if DefaultMySQLQuery("") != DefaultMySQLConfig || DefaultMySQLQuery(DefaultLocation) != DefaultMySQLConfig {
 		t.Fatalf("default MySQL parameters changed: %q", DefaultMySQLQuery(""))
 	}
-	const defaultPostgresQuery = "sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel"
+	const defaultPostgresQuery = "sslmode=prefer&TimeZone=Asia/Shanghai&application_name=perfect-panel"
 	if DefaultPostgresQuery("") != defaultPostgresQuery || DefaultPostgresQuery(DefaultLocation) != defaultPostgresQuery {
 		t.Fatalf("default PostgreSQL parameters changed: %q", DefaultPostgresQuery(""))
 	}
