@@ -1,6 +1,30 @@
 // Package schema migrates the database schema with the SQL migrations of both
 // dialects embedded in the binary, and seeds the first administrator of a
 // fresh installation.
+//
+// # Time columns in the PostgreSQL schema
+//
+// The PostgreSQL migrations mix two column types. The core tables, ported
+// from MySQL's DATETIME(3), use TIMESTAMP(3) (without time zone): a wall
+// clock, stored as the application writes it, in the session time zone the
+// connection parameters pin (pkg/orm adds TimeZone=<AppLocation> to every
+// DSN that names none). Seventeen columns added later — servers'
+// last_reported_at, the subscription_*, domain_event_*, user_wallet,
+// telegram_topic and task_error tables — use TIMESTAMPTZ: an instant, which
+// PostgreSQL converts to the session zone on read.
+//
+// Both agree as long as the session zone is the application's zone, which
+// the DSN now guarantees; a DSN without a zone used to read TIMESTAMP
+// columns back labelled UTC while TIMESTAMPTZ columns stayed right, so the
+// same table carried two meanings. The existing columns are not migrated:
+// rewriting TIMESTAMP(3) columns of populated tables to TIMESTAMPTZ takes a
+// full-table rewrite per column and a matching MySQL change for nothing
+// the pinned zone does not already give.
+//
+// For a new column, use TIMESTAMPTZ (and DATETIME(3) on MySQL): it stores
+// an instant whatever the session zone is, needs no zone convention, and
+// reads back in the session zone like the older columns. Use TIMESTAMP only
+// for a calendar wall clock that must not shift with the zone.
 package schema
 
 import (
