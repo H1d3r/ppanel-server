@@ -3,6 +3,7 @@ package schema
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/perfect-panel/server/pkg/orm"
@@ -88,9 +90,41 @@ func TestPostgresMigrationURLKeepsTheApplicationDSN(t *testing.T) {
 	if want := "pgx5://" + strings.TrimPrefix(dsn, "postgres://"); got != want || !strings.HasPrefix(dsn, "postgres://") {
 		t.Fatalf("postgresMigrationURL(%q) = %q, want %q", dsn, got, want)
 	}
-	for _, part := range []string{"p%40ss%2Fword@db:5432/ppanel?", "sslmode=disable", "TimeZone=Asia/Shanghai", "application_name=perfect-panel"} {
+	for _, part := range []string{"p%40ss%2Fword@db:5432/ppanel?", "sslmode=prefer", "TimeZone=Asia/Shanghai", "application_name=perfect-panel"} {
 		if !strings.Contains(got, part) {
 			t.Fatalf("migration URL %q lost %q", got, part)
+		}
+	}
+}
+
+// golang-migrate's mysql driver strips the mysql:// scheme, parses the rest
+// with the MySQL driver and URL-unescapes the user name and password. A
+// password with %, + or @ used to authenticate as something else, so the
+// migration failed on a database GORM had just connected to. The test replays
+// the driver's sequence on the URL Migrate builds.
+func TestMySQLMigrationURLRoundTripsReservedCredentialCharacters(t *testing.T) {
+	for _, password := range []string{"Ab+cd9%2F", "p@ss/word", "with space", "q?mark&amp"} {
+		m := orm.Mysql{Config: orm.Config{Driver: orm.DriverMySQL, Addr: "db:3306", Username: "us@r", Password: password, Dbname: "ppanel"}}
+
+		databaseURL := ensureScheme(orm.DriverMySQL, m.MigrationDsn())
+
+		if !strings.HasPrefix(databaseURL, "mysql://") || strings.Count(databaseURL, "://") != 1 {
+			t.Fatalf("migration URL %q, want exactly one mysql:// scheme", databaseURL)
+		}
+		cfg, err := mysqldriver.ParseDSN(strings.TrimPrefix(databaseURL, "mysql://"))
+		if err != nil {
+			t.Fatalf("parse %q: %v", databaseURL, err)
+		}
+		user, err := url.QueryUnescape(cfg.User)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := url.QueryUnescape(cfg.Passwd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if user != "us@r" || got != password || cfg.DBName != "ppanel" || cfg.Addr != "db:3306" {
+			t.Fatalf("golang-migrate connects as %q/%q to %s/%s, want us@r/%q to db:3306/ppanel (URL %q)", user, got, cfg.Addr, cfg.DBName, password, databaseURL)
 		}
 	}
 }

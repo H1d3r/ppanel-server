@@ -30,7 +30,7 @@ func TestDownloadGeoIPDatabaseInstallsVerifiedDatabase(t *testing.T) {
 	if err != nil || record.Country.IsoCode != "AU" {
 		t.Fatalf("lookup = %+v (err %v), want the served record", record, err)
 	}
-	assertOnlyFile(t, dir, "GeoLite2-City.mmdb")
+	assertOnlyCityDatabase(t, dir)
 }
 
 // A download that is not a complete database of the expected type must
@@ -67,7 +67,7 @@ func TestDownloadGeoIPDatabaseRejectsUnverifiedDownloads(t *testing.T) {
 			if current, _ := os.ReadFile(path); !bytes.Equal(current, active) {
 				t.Fatal("unverified download replaced the active database")
 			}
-			assertOnlyFile(t, dir, "GeoLite2-City.mmdb")
+			assertOnlyCityDatabase(t, dir)
 		})
 	}
 }
@@ -94,8 +94,11 @@ func serveBytes(t *testing.T, body []byte) *httptest.Server {
 	return server
 }
 
-func assertOnlyFile(t *testing.T, dir, name string) {
+// assertOnlyCityDatabase checks that dir holds the City database and nothing
+// else: no temporary file of a download, no ASN database.
+func assertOnlyCityDatabase(t *testing.T, dir string) {
 	t.Helper()
+	const name = "GeoLite2-City.mmdb"
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

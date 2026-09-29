@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/perfect-panel/server/internal/app/bootstrap"
 	"github.com/perfect-panel/server/internal/app/lifecycle"
@@ -17,6 +18,9 @@ import (
 	"github.com/perfect-panel/server/internal/transport/task/order"
 	"github.com/perfect-panel/server/internal/transport/task/sms"
 	"github.com/perfect-panel/server/internal/transport/task/traffic"
+	"github.com/perfect-panel/server/pkg/trace"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // NewServices assembles the application from the configuration and returns
@@ -26,22 +30,34 @@ func NewServices(c config.Config) *lifecycle.Group {
 	return NewApplication(c).services(c)
 }
 
+// services returns the process's service group. The group starts the
+// services together: the task handlers read the runtime settings the HTTP
+// service's bootstrap loads, so the worker consumes only once the bootstrap
+// signals them; the scheduler only enqueues, and its tasks wait in the queue
+// until then.
+//
+// The group stops them in the reverse of the order added here: the HTTP
+// server first, so no new request arrives while the workers drain, then the
+// scheduler, then the task worker, and last the trace exporter, which
+// flushes the spans every service produced while stopping. The budget is
+// shutdownTimeout for open requests, asynq's eight seconds for running
+// tasks and trace's five seconds for the flush; the worst case exceeds
+// Docker's default ten-second grace, so a deployment that must not lose
+// in-flight tasks sets stop_grace_period (or --stop-timeout) to 20 s.
 func (srv *Application) services(c config.Config) *lifecycle.Group {
-	// The group starts the services together. The task handlers read the
-	// runtime settings the HTTP service's bootstrap loads, so the worker
-	// consumes only once the bootstrap signals them; the scheduler only
-	// enqueues, and its tasks wait in the queue until then.
 	bootstrapped := lifecycle.NewReadiness()
 	services := lifecycle.NewServiceGroup()
-	services.Add(NewService(srv.serviceDependencies(bootstrapped)))
+	services.Add(lifecycle.WithStop(trace.StopAgent))
 	services.Add(task.NewService(QueueRedisOpt(c), srv.taskDependencies(bootstrapped)))
 	services.Add(scheduler.NewService(QueueRedisOpt(c), c.AppLocation))
+	services.Add(NewService(srv.serviceDependencies(bootstrapped)))
 	return services
 }
 
 // serviceDependencies are the HTTP service's: the runtime bootstrap it runs
-// before listening and reports on bootstrapped, the routes it serves and the
-// runtime hooks it installs.
+// before listening and reports on bootstrapped, the routes it serves, the
+// runtime hooks it installs and the dependencies its readiness endpoint
+// pings.
 func (srv *Application) serviceDependencies(bootstrapped *lifecycle.Readiness) Dependencies {
 	return Dependencies{
 		Config:       srv.Runtime.Config,
@@ -58,6 +74,34 @@ func (srv *Application) serviceDependencies(bootstrapped *lifecycle.Readiness) D
 		},
 		SetRestart:             srv.Runtime.SetRestart,
 		SetReinitializeHandler: srv.Runtime.SetReinitialize,
+		Probes: []httpserver.Probe{
+			{Name: "database", Ping: pingDatabase(srv.DB)},
+			{Name: "redis", Ping: pingRedis(srv.Redis)},
+		},
+	}
+}
+
+// pingDatabase pings the connection pool db opened.
+func pingDatabase(db *gorm.DB) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if db == nil {
+			return fmt.Errorf("no database connection")
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			return err
+		}
+		return sqlDB.PingContext(ctx)
+	}
+}
+
+// pingRedis pings the Redis server rds connects to.
+func pingRedis(rds *redis.Client) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if rds == nil {
+			return fmt.Errorf("no redis connection")
+		}
+		return rds.Ping(ctx).Err()
 	}
 }
 

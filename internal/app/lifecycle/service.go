@@ -87,11 +87,24 @@ func (sg *Group) doStop() {
 	}
 }
 
+// StopOrder returns the services in the order Stop stops them: the reverse
+// of the order they were added in.
+func (sg *Group) StopOrder() []Service {
+	return append([]Service(nil), sg.services...)
+}
+
 // WithStart wraps a start func as a Service.
 func WithStart(start func()) Service {
 	return startOnlyService{
 		start: start,
 	}
+}
+
+// WithStop wraps a stop func as a Service whose Start returns at once: a
+// shutdown step, such as flushing the trace exporter, that has its place in
+// the stop order but nothing to run.
+func WithStop(stop func()) Service {
+	return stopOnlyService{stop: stop}
 }
 
 // WithStarter wraps a Starter as a Service.
@@ -113,6 +126,10 @@ type (
 		Starter
 		stopper
 	}
+
+	stopOnlyService struct {
+		stop func()
+	}
 )
 
 func (s stopper) Stop() {
@@ -120,4 +137,10 @@ func (s stopper) Stop() {
 
 func (s startOnlyService) Start() {
 	s.start()
+}
+
+func (s stopOnlyService) Start() {}
+
+func (s stopOnlyService) Stop() {
+	s.stop()
 }

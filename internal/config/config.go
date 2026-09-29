@@ -50,12 +50,20 @@ type Boot struct {
 	MySQL          *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
 	Redis          RedisConfig         `yaml:"Redis"`
 	EdgeSubscribe  EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
-	Administrator  struct {
-		Email string `yaml:"Email" default:"admin@ppanel.dev"`
-		// Password seeds the first administrator. Left empty, a random one is
-		// generated and printed once at the first start.
-		Password string `yaml:"Password"`
-	} `yaml:"Administrator"`
+	Administrator  AdministratorConfig `yaml:"Administrator"`
+}
+
+// AdministratorConfig names the first administrator, whom the start seeds
+// into a database that holds no account yet. The setup wizard writes the
+// installer's email here, so an installation resumed after a failed
+// migration seeds the same account.
+type AdministratorConfig struct {
+	Email string `yaml:"Email" default:"admin@ppanel.dev"`
+	// Password seeds the first administrator. Left empty, a random one is
+	// generated and printed once at the first start. Once the administrator
+	// exists it seeds nothing, only sits in the file in clear, and the start
+	// flags it: remove it from the file then.
+	Password string `yaml:"Password,omitempty"`
 }
 
 // Runtime is the configuration an administrator edits while the server runs.
@@ -349,7 +357,8 @@ type File struct {
 	EdgeSubscribe  EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
 	// AppLocation survives the installation's rewrite of the file: the new
 	// database's session zone is set from it.
-	AppLocation string `yaml:"AppLocation" default:"Asia/Shanghai"`
+	AppLocation   string              `yaml:"AppLocation" default:"Asia/Shanghai"`
+	Administrator AdministratorConfig `yaml:"Administrator"`
 }
 
 func (c Config) DatabaseConfig() orm.Config {
@@ -434,8 +443,13 @@ type NodeDBConfig struct {
 	Outbound               string
 }
 
+// Currency is the site currency: the ISO code prices are in and the symbol
+// shown next to them. The defaults are the values the settings seed stores
+// (CurrencyUnit USD, CurrencySymbol $), so a runtime configuration not yet
+// loaded from the table agrees with a fresh installation; they used to
+// disagree with each other (a CNY unit with a "USD" symbol).
 type Currency struct {
-	Unit      string `yaml:"Unit" default:"CNY"`
-	Symbol    string `yaml:"Symbol" default:"USD"`
+	Unit      string `yaml:"Unit" default:"USD"`
+	Symbol    string `yaml:"Symbol" default:"$"`
 	AccessKey string `yaml:"AccessKey" default:""`
 }

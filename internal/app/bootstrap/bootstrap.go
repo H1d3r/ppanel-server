@@ -188,6 +188,20 @@ func loadSubsystems(ctx context.Context, deps *Dependencies, order []Subsystem) 
 	return nil
 }
 
+// ReloadAll refreshes every subsystem, in startup order, for a restart of the
+// HTTP server: the routes are rebuilt on the reloaded settings. Like Reload
+// it leaves migration and node-secret provisioning, startup work, out, and
+// the first failure is returned with that subsystem's previous configuration
+// kept.
+func ReloadAll(ctx context.Context, deps *Dependencies) error {
+	for _, subsystem := range startupOrder {
+		if err := Reload(ctx, deps, subsystem); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Reload refreshes the subsystem changed by an administrator. Startup-only
 // migration and node-secret provisioning are deliberately excluded. A failure
 // is logged and returned, and the subsystem keeps its previous configuration.
@@ -217,30 +231,38 @@ func wrapf(err error, code uint32, format string, args ...any) error {
 	return xerr.Wrapf(err, code, format, args...)
 }
 
-// Migrate brings the database schema up to date and, after a migration that
-// changed it, seeds the configured first administrator into a database that
-// holds no account yet.
+// migrateSchema applies the pending schema migrations; tests replace it.
+var migrateSchema = schema.Up
+
+// Migrate brings the database schema up to date and seeds the configured
+// first administrator into a database that holds no account yet. The seed
+// runs on every start, not only after a migration that changed the schema:
+// identity's CreateInitialAdministrator does nothing once an account exists,
+// and a seed that failed on the first start (the schema was current from then
+// on) used to leave a panel without any administrator until someone fixed
+// the database by hand.
 func Migrate(ctx context.Context, deps *Dependencies) error {
 	current := deps.currentConfig()
 	mc := orm.Mysql{
 		Config: current.DatabaseConfig(),
 	}
 	now := time.Now()
-	if err := schema.Up(mc.Driver(), mc.MigrationDsn()); err != nil {
-		if errors.Is(err, schema.NoChange) {
-			logger.Info("[Migrate] database not change")
-			return nil
-		}
+	switch err := migrateSchema(mc.Driver(), mc.MigrationDsn()); {
+	case err == nil:
+		logger.Info("[Migrate] Database change, took " + time.Since(now).String())
+	case errors.Is(err, schema.NoChange):
+		logger.Info("[Migrate] database not change")
+	default:
 		logger.Errorf("[Migrate] Up error: %v", err.Error())
 		return wrapf(err, xerr.ERROR, "migrate the database")
 	}
-	logger.Info("[Migrate] Database change, took " + time.Since(now).String())
 	return seedFirstAdministrator(ctx, deps, current.Administrator.Email, current.Administrator.Password)
 }
 
 // seedFirstAdministrator has identity create the configured administrator
 // when the database holds no account yet, as after a fresh installation's
-// first migration.
+// first migration. Once an account exists, a password still configured seeds
+// nothing and only sits in the file in clear, so it is flagged.
 func seedFirstAdministrator(ctx context.Context, deps *Dependencies, email, configuredPassword string) error {
 	adminPassword, generated := initialAdminPassword(configuredPassword)
 	created, err := deps.Administrators.CreateInitialAdministrator(ctx, email, adminPassword)
@@ -249,6 +271,11 @@ func seedFirstAdministrator(ctx context.Context, deps *Dependencies, email, conf
 		return wrapf(err, xerr.DatabaseInsertError, "seed the first administrator")
 	}
 	if !created {
+		if configuredPassword != "" {
+			logger.Errorw("[Security] Administrator.Password is still set in the configuration file although the first administrator exists; "+
+				"it seeds nothing any more and only sits in the file in clear: remove it",
+				logger.Field("email", email))
+		}
 		return nil
 	}
 	if generated {

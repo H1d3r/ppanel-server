@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -90,6 +91,53 @@ func unwired(v reflect.Value, path string) []string {
 // dependencies: its zero fields are settings, not missing wiring.
 func isConfigValue(t reflect.Type) bool {
 	return t.PkgPath() == "github.com/perfect-panel/server/internal/config" || strings.HasSuffix(fmt.Sprint(t), "Snapshot")
+}
+
+// The process stops the HTTP server first, so no new request arrives while
+// the workers drain, and flushes the trace exporter last, once every service
+// produced its final spans. The order used to be scheduler, worker, HTTP,
+// with the exporter flushed inside the HTTP service's stop.
+func TestServicesStopTheHTTPServerFirstAndFlushTracesLast(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mini := miniredis.RunT(t)
+	rds := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { _ = rds.Close() })
+	var c config.Config
+	c.Redis.Host = mini.Addr()
+	queue, inspector := NewAsynqClient(c), NewAsynqInspector(c)
+	t.Cleanup(func() {
+		_ = queue.Close()
+		_ = inspector.Close()
+	})
+	srv := assemble(c, db, rds, &geoip.IPLocation{}, queue, inspector)
+
+	order := srv.services(c).StopOrder()
+
+	var names []string
+	for _, service := range order {
+		names = append(names, fmt.Sprintf("%T", service))
+	}
+	want := []string{"*app.Service", "*scheduler.Service", "*task.Service", "lifecycle.stopOnlyService"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("stop order = %v, want %v", names, want)
+	}
+	// The readiness probes reach the assembled connections.
+	probes := srv.serviceDependencies(lifecycle.NewReadiness()).Probes
+	if len(probes) != 2 {
+		t.Fatalf("probes = %d, want the database and Redis", len(probes))
+	}
+	for _, probe := range probes {
+		if err := probe.Ping(context.Background()); err != nil {
+			t.Fatalf("%s probe: %v", probe.Name, err)
+		}
+	}
+	mini.Close()
+	if err := probes[1].Ping(context.Background()); err == nil {
+		t.Fatal("the Redis probe answered after Redis went away")
+	}
 }
 
 // The task worker waits for the HTTP service's bootstrap. A bootstrap that

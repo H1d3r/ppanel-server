@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"uuid"
 
@@ -57,10 +58,13 @@ func run(ctx context.Context) {
 func getServers(ctx context.Context) *lifecycle.Group {
 	var c config.Config
 	createConfigFileIfMissing()
-	// The wizard writes the file and reports on status once it is complete.
+	// The wizard writes the file and reports once it is complete, or with
+	// the error that stopped its listener.
 	if initConfig(&c) {
-		status, engine := setup.Start(startConfigPath)
-		<-status
+		status, engine := setup.Start(startConfigPath, c.Port)
+		if err := <-status; err != nil {
+			log.Fatalf("setup wizard: %v", err)
+		}
 		if err := engine.Shutdown(ctx); err != nil {
 			log.Printf("Init Server Shutdown: %s\n", err.Error())
 		}
@@ -86,23 +90,22 @@ func getServers(ctx context.Context) *lifecycle.Group {
 	return app.NewServices(c)
 }
 
-// createConfigFileIfMissing creates an empty configuration file, and the etc
-// directory, when the file does not exist, so that initConfig starts the setup
-// wizard on it. It ends the process when either cannot be created.
+// createConfigFileIfMissing creates an empty configuration file, and its
+// directory, when the file does not exist, so that initConfig starts the
+// setup wizard on it. It ends the process when either cannot be created.
 func createConfigFileIfMissing() {
 	if _, err := os.Stat(startConfigPath); !os.IsNotExist(err) {
 		return
 	}
-	if _, err := os.Stat("etc"); os.IsNotExist(err) {
-		logger.Errorf("Directory %s does not exist. Creating it...\n", "etc")
-		if err = os.MkdirAll("etc", os.ModePerm); err != nil {
-			log.Fatalf("Please create the directory %s and place the configuration file %s in it.\n", "etc", startConfigPath)
-		}
+	dir := filepath.Dir(startConfigPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Fatalf("Please create the directory %s and place the configuration file %s in it: %v", dir, startConfigPath, err)
 	}
-	file, err := os.Create(startConfigPath)
+	// The file will hold the JWT secret and database credentials.
+	file, err := os.OpenFile(startConfigPath, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		logger.Errorf("Please create the configuration file %s in the directory %s.\n", startConfigPath, "etc")
-		panic(fmt.Sprintf("Please create the configuration file %s in the directory %s.\n", startConfigPath, "etc"))
+		logger.Errorf("Please create the configuration file %s in the directory %s.\n", startConfigPath, dir)
+		panic(fmt.Sprintf("Please create the configuration file %s in the directory %s: %v\n", startConfigPath, dir, err))
 	}
 	// Nothing was written, so a failed close loses nothing; the wizard writes
 	// the file through its own handle.
@@ -110,20 +113,23 @@ func createConfigFileIfMissing() {
 }
 
 // initConfig loads the configuration file into c and reports whether the
-// setup wizard has to run first: a custom file must name a database, and the
-// default file without a JWT secret is a new installation unless the
-// PPANEL_DB and PPANEL_REDIS environment variables complete it. When they do,
-// the configuration gets a generated secret and those connections and is
-// written back to the file.
+// setup wizard has to run first. The decision follows the file's content,
+// not its path: a file that names a database is complete (one without a JWT
+// secret then ends the start in getServers), and a file without one is a
+// new installation, which the PPANEL_DB and PPANEL_REDIS environment
+// variables complete — the configuration gets a generated secret, unless
+// the file has one, and those connections, and is written back — and the
+// wizard otherwise. The path used to decide: only the default etc/ppanel.yaml
+// took the environment, so a unit started with --config /opt/.../ppanel.yaml
+// silently ran the wizard instead.
 func initConfig(c *config.Config) bool {
 	conf.MustLoad(startConfigPath, c)
-	if startConfigPath != "etc/ppanel.yaml" && c.DatabaseConfig().Addr == "" {
-		return true
-	}
-	if c.JwtAuth.AccessSecret != "" || startConfigPath != "etc/ppanel.yaml" {
+	if c.DatabaseConfig().Addr != "" {
 		return false
 	}
-	c.JwtAuth.AccessSecret = uuid.NewV4().String()
+	if c.JwtAuth.AccessSecret == "" {
+		c.JwtAuth.AccessSecret = uuid.NewV4().String()
+	}
 	dsn := os.Getenv("PPANEL_DB")
 	if dsn == "" {
 		return true
@@ -132,6 +138,7 @@ func initConfig(c *config.Config) bool {
 	// stored times and daily statistics are read in the session zone.
 	cfg := orm.ParseDSNIn(dsn, c.AppLocation)
 	if cfg == nil {
+		log.Printf("PPANEL_DB is not a database DSN; starting the setup wizard instead")
 		return true
 	}
 	c.SetDatabaseConfig(*cfg)
@@ -142,6 +149,7 @@ func initConfig(c *config.Config) bool {
 	}
 	addr, pass, db, err := config.ParseRedisURI(uri)
 	if err != nil {
+		log.Printf("PPANEL_REDIS is not a redis:// URI (%v); starting the setup wizard instead", err)
 		return true
 	}
 	c.Redis.Host = addr
@@ -167,6 +175,7 @@ func initConfig(c *config.Config) bool {
 		Database:       c.DatabaseConfig(),
 		Redis:          c.Redis,
 		EdgeSubscribe:  c.EdgeSubscribe,
+		Administrator:  c.Administrator,
 	}
 	fileData, err := yaml.Marshal(newConfig)
 	if err != nil {
