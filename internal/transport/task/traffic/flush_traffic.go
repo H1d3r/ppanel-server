@@ -19,7 +19,8 @@ const (
 // FlushTrafficHandler flushes the network's due traffic buckets. The lock
 // keeps two ticks, on this or another replica, from flushing the same buckets
 // at once; its TTL stays under the one-minute schedule so a crashed run does
-// not skip the next tick.
+// not skip the next tick, and a run that outlives it keeps the lock through a
+// heartbeat so no tick overlaps a slow flush.
 type FlushTrafficHandler struct {
 	deps Dependencies
 }
@@ -39,5 +40,6 @@ func (h *FlushTrafficHandler) ProcessTask(ctx context.Context, _ *asynq.Task) er
 		return nil
 	}
 	defer releaseLock(ctx, lock, "[FlushTraffic]")
+	defer lock.KeepAlive(ctx, trafficFlushLockTTL, reportLockHeartbeat(ctx, "[FlushTraffic]"))()
 	return network.NewTrafficAggregator(h.deps.Aggregator).FlushDueBuckets(ctx, timeutil.Now())
 }

@@ -23,7 +23,8 @@ type CalendarTrafficResetter interface {
 // ResetTrafficHandler is the queue shell of the calendar traffic reset: the
 // reset rules and their once-per-day guarantee live in the subscription
 // module. A failed run returns its error and asynq retries it (the scheduler
-// sets the retry budget); the lock only keeps two runs from overlapping.
+// sets the retry budget); the lock only keeps two runs from overlapping, and
+// a heartbeat keeps it through a run longer than its TTL.
 type ResetTrafficHandler struct {
 	resetter CalendarTrafficResetter
 	redis    *redis.Client
@@ -45,6 +46,7 @@ func (h *ResetTrafficHandler) ProcessTask(ctx context.Context, _ *asynq.Task) er
 		return nil
 	}
 	defer releaseLock(ctx, lock, "[ResetTraffic]")
+	defer lock.KeepAlive(ctx, resetTrafficLockTTL, reportLockHeartbeat(ctx, "[ResetTraffic]"))()
 	return h.resetter.ResetCalendarTraffic(ctx)
 }
 
@@ -53,5 +55,14 @@ func (h *ResetTrafficHandler) ProcessTask(ctx context.Context, _ *asynq.Task) er
 func releaseLock(ctx context.Context, lock *tasklock.Lock, tag string) {
 	if _, err := lock.Release(ctx); err != nil {
 		logger.WithContext(ctx).Errorw(tag+" Release lock failed", logger.Field("error", err.Error()))
+	}
+}
+
+// reportLockHeartbeat logs a failed lock heartbeat. A lost lock means the
+// run outlived its TTL and a replica may be running the same task; the log
+// line is what makes that visible.
+func reportLockHeartbeat(ctx context.Context, tag string) func(error) {
+	return func(err error) {
+		logger.WithContext(ctx).Errorw(tag+" Lock heartbeat failed", logger.Field("error", err.Error()))
 	}
 }
