@@ -83,7 +83,7 @@ func NewSMTPClient(conf *SMTPConfig) *SMTPClient {
 		// without TLS keep working.
 		requireTLS: conf.SSL && !implicit,
 		tlsConfig: &tls.Config{
-			InsecureSkipVerify: conf.InsecureSkipVerify,
+			InsecureSkipVerify: conf.InsecureSkipVerify, //nolint:gosec // G402: an explicit operator opt-in for self-signed relays; certificates are verified by default
 			MinVersion:         tls.VersionTLS12,
 			ServerName:         conf.Host,
 		},
