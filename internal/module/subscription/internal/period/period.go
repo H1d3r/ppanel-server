@@ -162,6 +162,15 @@ func (c Calendar) NextReset(cycle Cycle, start, now time.Time) (next time.Time, 
 	return time.Time{}, false
 }
 
+// LastReset returns the most recent reset of cycle at or before at, at the
+// start of its day, for a subscription that started at start. ok is false
+// when the cycle never resets. It is the reset a subscription is owed when
+// no run has reset it for that day yet.
+func (c Calendar) LastReset(cycle Cycle, start, at time.Time) (last time.Time, ok bool) {
+	last, _, ok = c.CycleAt(cycle, start, at)
+	return last, ok
+}
+
 // CycleAt returns the reset cycle containing now: from the last reset at or
 // before now up to the next one. ok is false when the cycle never resets.
 func (c Calendar) CycleAt(cycle Cycle, start, now time.Time) (from, to time.Time, ok bool) {

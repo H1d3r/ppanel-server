@@ -6,8 +6,11 @@
 // commits its resets, their done-markers (user_subscribe.traffic_reset_at)
 // and their audit rows in one subscription transaction, so a run that fails
 // part way can be repeated: the repeat skips what the failed run committed
-// and resets the rest. Repeating is the task queue's job; this package never
-// schedules itself. Only the module facade may reach it.
+// and resets the rest. The marker also makes a run missed on the reset day
+// (no run at all, or every retry failed) good on the next run: a subscription
+// is due while its most recent reset day is later than the day it was last
+// reset for (see resetOwed). Repeating is the task queue's job; this package
+// never schedules itself. Only the module facade may reach it.
 package trafficreset
 
 import (
@@ -67,8 +70,9 @@ var resetOrder = []struct {
 	{period.CycleMonthly, "monthly"},
 }
 
-// ResetDue clears the traffic of every subscription whose calendar reset
-// falls on today. The cycles are independent: one failing does not stop the
+// ResetDue clears the traffic of every subscription owed a calendar reset
+// today: its reset falls on today, or fell on an earlier day it has not been
+// reset for. The cycles are independent: one failing does not stop the
 // others, and the returned error joins every failure so the task queue
 // retries the run.
 func (s *Service) ResetDue(ctx context.Context) error {
@@ -93,14 +97,9 @@ func (s *Service) ResetDue(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// resetCycle resets the subscriptions of cycle due on day and returns how
-// many it reset.
+// resetCycle resets the subscriptions of cycle owed a reset on day and
+// returns how many it reset.
 func (s *Service) resetCycle(ctx context.Context, cal period.Calendar, cycle period.Cycle, now, day time.Time) (int, error) {
-	// The 1st-of-month reset does not depend on the start day: skip the
-	// queries on every other day.
-	if cycle == period.CycleFirstOfMonth && !cal.ResetsOn(cycle, day, day) {
-		return 0, nil
-	}
 	planIDs, err := s.deps.Plans.QueryResetCycleSubscribeIds(ctx, int(cycle))
 	if err != nil {
 		return 0, xerr.Wrapf(err, xerr.DatabaseQueryError, "query plans")
@@ -114,7 +113,7 @@ func (s *Service) resetCycle(ctx context.Context, cal period.Calendar, cycle per
 	}
 	due := make([]int64, 0, len(candidates))
 	for _, sub := range candidates {
-		if cal.ResetsOn(cycle, sub.StartTime, day) {
+		if resetOwed(cal, cycle, sub, day) {
 			due = append(due, sub.Id)
 		}
 	}
@@ -131,6 +130,25 @@ func (s *Service) resetCycle(ctx context.Context, cal period.Calendar, cycle per
 	}
 	s.clearPlanCaches(ctx, reset, planIDs)
 	return reset, nil
+}
+
+// resetOwed reports whether the subscription is owed cycle's reset on day: its
+// most recent reset day at or before day is later than the day it was last
+// reset for. A run missed on the reset day (the scheduler or the database was
+// down, or every retry failed) is thus made good by the next run instead of
+// waiting a whole cycle, and two missed cycles are made good by one reset.
+//
+// A subscription never reset yet is owed a reset on its reset days only. The
+// done-marker is newer than the reset itself: rows written before it existed
+// carry none although the resets of their current cycle ran, so reading
+// "never" as "missed" would clear every such subscription once at the
+// upgrade. From its first recorded reset on, every subscription catches up.
+func resetOwed(cal period.Calendar, cycle period.Cycle, sub *usersub.Subscribe, day time.Time) bool {
+	if sub.TrafficResetAt == nil {
+		return cal.ResetsOn(cycle, sub.StartTime, day)
+	}
+	last, ok := cal.LastReset(cycle, sub.StartTime, day)
+	return ok && last.After(cal.DayStart(*sub.TrafficResetAt))
 }
 
 // resetBatch resets the batch's subscriptions that are still due, with their

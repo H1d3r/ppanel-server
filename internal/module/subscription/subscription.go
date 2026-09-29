@@ -37,10 +37,11 @@ type Service interface {
 	// soon. It is a daily pass, not part of the minute-by-minute sweep: the
 	// notice is once per expiry and reaching users at a civil hour matters.
 	RemindExpiringSubscriptions(ctx context.Context) error
-	// ResetCalendarTraffic clears the traffic of the subscriptions whose
-	// plan's calendar reset (1st of the month, monthly, yearly) falls on
-	// today, each at most once per day however often a failed run is
-	// repeated.
+	// ResetCalendarTraffic clears the traffic of the subscriptions owed their
+	// plan's calendar reset (1st of the month, monthly, yearly): those whose
+	// reset falls on today and those a missed run left unreset since their
+	// last reset day, each at most once per day however often a failed run
+	// is repeated.
 	ResetCalendarTraffic(ctx context.Context) error
 	// ProcessQuotaTask executes an admin-scheduled quota grant (time
 	// extension / gift credit) for the task's subscription scope.
