@@ -126,10 +126,14 @@ func (adapter *Adapter) Proxies(servers []*node.Node) ([]Proxy, error) {
 
 // newProxy is the one mapping from a node and its server protocol to the
 // proxy a client template renders. It lists the client-facing settings one by
-// one on purpose: the protocol also holds server secrets (the REALITY private
-// key, the VLESS encryption ticket, padding and private key) that must never
-// reach a subscriber. TestNewProxyMapsEveryClientField keeps the list
-// complete.
+// one on purpose: the protocol also holds server secrets and server-side
+// targets (the REALITY private key and handshake target, the VLESS
+// encryption ticket, padding and private key, the DNS provider and its
+// credentials for the certificate) that must never reach a subscriber. Every
+// field of the proxy is handed to the admin-authored template, toJson and
+// toYaml included, so leaving a setting out here is the only thing that keeps
+// it from every subscriber. TestNewProxyMapsEveryClientField keeps the list
+// complete and TestTemplatesCannotReachServerOnlySettings keeps it tight.
 func newProxy(item *node.Node, protocol node.Protocol) Proxy {
 	plugin, pluginOptions := clientPluginConfig(protocol, item.Address)
 	return Proxy{
@@ -149,8 +153,6 @@ func newProxy(item *node.Node, protocol node.Protocol) Proxy {
 		// a client that skips verification makes the pin meaningless.
 		AllowInsecure:           protocol.AllowInsecure && protocol.CertPinSHA256 == "",
 		Fingerprint:             protocol.Fingerprint,
-		RealityServerAddr:       protocol.RealityServerAddr,
-		RealityServerPort:       protocol.RealityServerPort,
 		RealityPublicKey:        protocol.RealityPublicKey,
 		RealityShortId:          protocol.RealityShortId,
 		Transport:               protocol.Transport,
@@ -197,8 +199,6 @@ func newProxy(item *node.Node, protocol node.Protocol) Proxy {
 		EchServerName:           protocol.EchServerName,
 		Ratio:                   protocol.Ratio,
 		CertMode:                protocol.CertMode,
-		CertDNSProvider:         protocol.CertDNSProvider,
-		CertDNSEnv:              protocol.CertDNSEnv,
 		CertPinSHA256:           protocol.CertPinSHA256,
 	}
 }

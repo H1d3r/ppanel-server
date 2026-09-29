@@ -196,6 +196,10 @@ func TestTrafficResetMarksEachSubscriptionOncePerDay(t *testing.T) {
 		if c.StartTime.IsZero() || c.SubscribeId != 1 {
 			t.Fatalf("candidate lacks what the cycle needs: %+v", c)
 		}
+		// The catch-up rule compares the last reset day with the marker.
+		if c.Id == 3 && (c.TrafficResetAt == nil || !c.TrafficResetAt.Equal(yesterday)) {
+			t.Fatalf("candidate 3 lacks its reset marker: %+v", c)
+		}
 	}
 	if !reflect.DeepEqual(ids, []int64{1, 2, 3}) {
 		t.Fatalf("candidates = %v, want [1 2 3]", ids)

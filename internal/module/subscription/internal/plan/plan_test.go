@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 	"time"
+	"uuid"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
@@ -115,33 +116,45 @@ func TestUpdateSubscribeKeepsTheSwitchesTheRequestOmits(t *testing.T) {
 	}
 }
 
-// A plan with an active user subscription cannot be deleted; one whose
-// subscriptions all ended can.
+// A plan with a current user subscription (pending, active, or exhausted
+// inside its term) cannot be deleted; one whose subscriptions all ended
+// (expired, refunded, stopped) can.
 func TestDeleteSubscribeRefusesPlansInUse(t *testing.T) {
 	f := newPlanFixture(t)
 	ctx := context.Background()
-	f.Plan(t, subscribe.Subscribe{Id: 1})
-	f.Plan(t, subscribe.Subscribe{Id: 2})
-	f.Plan(t, subscribe.Subscribe{Id: 3})
+	for id := int64(1); id <= 6; id++ {
+		f.Plan(t, subscribe.Subscribe{Id: id})
+	}
 	f.Subscription(t, usersub.Subscribe{UserId: 7, SubscribeId: 1, Status: usersub.SubscribeStatusActive})
 	f.Subscription(t, usersub.Subscribe{UserId: 7, SubscribeId: 2, Status: usersub.SubscribeStatusExpired})
+	f.Subscription(t, usersub.Subscribe{UserId: 7, SubscribeId: 2, Status: usersub.SubscribeStatusDeducted})
+	f.Subscription(t, usersub.Subscribe{UserId: 7, SubscribeId: 2, Status: usersub.SubscribeStatusStopped})
+	f.Subscription(t, usersub.Subscribe{UserId: 7, SubscribeId: 4, Status: usersub.SubscribeStatusFinished})
+	f.Subscription(t, usersub.Subscribe{UserId: 7, SubscribeId: 5, Status: usersub.SubscribeStatusPending})
 
-	if err := f.svc.DeleteSubscribe(ctx, &dto.DeleteSubscribeRequest{Id: 1}); xerr.CodeOf(err) != xerr.SubscribeIsUsedError {
-		t.Fatalf("deleting a plan in use = %v", err)
+	for _, id := range []int64{1, 4, 5} {
+		if err := f.svc.DeleteSubscribe(ctx, &dto.DeleteSubscribeRequest{Id: id}); xerr.CodeOf(err) != xerr.SubscribeIsUsedError {
+			t.Fatalf("deleting plan %d in use = %v", id, err)
+		}
 	}
 	if err := f.svc.DeleteSubscribe(ctx, &dto.DeleteSubscribeRequest{Id: 2}); err != nil {
 		t.Fatal(err)
 	}
 	// The batch is all or nothing.
-	if err := f.svc.BatchDeleteSubscribe(ctx, &dto.BatchDeleteSubscribeRequest{Ids: []int64{3, 1}}); xerr.CodeOf(err) != xerr.SubscribeIsUsedError {
-		t.Fatalf("batch deleting a plan in use = %v", err)
+	for _, ids := range [][]int64{{3, 1}, {3, 4}, {6, 5}} {
+		if err := f.svc.BatchDeleteSubscribe(ctx, &dto.BatchDeleteSubscribeRequest{Ids: ids}); xerr.CodeOf(err) != xerr.SubscribeIsUsedError {
+			t.Fatalf("batch deleting plans %v in use = %v", ids, err)
+		}
+	}
+	if err := f.svc.BatchDeleteSubscribe(ctx, &dto.BatchDeleteSubscribeRequest{Ids: []int64{3, 6}}); err != nil {
+		t.Fatal(err)
 	}
 	var ids []int64
 	if err := f.DB.Model(&subscribe.Subscribe{}).Order("id").Pluck("id", &ids).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) != 2 || ids[0] != 1 || ids[1] != 3 {
-		t.Fatalf("plans left = %v, want [1 3]", ids)
+	if len(ids) != 3 || ids[0] != 1 || ids[1] != 4 || ids[2] != 5 {
+		t.Fatalf("plans left = %v, want [1 4 5]", ids)
 	}
 }
 
@@ -209,6 +222,13 @@ func TestResetAllSubscribeTokenRotatesSubscriptionsInTerm(t *testing.T) {
 	gotActive, gotFinished := f.Load(t, active.Id), f.Load(t, finished.Id)
 	if gotActive.Token == "active-token" || gotActive.UUID == "active-uuid" || gotActive.Upload != 5 || gotActive.Note != "kept" {
 		t.Fatalf("active subscription after rotation: %+v", gotActive)
+	}
+	// The rotated credentials are random: a 32-hex token and a version 4 UUID.
+	if !usersub.AcceptableToken(gotActive.Token) || len(gotActive.Token) != 32 {
+		t.Fatalf("rotated token %q is not an issued token", gotActive.Token)
+	}
+	if parsed, err := uuid.Parse(gotActive.UUID); err != nil || parsed[6]>>4 != 4 {
+		t.Fatalf("rotated node credential %q is not a version 4 UUID (%v)", gotActive.UUID, err)
 	}
 	if gotFinished.Token == "finished-token" {
 		t.Fatal("the exhausted subscription kept its token")

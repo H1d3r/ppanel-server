@@ -58,7 +58,7 @@ func RegisterHandlers(mux *asynq.ServeMux, deps Dependencies) {
 	mux.Handle(taskqueue.SchedulerDailyOrderReport, order.NewDailyOrderReportHandler(deps.Order))
 
 	mux.Handle(taskqueue.SchedulerFlushTraffic, traffic.NewFlushTrafficHandler(deps.Traffic))
-	mux.Handle(taskqueue.SchedulerCheckSubscription, subscription.NewCheckSubscriptionHandler(deps.Subscription))
+	mux.Handle(taskqueue.SchedulerCheckSubscription, subscription.NewCheckSubscriptionHandler(deps.Subscription, deps.Traffic.Redis))
 	// Warn owners before their subscription expires.
 	mux.Handle(taskqueue.SchedulerRemindExpiringSubscriptions, subscription.NewRemindExpiringHandler(deps.Subscription))
 	mux.Handle(taskqueue.SchedulerResetTraffic, traffic.NewResetTrafficHandler(deps.Subscription, deps.Traffic.Redis))

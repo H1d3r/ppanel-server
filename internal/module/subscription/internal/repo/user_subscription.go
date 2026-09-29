@@ -694,7 +694,7 @@ func (m *UserSubscriptionRepo) FindTrafficResetCandidates(ctx context.Context, p
 	}
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		return trafficResetCandidates(conn, now, day).
-			Select("id", "user_id", "subscribe_id", "start_time").
+			Select("id", "user_id", "subscribe_id", "start_time", "traffic_reset_at").
 			Where("subscribe_id IN ?", planIDs).
 			Order("id ASC").
 			Find(v).Error

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
@@ -59,6 +60,10 @@ func TestGrantTrialGrantsOncePerRegistration(t *testing.T) {
 	trial := subs[0]
 	if trial.SubscribeId != 3 || trial.Traffic != 1<<30 || trial.Status != usersub.SubscribeStatusActive || trial.Token == "" || trial.UUID == "" || trial.OrderId != 0 {
 		t.Fatalf("trial = %+v", trial)
+	}
+	// The node credential is a random UUID, not a time-ordered one.
+	if parsed, err := uuid.Parse(trial.UUID); err != nil || parsed[6]>>4 != 4 {
+		t.Fatalf("trial node credential %q is not a version 4 UUID (%v)", trial.UUID, err)
 	}
 	if want, err := period.App().TermEnd(period.UnitDay, 2, trial.StartTime); err != nil || !trial.ExpireTime.Equal(want) {
 		t.Fatalf("trial ends %v, want two days after %v (%v)", trial.ExpireTime, trial.StartTime, err)

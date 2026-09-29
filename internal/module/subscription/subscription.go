@@ -24,6 +24,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/internal/trial"
 	"github.com/perfect-panel/server/internal/module/subscription/internal/usersub"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Service is the only surface other code may depend on; the implementation
@@ -37,10 +38,11 @@ type Service interface {
 	// soon. It is a daily pass, not part of the minute-by-minute sweep: the
 	// notice is once per expiry and reaching users at a civil hour matters.
 	RemindExpiringSubscriptions(ctx context.Context) error
-	// ResetCalendarTraffic clears the traffic of the subscriptions whose
-	// plan's calendar reset (1st of the month, monthly, yearly) falls on
-	// today, each at most once per day however often a failed run is
-	// repeated.
+	// ResetCalendarTraffic clears the traffic of the subscriptions owed their
+	// plan's calendar reset (1st of the month, monthly, yearly): those whose
+	// reset falls on today and those a missed run left unreset since their
+	// last reset day, each at most once per day however often a failed run
+	// is repeated.
 	ResetCalendarTraffic(ctx context.Context) error
 	// ProcessQuotaTask executes an admin-scheduled quota grant (time
 	// extension / gift credit) for the task's subscription scope.
@@ -131,6 +133,17 @@ type RequestMeta = delivery.RequestMeta
 // DeliveryConfig re-exports the delivery subdomain's runtime snapshot.
 type DeliveryConfig = delivery.Config
 
+// DeliveryLimiter re-exports the delivery subdomain's per-address fetch
+// limiter port.
+type DeliveryLimiter = delivery.FetchLimiter
+
+// NewDeliveryLimiter returns the per-address fetch limiter of subscription
+// delivery over rds: delivery.FetchRateQuota fetches per
+// delivery.FetchRateWindow and address.
+func NewDeliveryLimiter(rds *redis.Client) DeliveryLimiter {
+	return delivery.NewFetchLimiter(rds)
+}
+
 // SubscriptionTransactor re-exports the plan subdomain's transaction port.
 type SubscriptionTransactor = plan.SubscriptionTransactor
 
@@ -151,6 +164,9 @@ type Deps struct {
 	Logs    repository.LogRepo
 	// DeliveryConfig reads the runtime-mutable delivery configuration.
 	DeliveryConfig func() DeliveryConfig
+	// DeliveryLimiter bounds the subscription fetches per client address
+	// (NewDeliveryLimiter); nil admits every fetch.
+	DeliveryLimiter DeliveryLimiter
 
 	// Accounts is the identity port of delivery, administration, lifecycle
 	// and quota use cases: owners, their devices and email bindings, and
@@ -267,6 +283,7 @@ func New(deps Deps) Service {
 			Nodes:          deps.Nodes,
 			Logs:           deps.Logs,
 			ConfigSnapshot: deps.DeliveryConfig,
+			Limiter:        deps.DeliveryLimiter,
 		}),
 		selfSubs: selfsub.NewService(selfsub.Deps{
 			UserSubs:    deps.UserSubs,

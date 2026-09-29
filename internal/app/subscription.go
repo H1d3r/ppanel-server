@@ -37,16 +37,19 @@ func newSubscriptionModule(store repository.Store, srv *Application) subscriptio
 			current := srv.Runtime.Config().Register
 			return current.EnableTrial && current.TrialSubscribe == planID
 		},
-		Clients:     store.Client(),
-		Logs:        store.Log(),
-		Accounts:    subscriptionAccounts{srv: srv},
-		Traffic:     subscriptionNetworkReads{srv},
-		Orders:      billingOrders{billing: srv.Billing},
-		Refunds:     srv.Billing,
-		QuotaGifts:  srv.Billing,
-		Inbox:       store.Inbox(),
-		Operations:  store,
-		SingleModel: func() bool { return srv.Runtime.Config().Subscribe.SingleModel },
+		Clients: store.Client(),
+		Logs:    store.Log(),
+		// The per-address fetch limit of subscription delivery shares the
+		// application's Redis with the other rate limits.
+		DeliveryLimiter: subscription.NewDeliveryLimiter(srv.Redis),
+		Accounts:        subscriptionAccounts{srv: srv},
+		Traffic:         subscriptionNetworkReads{srv},
+		Orders:          billingOrders{billing: srv.Billing},
+		Refunds:         srv.Billing,
+		QuotaGifts:      srv.Billing,
+		Inbox:           store.Inbox(),
+		Operations:      store,
+		SingleModel:     func() bool { return srv.Runtime.Config().Subscribe.SingleModel },
 		TrialPolicy: func() subscription.TrialPolicy {
 			c := srv.Runtime.Config().Register
 			return subscription.TrialPolicy{

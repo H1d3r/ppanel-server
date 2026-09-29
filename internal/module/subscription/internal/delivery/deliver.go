@@ -22,6 +22,7 @@ import (
 	"github.com/perfect-panel/server/pkg/requestmeta"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
+	"gorm.io/gorm"
 )
 
 // RequestMeta carries the raw transport details of the subscription request.
@@ -36,8 +37,20 @@ type RequestMeta struct {
 // first client application whose user-agent keyword the request's user agent
 // contains, or with the default application. The runtime configuration is
 // read once per request.
+//
+// The token is the request's only credential, so a request without one that
+// can be a token is refused before anything is looked up, and the fetches of
+// each client address are limited (admitFetch) before the token costs a
+// query.
 func (s *Service) Deliver(ctx context.Context, meta RequestMeta, req *dto.SubscribeRequest) (*dto.SubscribeResponse, error) {
 	lg := logger.WithContext(ctx)
+	if !usersub.AcceptableToken(req.Token) {
+		lg.Infow("[SubscribeLogic] Refusing a request without an acceptable token", logger.Field("client_ip", meta.ClientIP), logger.Field("token_length", len(req.Token)))
+		return nil, xerr.Errorf(xerr.ErrorTokenInvalid, "subscribe token invalid")
+	}
+	if err := s.admitFetch(ctx, meta.ClientIP); err != nil {
+		return nil, err
+	}
 	cfg := s.deps.config()
 	clients, err := s.deps.Clients.List(ctx)
 	if err != nil {
@@ -80,8 +93,16 @@ func (s *Service) Deliver(ctx context.Context, meta RequestMeta, req *dto.Subscr
 
 	subscribeInfo, err := s.deps.Plans.FindOne(ctx, userSubscribe.SubscribeId)
 	if err != nil {
-		lg.Errorw("[SubscribeLogic] Find subscribe info failed", logger.Field("error", err.Error()), logger.Field("subscribeId", userSubscribe.SubscribeId))
-		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "Find subscribe info failed: %v", err.Error())
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			lg.Errorw("[SubscribeLogic] Find subscribe info failed", logger.Field("error", err.Error()), logger.Field("subscribeId", userSubscribe.SubscribeId))
+			return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "Find subscribe info failed: %v", err.Error())
+		}
+		// A plan in use cannot be deleted, but ended subscriptions keep
+		// pointing at a deleted one: their owners get a notice, not an
+		// error.
+		lg.Infow("[SubscribeLogic] Plan of the subscription no longer exists; delivering a notice",
+			logger.Field("subscribeId", userSubscribe.SubscribeId), logger.Field("user_subscribe_id", userSubscribe.Id))
+		subscribeInfo = nil
 	}
 
 	servers, err := s.getServers(ctx, cfg.SiteHost, userSubscribe, subscribeInfo)
@@ -102,7 +123,7 @@ func (s *Service) Deliver(ctx context.Context, meta RequestMeta, req *dto.Subscr
 		targetApp.SubscribeTemplate,
 		render.WithServers(servers),
 		render.WithSiteName(cfg.SiteName),
-		render.WithSubscribeName(subscribeInfo.Name),
+		render.WithSubscribeName(planName(subscribeInfo)),
 		render.WithOutputFormat(targetApp.OutputFormat),
 		render.WithUserInfo(render.User{
 			ID:           userSubscribe.Id,
@@ -160,6 +181,15 @@ func (s *Service) Deliver(ctx context.Context, meta RequestMeta, req *dto.Subscr
 		return nil, err
 	}
 	return resp, nil
+}
+
+// planName is the name a template shows for the plan; a deleted plan has
+// none.
+func planName(plan *subscribe.Subscribe) string {
+	if plan == nil {
+		return ""
+	}
+	return plan.Name
 }
 
 // getSubscribeV2URL is the subscription URL the client config carries: the
@@ -280,10 +310,14 @@ func unavailableNotice(sub *usersub.Subscribe, now time.Time) string {
 
 // getServers returns the nodes the client config lists. Subscriptions that
 // may not use the service get notice placeholders instead of real nodes, so
-// the client shows why.
+// the client shows why; so does a subscription whose plan (nil) was deleted,
+// which has no nodes left to list.
 func (s *Service) getServers(ctx context.Context, siteHost string, userSub *usersub.Subscribe, subDetails *subscribe.Subscribe) ([]*node.Node, error) {
 	if notice := unavailableNotice(userSub, timeutil.Now()); notice != "" {
 		return createNoticeServers(siteHost, notice), nil
+	}
+	if subDetails == nil {
+		return createNoticeServers(siteHost, noticeUnavailable), nil
 	}
 
 	nodeIds, tags, err := subDetails.NodeScope()

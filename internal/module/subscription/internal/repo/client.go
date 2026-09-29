@@ -41,12 +41,21 @@ func (m *clientRepo) FindOne(ctx context.Context, id int64) (*client.SubscribeAp
 	return &resp, nil
 }
 
+// applicationColumns are the client application settings an
+// administrator's edit writes: every column but the id and the timestamps.
+var applicationColumns = []string{
+	"name", "icon", "description", "scheme", "user_agent", "is_default",
+	"subscribe_template", "output_format", "default_params", "download_link",
+}
+
+// Update writes the application's settings (applicationColumns, plus the
+// update timestamp) as data has them; the creation timestamp stays as stored.
 func (m *clientRepo) Update(ctx context.Context, data *client.SubscribeApplication) error {
 	if _, err := m.FindOne(ctx, data.Id); err != nil {
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Model(&client.SubscribeApplication{}).Where("id = ?", data.Id).Save(data).Error
+		return conn.Model(&client.SubscribeApplication{}).Where("id = ?", data.Id).Select(applicationColumns).Updates(data).Error
 	}, clientListCacheKey, fmt.Sprintf("cache:subscribe:application:%d", data.Id))
 }
 

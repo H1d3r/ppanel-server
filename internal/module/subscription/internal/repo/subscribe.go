@@ -13,6 +13,7 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/perfect-panel/server/pkg/slicesx"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -125,7 +126,31 @@ func (m *subscribeRepo) FindOne(ctx context.Context, id int64) (*subscribe.Subsc
 	return &resp, nil
 }
 
+// planColumns are the plan settings an administrator's edit writes: every
+// column but the id and the timestamps. Naming them keeps the edit off a
+// whole-row save, which would also insert a plan that no longer exists and
+// would write the timestamps as the edit's copy has them.
+var planColumns = []string{
+	"name", "language", "description", "unit_price", "unit_time", "discount", "replacement",
+	"inventory", "traffic", "speed_limit", "device_limit", "quota", "nodes", "node_tags",
+	"show", "sell", "sort", "deduction_ratio", "allow_deduction", "reset_cycle", "renewal_reset",
+	"show_original_price",
+}
+
+// groupColumns are the group settings an administrator's edit writes.
+var groupColumns = []string{"name", "description"}
+
+// errPlanID rejects a write without a plan id: GORM would turn it into an
+// insert or an update of every row.
+var errPlanID = errors.New("plan id is required")
+
+// Update writes the plan's settings (planColumns, plus the update timestamp)
+// as data has them, an omitted switch included as NULL where the column
+// allows it, so the caller resolves the switches it keeps beforehand.
 func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe) error {
+	if data == nil || data.Id == 0 {
+		return errPlanID
+	}
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -137,7 +162,7 @@ func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe) e
 	}
 	cacheKeys = append(cacheKeys, userSubscribeCacheKeys...)
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Save(data).Error
+		return conn.Model(&subscribe.Subscribe{}).Where("id = ?", data.Id).Select(planColumns).Updates(data).Error
 	}, cacheKeys...)
 }
 
@@ -238,12 +263,27 @@ func (m *subscribeRepo) ClearCache(ctx context.Context, ids ...int64) error {
 	return m.DelCacheCtx(ctx, keys...)
 }
 
+// UpdateSort writes each plan's sort position and nothing else. The plans
+// were read before the positions were assigned; saving them whole (as an
+// upsert of every column) carried their stale copies back into the table, an
+// inventory a purchase had decremented meanwhile included, and re-inserted a
+// plan deleted in between.
 func (m *subscribeRepo) UpdateSort(ctx context.Context, data []*subscribe.Subscribe) error {
 	if len(data) == 0 {
 		return nil
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Save(data).Error
+		now := timeutil.Now()
+		for _, plan := range data {
+			if plan == nil || plan.Id == 0 {
+				return errPlanID
+			}
+			if err := conn.Model(&subscribe.Subscribe{}).Where("id = ?", plan.Id).
+				UpdateColumns(map[string]any{"sort": plan.Sort, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	}, m.cacheKeys(ctx, data...)...)
 }
 
@@ -262,9 +302,14 @@ func (m *subscribeRepo) CreateGroup(ctx context.Context, data *subscribe.Group) 
 	})
 }
 
+// UpdateGroup writes the group's settings (groupColumns, plus the update
+// timestamp); a group that no longer exists is not re-inserted.
 func (m *subscribeRepo) UpdateGroup(ctx context.Context, data *subscribe.Group) error {
+	if data == nil || data.Id == 0 {
+		return errPlanID
+	}
 	return m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Model(&subscribe.Group{}).Where("id = ?", data.Id).Save(data).Error
+		return conn.Model(&subscribe.Group{}).Where("id = ?", data.Id).Select(groupColumns).Updates(data).Error
 	})
 }
 

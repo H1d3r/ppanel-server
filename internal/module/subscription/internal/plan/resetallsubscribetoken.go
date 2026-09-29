@@ -14,7 +14,8 @@ import (
 // ResetAllSubscribeToken rotates the token and node credential of every
 // subscription in its term, all or none: one transaction of batched column
 // updates, each naming a few hundred rows, instead of one full-row save per
-// subscription.
+// subscription. The new credentials are random (crypto/rand tokens, version
+// 4 UUIDs) like those of every other rotation.
 func (s *Service) ResetAllSubscribeToken(ctx context.Context) (*dto.ResetAllSubscribeTokenResponse, error) {
 	log := logger.WithContext(ctx)
 	var planIDs []int64
@@ -28,7 +29,7 @@ func (s *Service) ResetAllSubscribeToken(ctx context.Context) (*dto.ResetAllSubs
 		seen := make(map[int64]struct{})
 		for _, sub := range list {
 			rotations = append(rotations, repository.SubscriptionCredentialRotation{
-				Previous: sub, Token: usersub.NewToken(), UUID: uuid.NewV7().String(),
+				Previous: sub, Token: usersub.NewToken(), UUID: uuid.NewV4().String(),
 			})
 			if _, ok := seen[sub.SubscribeId]; !ok {
 				seen[sub.SubscribeId] = struct{}{}

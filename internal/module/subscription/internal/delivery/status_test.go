@@ -11,7 +11,8 @@ import (
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 )
 
-// deliveryNodeRepo serves one real node and counts the lookups.
+// deliveryNodeRepo serves one real node, with the server protocol the
+// renderer maps it through, and counts the lookups.
 type deliveryNodeRepo struct {
 	calls int
 }
@@ -20,7 +21,10 @@ var _ NodeLister = (*deliveryNodeRepo)(nil)
 
 func (r *deliveryNodeRepo) ListEnabledNodesByScope(context.Context, []int64, []string) ([]*node.Node, error) {
 	r.calls++
-	return []*node.Node{{Id: 5, Name: "real", Address: "node.example.com", Port: 443, Protocol: "vless"}}, nil
+	return []*node.Node{{
+		Id: 5, Name: "real", Address: "node.example.com", Port: 443, Protocol: "vless",
+		Server: &node.Server{Id: 1, Name: "real", Protocols: `[{"type":"vless","port":443,"enable":true}]`},
+	}}, nil
 }
 
 // Refunded (Deducted) and admin-stopped subscriptions must not receive real

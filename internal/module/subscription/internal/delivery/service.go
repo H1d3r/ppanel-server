@@ -34,6 +34,9 @@ type Deps struct {
 	Logs  AuditLog
 	// ConfigSnapshot reads the current delivery configuration.
 	ConfigSnapshot func() Config
+	// Limiter bounds the fetches per client address (NewFetchLimiter); nil
+	// admits every fetch.
+	Limiter FetchLimiter
 }
 
 // NodeLister is the network read port (the network facade): the enabled

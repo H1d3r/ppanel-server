@@ -99,8 +99,11 @@ func (s *Service) GrantTrial(ctx context.Context, userID int64) error {
 				ExpireTime:  expireTime,
 				Traffic:     plan.Traffic,
 				Token:       usersub.NewToken(),
-				UUID:        uuid.NewV7().String(),
-				Status:      usersub.SubscribeStatusActive,
+				// The node credential is random like every other
+				// subscription's: a time-ordered UUID would tell its issue
+				// time and leave fewer bits to guess.
+				UUID:   uuid.NewV4().String(),
+				Status: usersub.SubscribeStatusActive,
 			}
 			if err := store.UserSubscription().InsertSubscribe(ctx, granted); err != nil {
 				return err
