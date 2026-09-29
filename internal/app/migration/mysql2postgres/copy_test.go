@@ -62,7 +62,7 @@ func TestMigrateCopiesRowsIntoPostgres(t *testing.T) {
 	ctx := context.Background()
 	table := fmt.Sprintf("m2p_copy_%d", time.Now().UnixNano())
 
-	mysqlDB, err := sql.Open("mysql", normalizeMySQLDSN(mysqlDSN))
+	mysqlDB, err := sql.Open("mysql", normalizeMySQLDSN(mysqlDSN, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

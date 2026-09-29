@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/perfect-panel/server/pkg/orm"
 )
 
 const schemaMigrationsTable = "schema_migrations"
@@ -38,6 +40,12 @@ type Config struct {
 	Yes         bool
 	DryRun      bool
 	BatchSize   int
+	// Location is the IANA zone the MySQL DATETIME values are in: the
+	// panel's AppLocation (the session zone of its MySQL connection). A
+	// MySQL DSN without a loc parameter reads them in this zone, and
+	// timestamps that arrive as text are parsed in it, so the copied
+	// instants are right; the process's own zone plays no part.
+	Location string
 }
 
 type postgresColumn struct {
@@ -55,6 +63,8 @@ type tablePlan struct {
 	Columns      []postgresColumn
 	OrderColumns []string
 	RowCount     int64
+	// Location is the zone timestamps that arrive as text are parsed in.
+	Location *time.Location
 }
 
 type foreignKey struct {
@@ -63,9 +73,10 @@ type foreignKey struct {
 }
 
 // DefaultConfig is the configuration before the flags apply: the public
-// schema and a progress line every 1000 rows.
+// schema, a progress line every 1000 rows and the application's default
+// zone.
 func DefaultConfig() Config {
-	return Config{Schema: "public", BatchSize: 1000}
+	return Config{Schema: "public", BatchSize: 1000, Location: orm.DefaultLocation}
 }
 
 // Run parses the command-line arguments and migrates.
@@ -90,8 +101,12 @@ func Migrate(ctx context.Context, cfg Config) error {
 	if cfg.Truncate && !cfg.Yes && !cfg.DryRun {
 		return errors.New("--truncate is destructive; pass --yes to confirm")
 	}
+	location, err := time.LoadLocation(cfg.Location)
+	if err != nil || cfg.Location == "" || cfg.Location == "Local" {
+		return fmt.Errorf("--location %q is not an IANA time zone; pass the panel's AppLocation", cfg.Location)
+	}
 
-	mysqlDB, err := sql.Open("mysql", normalizeMySQLDSN(cfg.MySQLDSN))
+	mysqlDB, err := sql.Open("mysql", normalizeMySQLDSN(cfg.MySQLDSN, location))
 	if err != nil {
 		return fmt.Errorf("open mysql: %w", err)
 	}
@@ -109,7 +124,7 @@ func Migrate(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
 
-	plans, err := buildPlans(ctx, mysqlDB, postgresDB, cfg)
+	plans, err := buildPlans(ctx, mysqlDB, postgresDB, cfg, location)
 	if err != nil {
 		return err
 	}
@@ -176,6 +191,7 @@ func ParseFlags(args []string) (Config, error) {
 	fs.BoolVar(&cfg.Yes, "yes", false, "confirm destructive operations")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print plan without copying data")
 	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "rows per progress log")
+	fs.StringVar(&cfg.Location, "location", cfg.Location, "IANA zone the MySQL DATETIME values are in: the panel's AppLocation")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -187,12 +203,20 @@ func ParseFlags(args []string) (Config, error) {
 	return cfg, nil
 }
 
-func normalizeMySQLDSN(dsn string) string {
+// normalizeMySQLDSN makes the source connection return DATETIME values as
+// time.Time (parseTime) in location when the DSN names no loc of its own:
+// the driver's default is UTC, which labelled every value with the wrong
+// zone and shifted the timestamptz target columns by the panel's offset. A
+// DSN that names loc keeps it.
+func normalizeMySQLDSN(dsn string, location *time.Location) string {
 	cfg, err := mysqlDriver.ParseDSN(dsn)
 	if err != nil {
 		return dsn
 	}
 	cfg.ParseTime = true
+	if !dsnNamesLocation(dsn) && location != nil {
+		cfg.Loc = location
+	}
 	if cfg.Params == nil {
 		cfg.Params = make(map[string]string)
 	}
@@ -202,7 +226,27 @@ func normalizeMySQLDSN(dsn string) string {
 	return cfg.FormatDSN()
 }
 
-func buildPlans(ctx context.Context, mysqlDB, postgresDB *sql.DB, cfg Config) ([]tablePlan, error) {
+// dsnNamesLocation reports whether a MySQL DSN's parameters, the part after
+// the database name, set loc. The database name follows the last slash;
+// searching the whole DSN for the question mark would misread a password.
+func dsnNamesLocation(dsn string) bool {
+	databaseSeparator := strings.LastIndex(dsn, "/")
+	if databaseSeparator < 0 {
+		return false
+	}
+	querySeparator := strings.IndexByte(dsn[databaseSeparator+1:], '?')
+	if querySeparator < 0 {
+		return false
+	}
+	params, err := url.ParseQuery(dsn[databaseSeparator+querySeparator+2:])
+	if err != nil {
+		return false
+	}
+	_, ok := params["loc"]
+	return ok
+}
+
+func buildPlans(ctx context.Context, mysqlDB, postgresDB *sql.DB, cfg Config, location *time.Location) ([]tablePlan, error) {
 	sourceTables, err := listMySQLTables(ctx, mysqlDB)
 	if err != nil {
 		return nil, err
@@ -271,6 +315,7 @@ func buildPlans(ctx context.Context, mysqlDB, postgresDB *sql.DB, cfg Config) ([
 			Columns:      commonCols,
 			OrderColumns: orderColumns,
 			RowCount:     rowCount,
+			Location:     location,
 		})
 	}
 	dependencies, err := listPostgresForeignKeys(ctx, postgresDB, cfg.Schema)
@@ -616,7 +661,7 @@ func writeCopyRows(w io.Writer, rows *sql.Rows, plan tablePlan, batchSize int) (
 			return copied, fmt.Errorf("scan mysql row from %s: %w", plan.Name, err)
 		}
 		for i, value := range raw {
-			converted, err := convertValue(value, plan.Columns[i])
+			converted, err := convertValue(value, plan.Columns[i], plan.Location)
 			if err != nil {
 				return copied, fmt.Errorf("convert %s.%s: %w", plan.Name, plan.Columns[i].Name, err)
 			}
@@ -672,15 +717,17 @@ func copyText(value any) string {
 	}
 }
 
-func convertValue(value any, col postgresColumn) (any, error) {
+// convertValue turns a value the MySQL driver scanned into what COPY writes
+// for col; timestamps that arrive as text are parsed in location.
+func convertValue(value any, col postgresColumn, location *time.Location) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
 	switch v := value.(type) {
 	case []byte:
-		return convertString(string(v), col)
+		return convertString(string(v), col, location)
 	case string:
-		return convertString(v, col)
+		return convertString(v, col, location)
 	case time.Time:
 		if v.IsZero() {
 			return nil, nil
@@ -707,7 +754,7 @@ func convertValue(value any, col postgresColumn) (any, error) {
 	}
 }
 
-func convertString(value string, col postgresColumn) (any, error) {
+func convertString(value string, col postgresColumn, location *time.Location) (any, error) {
 	if isZeroDate(value) {
 		return nil, nil
 	}
@@ -730,7 +777,7 @@ func convertString(value string, col postgresColumn) (any, error) {
 		}
 		// A value none of the known layouts parses is copied as text, for
 		// PostgreSQL to interpret.
-		if t, err := parseTimestamp(value); err == nil {
+		if t, err := parseTimestamp(value, location); err == nil {
 			return t, nil
 		}
 	}
@@ -792,7 +839,14 @@ func numericToBool(value any) (bool, error) {
 	}
 }
 
-func parseTimestamp(value string) (time.Time, error) {
+// parseTimestamp reads a MySQL DATETIME or DATE that arrived as text in
+// location, the panel's zone; the layouts with an offset carry their own.
+// It used to parse in the process's zone, which is whatever the machine the
+// tool runs on has.
+func parseTimestamp(value string, location *time.Location) (time.Time, error) {
+	if location == nil {
+		location = time.UTC
+	}
 	layouts := []string{
 		"2006-01-02 15:04:05.999999999",
 		"2006-01-02 15:04:05.999999",
@@ -802,7 +856,7 @@ func parseTimestamp(value string) (time.Time, error) {
 		"2006-01-02",
 	}
 	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, value, location); err == nil {
 			return t, nil
 		}
 	}
