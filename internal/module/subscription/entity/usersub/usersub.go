@@ -18,7 +18,7 @@ var ErrSubscriptionOnHold = errors.New("subscription is refunded or stopped")
 
 // Cache key prefixes for the user-subscription cache.
 const (
-	cacheTokenPrefix = "cache:user:subscribe:token:"
+	cacheTokenPrefix = "cache:user:subscribe:token:" //nolint:gosec // G101: a cache key prefix, not a credential
 	cacheUserPrefix  = "cache:user:subscribe:user:v3:"
 	cacheIdPrefix    = "cache:user:subscribe:id:"
 )

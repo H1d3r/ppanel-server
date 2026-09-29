@@ -26,7 +26,7 @@ import (
 
 // Cache key prefixes shared with the usersub entity's key derivation.
 const (
-	cacheUserSubscribeTokenPrefix = "cache:user:subscribe:token:"
+	cacheUserSubscribeTokenPrefix = "cache:user:subscribe:token:" //nolint:gosec // G101: a cache key prefix, not a credential
 	// v3 stores the complete, status-unfiltered subscription history.
 	// Status-specific callers filter this shared value in memory so cache
 	// entries cannot collide.
