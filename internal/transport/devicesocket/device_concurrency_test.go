@@ -1,6 +1,7 @@
 package devicesocket
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,7 +46,7 @@ func dialDevice(t *testing.T, srv *httptest.Server) *websocket.Conn {
 // panicking with gorilla/websocket's concurrent-write assertion. Run with
 // -race.
 func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
-	dm := NewDeviceManager(3600, 3600)
+	dm := NewDeviceManager(3600, 3600, nil)
 	defer dm.Stop()
 
 	const userID = int64(7)
@@ -73,9 +74,18 @@ func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < pushesPerWorker; j++ {
-				if err := dm.SendToDevice(userID, testDeviceID, "push"); err != nil {
-					t.Errorf("SendToDevice: %v", err)
-					return
+				// The queue is bounded: a burst faster than the client
+				// drains is refused, to be retried, never blocked on.
+				for {
+					err := dm.SendToDevice(userID, testDeviceID, "push")
+					if err == nil {
+						break
+					}
+					if !errors.Is(err, ErrSendQueueFull) {
+						t.Errorf("SendToDevice: %v", err)
+						return
+					}
+					time.Sleep(time.Millisecond)
 				}
 			}
 		}()
@@ -114,7 +124,7 @@ func TestConcurrentHeartbeatAndPushWrites(t *testing.T) {
 // The kick notification must reach the client before the connection closes,
 // which requires the device to stay registered until OnDeviceKicked returns.
 func TestKickDeliversNotificationThenCloses(t *testing.T) {
-	dm := NewDeviceManager(3600, 3600)
+	dm := NewDeviceManager(3600, 3600, nil)
 	defer dm.Stop()
 
 	const userID = int64(9)
@@ -159,7 +169,7 @@ func TestKickDeliversNotificationThenCloses(t *testing.T) {
 // Reconnecting with the same device ID must retire the previous socket:
 // pushes reach the new connection and the online counter stays at one.
 func TestReconnectReplacesPreviousSocket(t *testing.T) {
-	dm := NewDeviceManager(3600, 3600)
+	dm := NewDeviceManager(3600, 3600, nil)
 	defer dm.Stop()
 
 	const userID = int64(11)
@@ -188,8 +198,8 @@ func TestReconnectReplacesPreviousSocket(t *testing.T) {
 		t.Errorf("push = %q, want %q", msg, "hello")
 	}
 
-	if got := atomic.LoadInt32(&dm.totalOnline); got != 1 {
-		t.Errorf("totalOnline = %d after reconnect, want 1", got)
+	if got := dm.Online(); got != 1 {
+		t.Errorf("Online() = %d after reconnect, want 1", got)
 	}
 }
 
@@ -199,7 +209,7 @@ func serverSocket(t *testing.T) *websocket.Conn {
 	t.Helper()
 	accepted := make(chan *websocket.Conn, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("websocket upgrade: %v", err)
 			return
@@ -224,7 +234,7 @@ func serverSocket(t *testing.T) *websocket.Conn {
 // would drop the device, leaving a socket nothing can kick and a
 // totalOnline that never comes down.
 func TestHeartbeatSweepKeepsADeviceConnectedWhileItWaited(t *testing.T) {
-	dm := NewDeviceManager(3600, 3600)
+	dm := NewDeviceManager(3600, 3600, nil)
 	defer dm.Stop()
 
 	const userID = int64(13)
@@ -245,24 +255,25 @@ func TestHeartbeatSweepKeepsADeviceConnectedWhileItWaited(t *testing.T) {
 
 	// Meanwhile a second device connects: AddDevice's registration, as it
 	// runs under the lock.
-	late := &Device{Session: "session", DeviceID: "dev2", Conn: serverSocket(t), CreatedAt: time.Now(), LastPingTime: time.Now()}
+	late := newDevice(serverSocket(t), "session", "dev2", time.Now())
+	late.startWriter(userID)
 	current, _ := dm.userDevices.Load(userID)
 	dm.userDevices.Store(userID, append(append([]*Device(nil), current.([]*Device)...), late))
-	atomic.AddInt32(&dm.totalOnline, 1)
+	dm.totalOnline.Add(1)
 	mu.Unlock()
 	<-swept
 
 	if devices := dm.snapshotDevices(userID); len(devices) != 2 || devices[1] != late {
 		t.Fatalf("devices after the sweep = %d, want both, the late one included", len(devices))
 	}
-	if got := atomic.LoadInt32(&dm.totalOnline); got != 2 {
-		t.Fatalf("totalOnline after the sweep = %d, want 2", got)
+	if got := dm.Online(); got != 2 {
+		t.Fatalf("Online() after the sweep = %d, want 2", got)
 	}
 	if err := dm.SendToDevice(userID, "dev2", "hello"); err != nil {
 		t.Fatalf("the late device is unreachable: %v", err)
 	}
 	dm.KickDevice(userID, "dev2")
-	if got := atomic.LoadInt32(&dm.totalOnline); got != 1 {
-		t.Fatalf("totalOnline after kicking the late device = %d, want 1", got)
+	if got := dm.Online(); got != 1 {
+		t.Fatalf("Online() after kicking the late device = %d, want 1", got)
 	}
 }

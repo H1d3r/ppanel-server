@@ -21,11 +21,8 @@ func (s *Service) ServerPushUserTraffic(ctx context.Context, req *dto.ServerPush
 	}
 
 	aggregator := trafficagg.New(trafficagg.Deps{
-		Usage: s.deps.TrafficUsage,
-		Redis: s.deps.Redis,
-		TrafficReportThreshold: func() int64 {
-			return s.deps.Config().Node.TrafficReportThreshold
-		},
+		Usage:      s.deps.TrafficUsage,
+		Redis:      s.deps.Redis,
 		Multiplier: s.deps.Multiplier,
 		// A node may only bill the subscriptions its user list hands it.
 		ServedSubscriptions: s.servedSubscriptionIDs,

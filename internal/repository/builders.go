@@ -61,11 +61,13 @@ type OrderStatsBridge interface {
 }
 
 // NodeCacheKeyBridge is the subscription bundle's window onto network's
-// node-derived cache keys: plan cache invalidation includes the server
-// user-list keys of the plan's nodes and node tags. The network bundle
-// provides it.
+// node-facing caches: a plan write that changes which subscriptions the
+// servers serve invalidates, through it, the user lists of the servers
+// carrying the plan's nodes and node tags. The network bundle provides it
+// and runs the invalidation under its cache generation fence, which a plain
+// DEL of the list keys from the subscription bundle bypassed.
 type NodeCacheKeyBridge interface {
-	NodeUserListCacheKeys(ctx context.Context, nodeIDs []int64, tags []string) ([]string, error)
+	ClearNodeUserListCaches(ctx context.Context, nodeIDs []int64, tags []string) error
 }
 
 // IdentityBridges collects the identity bundle's cross-domain windows.

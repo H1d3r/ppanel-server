@@ -191,7 +191,7 @@ func TestServerPushUserTrafficDropsSubscriptionsTheServerDoesNotServe(t *testing
 	if err != nil {
 		t.Fatalf("ServerPushUserTraffic: %v", err)
 	}
-	buckets, err := client.Keys(context.Background(), "traffic:agg:2*").Result()
+	buckets, err := client.Keys(context.Background(), "traffic:agg:[0-9]*").Result()
 	if err != nil || len(buckets) != 1 {
 		t.Fatalf("traffic buckets = %v, %v", buckets, err)
 	}

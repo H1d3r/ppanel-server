@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,32 +70,37 @@ func nodeInSet(field string, values []string) func(db *gorm.DB) *gorm.DB {
 	return orm.CommaSeparatedContains(field, values)
 }
 
-// NodeUserListCacheKeys resolves the server user-list cache keys for the
-// given node ids and node tags; the subscription bundle invalidates them
-// when a plan's node set changes (repository.NodeCacheKeyBridge).
-func (m *nodeRepo) NodeUserListCacheKeys(ctx context.Context, nodeIDs []int64, tags []string) ([]string, error) {
-	keys := make([]string, 0)
-	appendKeys := func(nodes []*node.Node) {
-		for _, n := range nodes {
-			keys = append(keys, fmt.Sprintf("%s%d", node.ServerUserListCacheKey, n.ServerId))
-			keys = append(keys, fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, n.ServerId, n.Protocol))
+// ClearNodeUserListCaches drops the node-facing caches of every server
+// carrying a node the scope selects, an explicit node id or any of the tags,
+// enabled or not (repository.NodeCacheKeyBridge): the subscription bundle
+// calls it once a plan write that changes which subscriptions the servers
+// serve has committed. Each server goes through ClearServerCache, whose
+// generation fence rejects a user list a concurrent rebuild read before the
+// write; a plain DEL of the list keys let such a list be cached over the
+// invalidation. An empty scope clears nothing.
+func (m *nodeRepo) ClearNodeUserListCaches(ctx context.Context, nodeIDs []int64, tags []string) error {
+	tags = slices.DeleteFunc(slices.Clone(tags), func(tag string) bool { return tag == "" })
+	if len(nodeIDs) == 0 && len(tags) == 0 {
+		return nil
+	}
+	nodes, err := m.ListNodesByScope(ctx, nodeIDs, tags, nil, false)
+	if err != nil {
+		return err
+	}
+	serverIDs := make([]int64, 0, len(nodes))
+	for _, item := range nodes {
+		if item != nil && item.ServerId > 0 && !slices.Contains(serverIDs, item.ServerId) {
+			serverIDs = append(serverIDs, item.ServerId)
 		}
 	}
-	if len(nodeIDs) > 0 {
-		var nodes []*node.Node
-		if err := m.DB.WithContext(ctx).Model(&node.Node{}).Where("id IN (?)", nodeIDs).Find(&nodes).Error; err != nil {
-			return nil, err
+	slices.Sort(serverIDs)
+	var errs []error
+	for _, serverID := range serverIDs {
+		if err := m.ClearServerCache(ctx, serverID); err != nil {
+			errs = append(errs, fmt.Errorf("clear the caches of server %d: %w", serverID, err))
 		}
-		appendKeys(nodes)
 	}
-	if len(tags) > 0 {
-		var nodes []*node.Node
-		if err := m.DB.WithContext(ctx).Model(&node.Node{}).Scopes(nodeInSet("tags", tags)).Find(&nodes).Error; err != nil {
-			return nil, err
-		}
-		appendKeys(nodes)
-	}
-	return keys, nil
+	return errors.Join(errs...)
 }
 
 func (m *nodeRepo) InsertServer(ctx context.Context, data *node.Server) error {
@@ -108,14 +114,19 @@ func (m *nodeRepo) FindOneServer(ctx context.Context, id int64) (*node.Server, e
 	return &server, err
 }
 
+// serverAdminColumns are the server columns an administrator's update
+// writes. last_reported_at is the nodes' heartbeat: a whole-row save wrote
+// back the value read at the start of the request over a heartbeat that
+// landed meanwhile.
+var serverAdminColumns = []string{"name", "country", "city", "address", "sort", "protocols"}
+
+// UpdateServer stores an administrator's changes to the server: its
+// settings columns, zero values included, and updated_at.
 func (m *nodeRepo) UpdateServer(ctx context.Context, data *node.Server) error {
-	_, err := m.FindOneServer(ctx, data.Id)
-	if err != nil {
+	if _, err := m.FindOneServer(ctx, data.Id); err != nil {
 		return err
 	}
-
-	db := m.DB
-	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
+	return m.DB.WithContext(ctx).Model(data).Select(serverAdminColumns).Updates(data).Error
 }
 
 // UpdateServerProtocolsIfCurrent persists node-reported protocol metadata
@@ -203,13 +214,17 @@ func (m *nodeRepo) SaveServerConfigOverride(ctx context.Context, data *node.Serv
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	if err == nil {
-		data.Id = old.Id
-		data.CreatedAt = old.CreatedAt
+	if err != nil {
+		return db.WithContext(ctx).Create(data).Error
 	}
-
-	return db.WithContext(ctx).Save(data).Error
+	data.Id = old.Id
+	data.CreatedAt = old.CreatedAt
+	return db.WithContext(ctx).Model(data).Select(serverConfigOverrideColumns).Updates(data).Error
 }
+
+// serverConfigOverrideColumns are the override values an update writes; a
+// nil value is written as NULL, which means inherit.
+var serverConfigOverrideColumns = []string{"ip_strategy", "dns", "block", "outbound"}
 
 func (m *nodeRepo) DeleteServerConfigOverride(ctx context.Context, serverId int64) error {
 	db := m.DB
@@ -227,14 +242,17 @@ func (m *nodeRepo) FindOneNode(ctx context.Context, id int64) (*node.Node, error
 	return &n, err
 }
 
+// nodeAdminColumns are the node columns an administrator's update writes.
+var nodeAdminColumns = []string{"name", "tags", "port", "address", "server_id", "protocol", "enabled", "sort"}
+
+// UpdateNode stores an administrator's changes to the node: its settings
+// columns, zero values included, and updated_at; the loaded Server
+// association, if any, is left alone.
 func (m *nodeRepo) UpdateNode(ctx context.Context, data *node.Node) error {
-	_, err := m.FindOneNode(ctx, data.Id)
-	if err != nil {
+	if _, err := m.FindOneNode(ctx, data.Id); err != nil {
 		return err
 	}
-
-	db := m.DB
-	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
+	return m.DB.WithContext(ctx).Model(data).Select(nodeAdminColumns).Updates(data).Error
 }
 
 func (m *nodeRepo) DeleteNode(ctx context.Context, id int64) error {

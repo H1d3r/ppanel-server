@@ -25,7 +25,7 @@ func newReportAggregator(t *testing.T, served func(context.Context, int64, strin
 
 func reportBucket(t *testing.T, client *redis.Client, now time.Time) map[string]string {
 	t.Helper()
-	values, err := client.HGetAll(context.Background(), bucketPrefix+now.Truncate(time.Minute).Format(bucketLayout)).Result()
+	values, err := client.HGetAll(context.Background(), bucketPrefix+bucketSuffix(bucketMinute(now))).Result()
 	if err != nil {
 		t.Fatalf("read bucket: %v", err)
 	}
@@ -64,8 +64,8 @@ func TestAddReportDropsInvalidAndUnservedEntries(t *testing.T) {
 	want := map[string]string{
 		trafficField(4, 2, trafficFieldUpload):   "5",
 		trafficField(4, 2, trafficFieldDownload): "7",
-		trafficField(4, 6, trafficFieldUpload):   strconv.FormatInt(int64(float32(MaxReportedTraffic/2)), 10),
-		trafficField(4, 6, trafficFieldDownload): strconv.FormatInt(int64(float32(MaxReportedTraffic/2)), 10),
+		trafficField(4, 6, trafficFieldUpload):   strconv.FormatInt(MaxReportedTraffic/2, 10),
+		trafficField(4, 6, trafficFieldDownload): strconv.FormatInt(MaxReportedTraffic/2, 10),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("bucket = %v, want %v", got, want)
