@@ -47,7 +47,10 @@ func TestOrderRepoMarkOrderPaidUsesPendingCondition(t *testing.T) {
 		t.Fatal("dry-run update must not report an affected row")
 	}
 	sql := logs.String()
-	for _, want := range []string{"UPDATE `order`", "`status`=2", "`trade_no`='trade-456'", "WHERE order_no = 'order-123' AND status = 1"} {
+	// The transition binds the trade number: an order that claimed another
+	// gateway payment is left alone.
+	for _, want := range []string{"UPDATE `order`", "`status`=2", "`trade_no`='trade-456'",
+		"WHERE order_no = 'order-123' AND status = 1 AND (trade_no IS NULL OR trade_no = '' OR trade_no = 'trade-456')"} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("SQL missing %q:\n%s", want, sql)
 		}

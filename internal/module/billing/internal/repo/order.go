@@ -384,7 +384,10 @@ func (m *orderRepo) CountPendingByPaymentID(ctx context.Context, paymentID int64
 
 // MarkOrderPaid performs the only valid callback-driven state transition. The
 // affected-row result is part of the contract so callers cannot enqueue an
-// activation task after a stale or conflicting transition.
+// activation task after a stale or conflicting transition. The transition
+// also binds the trade number: an order that already claimed another
+// gateway payment (a Stripe intent, a Cryptomus invoice) is left alone, so a
+// settlement racing that claim cannot overwrite it.
 func (m *orderRepo) MarkOrderPaid(ctx context.Context, orderNo, tradeNo string) (bool, error) {
 	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
 	if err != nil {
@@ -394,7 +397,7 @@ func (m *orderRepo) MarkOrderPaid(ctx context.Context, orderNo, tradeNo string) 
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		return withOrderEventTransaction(conn, func(conn *gorm.DB) error {
 			result := conn.Model(&order.Order{}).
-				Where("order_no = ? AND status = ?", orderNo, order.StatusPending).
+				Where("order_no = ? AND status = ? AND (trade_no IS NULL OR trade_no = '' OR trade_no = ?)", orderNo, order.StatusPending, tradeNo).
 				Updates(map[string]any{
 					"status":        order.StatusPaid,
 					"trade_no":      tradeNo,
