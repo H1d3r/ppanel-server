@@ -259,11 +259,12 @@ server {
 }
 ```
 
-Tell the server which proxy to trust, otherwise `X-Forwarded-For` is ignored and every client appears as
-`127.0.0.1` in the logs and the rate limits. In `etc/ppanel.yaml`:
+nginx on the same host is trusted by default: `TrustedProxies` covers the loopback interface and the private
+networks, so `X-Forwarded-For` names the client without configuration. List the proxy only when it has a public
+address (or to be explicit), and list the frontends' origins. In `etc/ppanel.yaml`:
 
 ```yaml
-TrustedProxies: ["127.0.0.1"]                       # the nginx host
+TrustedProxies: ["127.0.0.1"]                       # optional here: the nginx host is covered by the default
 AllowedOrigins: ["https://user.ppanel.dev", "https://admin.ppanel.dev"]
 ```
 
@@ -283,4 +284,4 @@ real_ip_header CF-Connecting-IP;
 ```
 
 Do not use `set_real_ip_from 0.0.0.0/0`: it lets any client forge its address. `TrustedProxies` in
-`etc/ppanel.yaml` still lists only the nginx host.
+`etc/ppanel.yaml` still names only the nginx host (or keeps its default), never Cloudflare's ranges.

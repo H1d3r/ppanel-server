@@ -32,8 +32,9 @@ type Boot struct {
 	Port  int    `yaml:"Port" default:"8080"`
 	Debug bool   `yaml:"Debug" default:"false"`
 	// TrustedProxies lists the reverse proxies (IP addresses or CIDRs) whose
-	// X-Forwarded-For and X-Real-IP headers name the real client. Empty trusts
-	// no header: the client address is the connection's remote address.
+	// X-Forwarded-For and X-Real-IP headers name the real client. Empty means
+	// DefaultTrustedProxies; the entry "private" stands for those networks in a
+	// longer list, and ["none"] trusts no header at all.
 	TrustedProxies []string `yaml:"TrustedProxies"`
 	// AllowedOrigins lists the browser origins CORS admits, as scheme://host[:port].
 	// Empty keeps the permissive default of reflecting the request's Origin.
@@ -95,6 +96,15 @@ type RedisConfig struct {
 	// every deployment sharing one Redis its own value.
 	QueueDB int `yaml:"QueueDB" default:"5"`
 }
+
+// DefaultTrustedProxies are the networks trusted as reverse proxies when
+// TrustedProxies is empty: the loopback interface and the private ranges, so
+// nginx on the same host, a Docker bridge or an internal load balancer is
+// trusted without configuration. Clients reach a proxy panel over the public
+// network, so a peer from these ranges is a proxy, not a client; a server its
+// clients reach directly from a private network sets TrustedProxies to
+// ["none"].
+var DefaultTrustedProxies = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"}
 
 // HTTPConfig bounds the API listener. The defaults are the values the server
 // ran with before they were configurable.

@@ -63,12 +63,12 @@ func resolvedClientIP(t *testing.T, srv *Server, peer string, headers map[string
 	return string(ctx.Response.Body())
 }
 
-// Without trusted proxies the forwarding headers are ignored: the client is
-// the connection's peer, whatever X-Forwarded-For or X-Real-IP claim. The
-// rate limits, audit logs and device records keyed by the address cannot be
+// With ["none"] the forwarding headers are ignored: the client is the
+// connection's peer, whatever X-Forwarded-For or X-Real-IP claim. The rate
+// limits, audit logs and device records keyed by the address cannot be
 // steered by the client.
 func TestClientIPIgnoresForwardingHeadersWithoutTrustedProxies(t *testing.T) {
-	app := probeServer(t, nil)
+	app := probeServer(t, []string{"none"})
 	for name, headers := range map[string]map[string]string{
 		"no headers":      {},
 		"x-forwarded-for": {"X-Forwarded-For": "198.51.100.7"},
@@ -80,6 +80,56 @@ func TestClientIPIgnoresForwardingHeadersWithoutTrustedProxies(t *testing.T) {
 				t.Fatalf("client IP = %q, want the peer 203.0.113.5", got)
 			}
 		})
+	}
+}
+
+// By default the loopback interface and the private networks are trusted:
+// nginx on the same host, a Docker bridge or an internal load balancer name
+// the client in X-Forwarded-For without configuration, while a public peer
+// forwarding a header is still taken at its own address.
+func TestClientIPTrustsLoopbackAndPrivateNetworksByDefault(t *testing.T) {
+	app := probeServer(t, nil)
+	for name, tc := range map[string]struct {
+		peer    string
+		headers map[string]string
+		want    string
+	}{
+		"loopback nginx":          {"127.0.0.1", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "198.51.100.7"},
+		"docker bridge":           {"172.17.0.1", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "198.51.100.7"},
+		"10/8 load balancer":      {"10.1.2.3", map[string]string{"X-Real-IP": "198.51.100.7"}, "198.51.100.7"},
+		"192.168 proxy":           {"192.168.1.10", map[string]string{"X-Forwarded-For": "6.6.6.6, 198.51.100.7"}, "198.51.100.7"},
+		"public peer forwarding":  {"203.0.113.5", map[string]string{"X-Forwarded-For": "198.51.100.7"}, "203.0.113.5"},
+		"loopback without header": {"127.0.0.1", map[string]string{}, "127.0.0.1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := resolvedClientIP(t, app, tc.peer, tc.headers); got != tc.want {
+				t.Fatalf("client IP = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// An empty configuration is the default networks; "private" stands for them
+// in a longer list; "none" trusts nothing and refuses company.
+func TestParseTrustedProxiesKeywords(t *testing.T) {
+	defaults, err := ParseTrustedProxies(nil)
+	if err != nil || len(defaults) != len(appconfig.DefaultTrustedProxies) {
+		t.Fatalf("ParseTrustedProxies(nil) = %v, %v; want the %d default networks", defaults, err, len(appconfig.DefaultTrustedProxies))
+	}
+	blank, err := ParseTrustedProxies([]string{" ", ""})
+	if err != nil || len(blank) != len(defaults) {
+		t.Fatalf("blank entries = %v, %v; want the defaults", blank, err)
+	}
+	extended, err := ParseTrustedProxies([]string{"Private", "203.0.113.10"})
+	if err != nil || len(extended) != len(defaults)+1 {
+		t.Fatalf("private + address = %v, %v; want the defaults plus one", extended, err)
+	}
+	none, err := ParseTrustedProxies([]string{"NONE"})
+	if err != nil || none != nil {
+		t.Fatalf("none = %v, %v; want no networks and no error", none, err)
+	}
+	if _, err := ParseTrustedProxies([]string{"none", "10.0.0.0/8"}); err == nil {
+		t.Fatal("none combined with a network must be refused")
 	}
 }
 

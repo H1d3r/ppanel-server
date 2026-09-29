@@ -231,10 +231,10 @@ server {
 }
 ```
 
-还要告诉服务信任哪个代理，否则 `X-Forwarded-For` 会被忽略，日志和限流看到的所有客户端都是 `127.0.0.1`。在 `etc/ppanel.yaml` 中：
+同机的 nginx 默认即被信任：`TrustedProxies` 默认覆盖回环接口与私有网段，`X-Forwarded-For` 无需配置就会被采用。只有代理使用公网地址（或希望显式声明）时才需要填写代理，另外把前端来源填入 `AllowedOrigins`。在 `etc/ppanel.yaml` 中：
 
 ```yaml
-TrustedProxies: ["127.0.0.1"]                       # nginx 所在主机
+TrustedProxies: ["127.0.0.1"]                       # 此处可省略：nginx 所在主机已在默认范围内
 AllowedOrigins: ["https://user.ppanel.dev", "https://admin.ppanel.dev"]
 ```
 
@@ -252,4 +252,4 @@ real_ip_header CF-Connecting-IP;
 # Cloudflare End
 ```
 
-不要使用 `set_real_ip_from 0.0.0.0/0`：那会让任何客户端伪造自己的地址。`etc/ppanel.yaml` 中的 `TrustedProxies` 仍然只填 nginx 所在主机。
+不要使用 `set_real_ip_from 0.0.0.0/0`：那会让任何客户端伪造自己的地址。`etc/ppanel.yaml` 中的 `TrustedProxies` 仍然只填 nginx 所在主机（或保持默认），不要填 Cloudflare 的地址段。

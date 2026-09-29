@@ -20,7 +20,7 @@ Below is an example of the configuration file with default values and explanatio
 Host: "0.0.0.0"                     # Server listening address
 Port: 8080                          # Server listening port
 Debug: false                        # Enable debug mode (disables background logging)
-TrustedProxies: []                  # Reverse proxies whose X-Forwarded-For is trusted (IPs or CIDRs); empty = none
+TrustedProxies: []                  # Reverse proxies whose X-Forwarded-For is trusted; empty = loopback + private networks, ["none"] = no proxy
 AllowedOrigins: []                  # Browser origins admitted by CORS; empty = reflect any Origin
 HTTP: # Listener limits
   ReadTimeoutSeconds: 180           # Time allowed to read a request; 0 = unlimited
@@ -102,11 +102,15 @@ Administrator: # First administrator, created on the first start
   - Default: `false`.
 - **`TrustedProxies`**: Reverse proxies whose `X-Forwarded-For` and `X-Real-IP` headers name the real client, as IP
   addresses or CIDR ranges, for example `["127.0.0.1", "10.0.0.0/8"]`.
-  - Default: empty. No header is trusted: the client address is the connection's remote address.
+  - Default: the loopback interface and the private networks (`127.0.0.0/8`, `::1/128`, `10.0.0.0/8`,
+    `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), so nginx on the same host, a Docker bridge or an internal load
+    balancer is trusted without configuration. A configured list replaces the default; the entry `private` stands for
+    the default networks (`["private", "203.0.113.10"]` adds a public proxy), and `["none"]` trusts no header at
+    all, for a server its clients reach directly.
   - The client address feeds the login and audit logs and every per-IP limit (verification codes, device login,
-    availability checks, subscription fetches, registrations). When the server runs behind nginx, Caddy, a load
-    balancer or a Cloudflare tunnel, list that proxy's address here, otherwise every client appears as the proxy and
-    the limits apply to all clients together; [install.md, NGINX reverse proxy](install.md#nginx-reverse-proxy)
+    availability checks, subscription fetches, registrations). When the proxy's address is outside the default
+    networks (a load balancer or a Cloudflare tunnel with a public address), list it here, otherwise every client
+    appears as the proxy and the limits apply to all clients together; [install.md, NGINX reverse proxy](install.md#nginx-reverse-proxy)
     shows the matching nginx configuration. List the proxies only, never the clients: an entry such as `0.0.0.0/0`
     lets anyone choose the address the server records.
 - **`AllowedOrigins`**: Browser origins admitted by CORS, as `scheme://host[:port]`, for example
@@ -364,8 +368,9 @@ within the timeout. The container image's `HEALTHCHECK` runs it, and a systemd o
 
 - **Security**: Change the first administrator's password after the first sign-in. The server logs an error at
   startup while any administrator still uses the old default password `password`.
-- **Reverse proxy**: Behind nginx, Caddy or a load balancer set `TrustedProxies` to the proxy's address, otherwise the
-  logs and the rate limits see the proxy instead of the clients; set `AllowedOrigins` to the frontends' origins.
+- **Reverse proxy**: A proxy on the same host or in a private network is trusted by default; a proxy with a public
+  address goes into `TrustedProxies`, and a server its clients reach directly sets `TrustedProxies: ["none"]`; set
+  `AllowedOrigins` to the frontends' origins.
 - **Site host**: Set the site host in the system settings before enabling Apple or Telegram sign-in (3.10).
 - **Logging**: Use `file` or `volume` mode for production to persist logs. Set `Level` to `error` to reduce log
   volume; `severe` writes nothing at all.
