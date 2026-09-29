@@ -4,6 +4,7 @@
 package conf
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -19,9 +20,12 @@ func MustLoad(file string, v any) {
 }
 
 // Load fills v, a pointer to a struct, with the defaults of its `default`
-// tags and then with the YAML file.
+// tags and then with the YAML file. A default that does not fit its field is
+// an error, like an unreadable or malformed file.
 func Load(file string, v any) error {
-	setDefaults(v)
+	if err := setDefaults(v); err != nil {
+		return err
+	}
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return err
@@ -29,7 +33,7 @@ func Load(file string, v any) error {
 
 	// Unmarshal the YAML content directly into the target structure
 	if err := yaml.Unmarshal(content, v); err != nil {
-		return err
+		return fmt.Errorf("parse %s: %w", file, err)
 	}
 	return nil
 }
