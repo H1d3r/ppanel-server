@@ -1,15 +1,31 @@
 package adminserver
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
-	"uuid"
 
 	"github.com/perfect-panel/server/internal/infra/protocolkey"
 	"github.com/perfect-panel/server/internal/module/network/entity/node"
 )
 
-const generatedServerKeyLength = 32
+const (
+	generatedServerKeyLength = 32
+	// generatedServerKeySeedBytes is how much randomness a generated server
+	// key is derived from.
+	generatedServerKeySeedBytes = 32
+)
+
+// randomServerKeySeed returns the random seed of a generated server key,
+// hex-encoded. The key was derived from a UUIDv7 before: at most 74 random
+// bits, and the time it was issued in the rest.
+func randomServerKeySeed() string {
+	seed := make([]byte, generatedServerKeySeedBytes)
+	// crypto/rand.Read never returns an error (Go 1.24 and later).
+	_, _ = rand.Read(seed)
+	return hex.EncodeToString(seed)
+}
 
 type realityProtocolKey struct {
 	privateKey string
@@ -124,7 +140,7 @@ func ensureGeneratedProtocolKey(protocol *node.Protocol, existing map[string]str
 		protocol.ServerKey = key
 		return
 	}
-	protocol.ServerKey = protocolkey.GenerateCipher(uuid.NewV7().String(), generatedServerKeyLength)
+	protocol.ServerKey = protocolkey.GenerateCipher(randomServerKeySeed(), generatedServerKeyLength)
 }
 
 func ensureShadowsocks2022ServerKey(protocol *node.Protocol, existing map[string]string) {

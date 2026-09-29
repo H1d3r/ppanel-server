@@ -108,14 +108,19 @@ func (m *nodeRepo) FindOneServer(ctx context.Context, id int64) (*node.Server, e
 	return &server, err
 }
 
+// serverAdminColumns are the server columns an administrator's update
+// writes. last_reported_at is the nodes' heartbeat: a whole-row save wrote
+// back the value read at the start of the request over a heartbeat that
+// landed meanwhile.
+var serverAdminColumns = []string{"name", "country", "city", "address", "sort", "protocols"}
+
+// UpdateServer stores an administrator's changes to the server: its
+// settings columns, zero values included, and updated_at.
 func (m *nodeRepo) UpdateServer(ctx context.Context, data *node.Server) error {
-	_, err := m.FindOneServer(ctx, data.Id)
-	if err != nil {
+	if _, err := m.FindOneServer(ctx, data.Id); err != nil {
 		return err
 	}
-
-	db := m.DB
-	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
+	return m.DB.WithContext(ctx).Model(data).Select(serverAdminColumns).Updates(data).Error
 }
 
 // UpdateServerProtocolsIfCurrent persists node-reported protocol metadata
@@ -203,13 +208,17 @@ func (m *nodeRepo) SaveServerConfigOverride(ctx context.Context, data *node.Serv
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	if err == nil {
-		data.Id = old.Id
-		data.CreatedAt = old.CreatedAt
+	if err != nil {
+		return db.WithContext(ctx).Create(data).Error
 	}
-
-	return db.WithContext(ctx).Save(data).Error
+	data.Id = old.Id
+	data.CreatedAt = old.CreatedAt
+	return db.WithContext(ctx).Model(data).Select(serverConfigOverrideColumns).Updates(data).Error
 }
+
+// serverConfigOverrideColumns are the override values an update writes; a
+// nil value is written as NULL, which means inherit.
+var serverConfigOverrideColumns = []string{"ip_strategy", "dns", "block", "outbound"}
 
 func (m *nodeRepo) DeleteServerConfigOverride(ctx context.Context, serverId int64) error {
 	db := m.DB
@@ -227,14 +236,17 @@ func (m *nodeRepo) FindOneNode(ctx context.Context, id int64) (*node.Node, error
 	return &n, err
 }
 
+// nodeAdminColumns are the node columns an administrator's update writes.
+var nodeAdminColumns = []string{"name", "tags", "port", "address", "server_id", "protocol", "enabled", "sort"}
+
+// UpdateNode stores an administrator's changes to the node: its settings
+// columns, zero values included, and updated_at; the loaded Server
+// association, if any, is left alone.
 func (m *nodeRepo) UpdateNode(ctx context.Context, data *node.Node) error {
-	_, err := m.FindOneNode(ctx, data.Id)
-	if err != nil {
+	if _, err := m.FindOneNode(ctx, data.Id); err != nil {
 		return err
 	}
-
-	db := m.DB
-	return db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
+	return m.DB.WithContext(ctx).Model(data).Select(nodeAdminColumns).Updates(data).Error
 }
 
 func (m *nodeRepo) DeleteNode(ctx context.Context, id int64) error {
