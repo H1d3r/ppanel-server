@@ -5,15 +5,20 @@ run:
 
 linters:
   # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus
-  # linters for defects this codebase has actually had.
+  # linters for defects this codebase has actually had, and the security
+  # linters a payment and authentication server should run.
   default: standard
   enable:
     - bodyclose # unclosed HTTP response bodies
     - dupl # copy-pasted blocks
     - errorlint # %v instead of %w, == on wrapped errors
     - gocognit # functions too complex to review
+    - gosec # insecure patterns: weak crypto, permissive files, injection, unbounded reads
     - misspell
     - nilerr # returning nil after checking err != nil
+    - noctx # HTTP requests and database calls without a context
+    - rowserrcheck # sql.Rows iterated without checking Rows.Err
+    - sqlclosecheck # sql.Rows and sql.Stmt left open
     - unconvert
     - unparam
   settings:
@@ -21,6 +26,19 @@ linters:
       threshold: 150
     gocognit:
       min-complexity: 40
+    gosec:
+      excludes:
+        # Unhandled errors: errcheck reports them, with its own exclusions.
+        - G104
+        # Integer conversions (int -> uint32 for argon2 parameters, uint64
+        # byte counts to int64 columns, ...): every conversion in the tree
+        # is flagged whether or not the value can overflow, 31 at the time
+        # of writing, so the rule hides the findings that matter.
+        - G115
+        # Files opened from a variable path: the server reads the paths its
+        # configuration and command line name (the configuration file, the
+        # log files, TLS certificates), never a path a request supplies.
+        - G304
     staticcheck:
       checks:
         - all
@@ -47,6 +65,25 @@ linters:
     generated: strict
     paths:
       - api/server/v1/server.pb.go
+    rules:
+      # Tests and test-support packages (…/geoiptest, …/billingtest,
+      # …/subtest) hold fixture credentials, world-readable temp files,
+      # listeners without a context and SQL built from table names on
+      # purpose; the security linters are for the code that ships.
+      - path: _test\.go$
+        linters:
+          - gosec
+          - noctx
+      - path: internal/.*/[a-z]+test/
+        linters:
+          - gosec
+      # The authentication method configurations hold the providers' client
+      # secrets and SMTP passwords by design: they are stored as JSON and
+      # edited by administrators. G117 flags every such field.
+      - path: internal/module/identity/entity/auth/auth\.go$
+        linters:
+          - gosec
+        text: "G117"
 
 formatters:
   enable:

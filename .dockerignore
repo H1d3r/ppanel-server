@@ -32,3 +32,6 @@ lefthook.yml
 .goreleaser.yaml
 .idea/
 .vscode/
+
+# Local agent sessions
+.claude/

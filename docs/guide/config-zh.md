@@ -1,12 +1,13 @@
 # PPanel 配置指南
 
-本文件为 PPanel 应用程序的配置文件提供全面指南。配置文件采用 YAML 格式，定义了服务器、日志、数据库、Redis 和管理员访问的相关设置。
+本文件为 PPanel 应用程序的配置文件提供全面指南。配置文件采用 YAML 格式，定义了服务器、日志、链路追踪、数据库、Redis 和管理员访问的相关设置。
 
 ## 1. 配置文件概述
 
 - **默认路径**：`./etc/ppanel.yaml`
 - **自定义路径**：通过启动参数 `--config` 指定配置文件路径。
 - **格式**：YAML 格式，支持注释，文件名需以 `.yaml` 结尾。
+- **权限**：文件中保存着 JWT 密钥和数据库凭据，请只允许运行服务的用户读取（`chmod 0600`）；安装向导和环境变量安装（第 4 节）写入文件时也使用该权限。
 
 ## 2. 配置文件结构
 
@@ -17,6 +18,18 @@
 Host: "0.0.0.0"                     # 服务监听地址
 Port: 8080                          # 服务监听端口
 Debug: false                        # 是否开启调试模式（禁用后台日志）
+TrustedProxies: []                  # 信任其 X-Forwarded-For 的反向代理（IP 或 CIDR）；空 = 不信任任何代理
+AllowedOrigins: []                  # CORS 允许的浏览器来源；空 = 原样反射请求的 Origin
+HTTP: # 监听器限制
+  ReadTimeoutSeconds: 180           # 读取请求的时限；0 = 不限
+  WriteTimeoutSeconds: 0            # 写出响应的时限；0 = 不限（流式接口需要）
+  IdleTimeoutSeconds: 180           # keep-alive 连接空闲多久后关闭
+  MaxRequestBodyMB: 4               # 接受的最大请求体（MB）
+AppLocation: "Asia/Shanghai"        # 应用时区（见 3.1）
+TLS: # 由服务自身提供 HTTPS（通常交给反向代理）
+  Enable: false
+  CertFile: ""
+  KeyFile: ""
 JwtAuth: # JWT 认证配置
   AccessSecret: ""                  # 访问令牌密钥（必填，见 3.2）
   AccessExpire: 604800              # 访问令牌过期时间（秒）
@@ -33,6 +46,16 @@ Logger: # 日志配置
   MaxBackups: 30                    # 最大日志备份数
   MaxSize: 100                      # 最大日志文件大小（MB）
   Rotation: "daily"                 # 日志轮转策略（daily、size）
+Trace: # OpenTelemetry 链路追踪（见 3.4）
+  Name: ""                          # 记录在 trace 中的服务名
+  Endpoint: ""                      # 收集器地址；空 = 不导出
+  Sampler: 0.1                      # 采样比例
+  Batcher: "jaeger"                 # jaeger、zipkin、otlpgrpc、otlphttp 或 file
+  Insecure: true                    # OTLP/gRPC 不使用 TLS；false = 与收集器之间启用 TLS
+  OtlpHeaders: {}                   # OTLP 导出附加的请求头
+  OtlpHttpPath: ""                  # Endpoint 为 host:port 时 otlphttp 的路径
+  OtlpHttpSecure: false             # Endpoint 为 host:port 时 otlphttp 是否使用 HTTPS
+  Disabled: false                   # true = 关闭链路追踪
 Database: # MySQL、MariaDB 或 PostgreSQL 数据库配置
   Driver: "mysql"                   # mysql 或 postgres
   Addr: ""                          # 数据库地址（必填）
@@ -45,10 +68,17 @@ Database: # MySQL、MariaDB 或 PostgreSQL 数据库配置
   ConnMaxLifetime: 1800             # 连接最大生命周期（秒）
   ConnMaxIdleTime: 300              # 空闲连接最大保留时间（秒）
   SlowThreshold: 1000               # 慢查询阈值（毫秒）
+GeoIP: # MaxMind GeoLite2 城市库，为审计日志中的地址标注位置（见 3.6）
+  Path: "./cache/GeoLite2-City.mmdb"
+  Download: true                    # Path 不存在时自动下载
+  DownloadURL: ""                   # 空 = 内置镜像
+  SHA256: ""                        # 文件应有的十六进制摘要；空 = 不校验
+  Required: false                   # true = 没有可用的库则拒绝启动
 Redis: # Redis 配置
   Host: "localhost:6379"            # Redis 地址
   Pass: ""                          # Redis 密码
-  DB: 0                             # Redis 数据库索引
+  DB: 0                             # 缓存与会话使用的 Redis 数据库
+  QueueDB: 5                        # 任务队列使用的 Redis 数据库
 Administrator: # 首位管理员，仅在首次启动时创建
   Email: "admin@ppanel.dev"         # 管理员登录邮箱
   Password: ""                      # 管理员登录密码，留空则自动生成
@@ -63,8 +93,22 @@ Administrator: # 首位管理员，仅在首次启动时创建
   - 它只是绑定地址。支付回调等对外链接由站点设置中的站点地址或支付方式自己的域名生成。
 - **`Port`**：服务监听的端口。
   - 默认：`8080`。
+  - 容器镜像以非特权用户运行，无法绑定 1024 以下的端口：需要低端口时请用端口映射（`-p 443:8080`），不要修改 `Port`。
 - **`Debug`**：是否开启调试模式，开启后禁用后台日志功能。
   - 默认：`false`。
+- **`TrustedProxies`**：可信的反向代理，其 `X-Forwarded-For` / `X-Real-IP` 头被视为真实客户端地址；填 IP 或 CIDR，例如
+  `["127.0.0.1", "10.0.0.0/8"]`。
+  - 默认：空。不信任任何请求头：客户端地址即连接的对端地址。
+  - 客户端地址用于限流、登录与审计日志以及按 IP 的注册限制。服务部署在 nginx、Caddy、负载均衡或 Cloudflare 隧道之后时，请把该代理的地址填在这里，否则所有客户端都会显示为代理的地址。只填代理，不要填客户端：`0.0.0.0/0` 之类的配置会让任何人自行决定服务记录的地址。
+- **`AllowedOrigins`**：CORS 允许的浏览器来源，格式 `scheme://host[:port]`，例如
+  `["https://user.example.com", "https://admin.example.com"]`。
+  - 默认：空，保持宽松的旧行为：原样反射请求的 `Origin`，任何网站的脚本都能在浏览器中调用 API。
+  - 生产环境请填写用户端和管理端前端的来源。不带 `Origin` 头的请求（客户端、节点、订阅）不受影响。
+- **`HTTP`**：API 监听器的限制。默认值就是这些选项可配置之前服务一直使用的值。
+  - **`ReadTimeoutSeconds`**：读取一个请求（头和体）的时限。默认 `180`；`0` = 不限。
+  - **`WriteTimeoutSeconds`**：写出响应的时限。默认 `0` = 不限，流式接口（SSE 订单事件、节点 WebSocket）需要如此，设置上限会切断它们。
+  - **`IdleTimeoutSeconds`**：keep-alive 连接空闲多久后关闭。默认 `180`。
+  - **`MaxRequestBodyMB`**：接受的最大请求体（MB），更大的请求在读取前即被拒绝。默认 `4`，足够所有 API 请求，包括上传的 logo 和模板。
 - **`AppLocation`**：应用使用的 IANA 时区，"今天"、到期提醒、流量重置周期和每日统计都按它计算。
   - 默认：`Asia/Shanghai`。
   - 任何 IANA 时区名都可用：二进制内嵌了时区数据库（`time/tzdata`），宿主机和容器镜像都不需要 zoneinfo 文件。
@@ -73,13 +117,15 @@ Administrator: # 首位管理员，仅在首次启动时创建
   - 必须与数据库时区（`Database.Config` 中 MySQL 的 `loc`、PostgreSQL 的 `TimeZone`）一致：时间按数据库时区存储，
     统计也按数据库时区分天。安装页以及通过 `PPANEL_DB` / `PPANEL_REDIS` 环境变量完成的安装都会把 `AppLocation`
     的时区写进新数据库的连接参数；对已有数据库，两者不一致时服务启动会记录错误日志。只能在空库上，或把已存储的时间换算之后再修改数据库时区，否则所有已存时间都会被重新解读。
+- **`TLS`**：由服务自身提供 HTTPS。
+  - **`Enable`**：默认 `false`。通常由反向代理终结 TLS，再把代理填入 `TrustedProxies`。
+  - **`CertFile`**、**`KeyFile`**：PEM 格式证书链与私钥的路径，需要运行服务的用户可读。
 
 ### 3.2 JWT 认证 (`JwtAuth`)
 
 - **`AccessSecret`**：访问令牌的密钥。会话、订单事件凭据和游客结账签名都由它派生，为空则任何人都能伪造。
   - 必填：为空时服务启动即退出；短于 16 个字符时会记录警告。请使用足够长的随机值。
-  - 只有全新安装会自动生成：默认的 `etc/ppanel.yaml` 没有密钥时，安装向导（或用 `PPANEL_DB` / `PPANEL_REDIS`
-    环境变量补全配置的流程）会生成一个并写入文件；通过 `--config` 指定的文件必须自带密钥。
+  - 只有全新安装会自动生成：配置文件没有密钥时，安装向导（或用 `PPANEL_DB` / `PPANEL_REDIS` 环境变量补全配置的流程，见第 4 节）会生成一个并写入文件；预先填写的配置文件必须自带密钥。
 - **`AccessExpire`**：令牌过期时间（秒）。
   - 默认：`604800`（7天）。
 
@@ -95,7 +141,7 @@ Administrator: # 首位管理员，仅在首次启动时创建
   - 默认：`json`。
 - **`TimeFormat`**：日志时间格式。
   - 默认：`2006-01-02 15:04:05.000`。
-- **`Path`**：日志文件存储目录。
+- **`Path`**：日志文件（`access.log`、`error.log`、`slow.log`）的存储目录，相对于工作目录。
   - 默认：`logs`。
 - **`Level`**：日志过滤级别。
   - 选项：`debug`（全部）、`info`（除 debug 外的全部）、`error`（仅错误、慢查询和堆栈）、`severe`（不输出任何日志：
@@ -115,7 +161,33 @@ Administrator: # 首位管理员，仅在首次启动时创建
   - 选项：`daily`（按天轮转）、`size`（按大小轮转）。
   - 默认：`daily`。
 
-### 3.4 数据库 (`Database`)
+### 3.4 链路追踪 (`Trace`)
+
+对 HTTP 请求、数据库调用和队列任务做 OpenTelemetry 追踪。未设置 `Endpoint` 时不会导出任何数据。
+
+- **`Name`**：记录在 trace 中的服务名（`service.name`）。
+  - 默认：空；导出时请填一个名字，例如 `ppanel`。
+- **`Endpoint`**：batcher 发送 span 的目标；为空则不导出。
+  - `jaeger` batcher 使用 Jaeger 的 OTLP/HTTP 接收端：可以是 `http://jaeger:4318` 这样的 URL（未指定路径时提交到
+    `/v1/traces`，由 scheme 决定是否 TLS），也可以是纯 `host:port`。Jaeger 从 1.35 起原生接收 OTLP；旧 Jaeger Thrift
+    导出器的地址（`udp://host:6831`、`http://host:14268/api/traces`）会被改写为同一主机 4318 端口的 OTLP，并在日志中给出警告。
+  - `otlpgrpc` 填收集器的 gRPC 地址（`host:4317`）；`otlphttp` 填 URL 或 `host:port`（配合 `OtlpHttpPath`、
+    `OtlpHttpSecure`）；`zipkin` 填 Zipkin API 地址；`file` 填文件路径。
+- **`Sampler`**：保留的 trace 比例，`0` 到 `1`。
+  - 默认：`0.1`。
+- **`Batcher`**：导出器：`jaeger`、`zipkin`、`otlpgrpc`、`otlphttp` 或 `file`。
+  - 默认：`jaeger`。
+  - `zipkin` 使用的导出器已被上游弃用，新部署请选择 OTLP 端点（`otlpgrpc`、`otlphttp` 或 `jaeger`）。
+- **`Insecure`**：`otlpgrpc` 导出器的传输安全。
+  - 默认：`true`：与收集器之间的 gRPC 连接不使用 TLS，与服务一直以来的行为相同。收集器提供 TLS 时设为 `false`，使用系统根证书校验。`otlphttp` 通过 URL scheme 或 `OtlpHttpSecure` 决定是否 TLS。
+- **`OtlpHeaders`**：每次 OTLP 导出附带的请求头，例如托管收集器需要的 `uptrace-dsn` 或 `Authorization`。
+- **`OtlpHttpPath`**：`Endpoint` 为纯 `host:port` 时 OTLP/HTTP 接收端的路径，例如 `/v1/traces`。
+- **`OtlpHttpSecure`**：`Endpoint` 为纯 `host:port` 时 `otlphttp` 是否使用 HTTPS。
+  - 默认：`false`。
+- **`Disabled`**：无视其他设置，完全关闭链路追踪。
+  - 默认：`false`。
+
+### 3.5 数据库 (`Database`)
 
 - **`Driver`**：数据库类型，可选 `mysql` 或 `postgres`。MySQL 8 与 MariaDB 11.8 均使用 `mysql`。
   - 默认：`mysql`。
@@ -129,10 +201,9 @@ Administrator: # 首位管理员，仅在首次启动时创建
   - 必填。
 - **`Config`**：对应数据库的连接参数。
   - MySQL 默认：`charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai&interpolateParams=true`。
-  - PostgreSQL 默认：`sslmode=disable&TimeZone=Asia/Shanghai&application_name=perfect-panel`。
-  - PostgreSQL 请始终显式设置 `sslmode`：驱动（pgx）把缺失的 `sslmode` 当作 `prefer`，服务器不提供 TLS 时会静默
-    回退到明文（lib/pq 过去默认 `require`）。经网络访问的数据库请用 `sslmode=require` 或 `sslmode=verify-full`；
-    默认参数中的 `disable` 只适合同一主机或内网中的数据库。
+  - PostgreSQL 默认：`sslmode=prefer&TimeZone=Asia/Shanghai&application_name=perfect-panel`。
+  - PostgreSQL：`prefer` 在服务器提供 TLS 时使用 TLS，否则会静默回退到明文。经网络访问的数据库请显式设置
+    `sslmode=require`，或配合服务器 CA 证书使用 `sslmode=verify-full`；`sslmode=disable` 只适合同一主机或内网中的数据库。
   - 这些参数中的时区即数据库时区，见 `AppLocation`。
 - **`MaxIdleConns`**：最大空闲连接数。
   - 默认：`10`。
@@ -145,26 +216,43 @@ Administrator: # 首位管理员，仅在首次启动时创建
 - **`SlowThreshold`**：慢查询阈值（毫秒）。
   - 默认：`1000`。
 
-### 3.5 Redis 配置 (`Redis`)
+### 3.6 GeoIP (`GeoIP`)
+
+MaxMind GeoLite2 城市库为登录与审计日志中的地址标注位置。没有它服务照常运行，只记录地址本身。
+
+- **`Path`**：`GeoLite2-City.mmdb` 文件的路径，相对于工作目录。
+  - 默认：`./cache/GeoLite2-City.mmdb`。容器镜像为它准备了可写的 `/app/cache`。
+- **`Download`**：`Path` 处没有文件时，启动时自动下载。
+  - 默认：`true`。
+- **`DownloadURL`**：下载地址。
+  - 默认：空，使用内置镜像（GitHub 上发布的一份 GeoLite2-City 副本）。想控制服务加载的内容，可以指向自己托管的副本，或带许可密钥的 MaxMind 下载链接。
+- **`SHA256`**：文件应有的十六进制 SHA-256 摘要；下载的或已存在的文件摘要不符即被拒绝。
+  - 默认：空，不校验。`DownloadURL` 指向自己控制的文件时建议设置。
+- **`Required`**：库缺失或无效时拒绝启动。
+  - 默认：`false`：服务在没有地理位置的情况下启动，并在日志中说明原因。
+
+### 3.7 Redis 配置 (`Redis`)
 
 - **`Host`**：Redis 服务器地址。
   - 默认：`localhost:6379`。
 - **`Pass`**：Redis 密码。
   - 默认：`""`（无密码）。
-- **`DB`**：Redis 数据库索引。
+- **`DB`**：缓存、会话与限流使用的 Redis 数据库索引。
   - 默认：`0`。
+- **`QueueDB`**：任务队列（asynq）使用的 Redis 数据库索引，生产者、消费者与调度器共用。
+  - 默认：`5`，即队列一直使用的数据库，升级后已排队的任务得以保留。多个部署共用一台 Redis 时，这里（以及 `DB`）必须各不相同，否则一个面板会消费掉另一个面板的任务。
 
-### 3.6 管理员登录 (`Administrator`)
+### 3.8 管理员登录 (`Administrator`)
 
 仅在数据库中还没有任何用户时使用一次，用来创建首位管理员。
 
 - **`Email`**：管理员登录邮箱。
   - 默认：`admin@ppanel.dev`。
 - **`Password`**：管理员登录密码。
-  - 默认：空。留空时会生成随机密码并在启动日志（`docker logs`）中打印一次，请用它登录后立即修改；
+  - 默认：空。留空时会生成随机密码并在启动日志（`docker logs`、`journalctl -u ppanel`）中打印一次，请用它登录后立即修改；
     填写了则按填写的值使用。
 
-### 3.7 邮件发送（SMTP）
+### 3.9 邮件发送（SMTP）
 
 SMTP 中继不在本文件中配置：管理员在面板的系统设置（邮件）里填写，配置保存在数据库中。字段如下：
 
@@ -179,22 +267,38 @@ SMTP 中继不在本文件中配置：管理员在面板的系统设置（邮件
 
 ## 4. 环境变量
 
-以下环境变量可用于覆盖配置文件中的设置：
+两个环境变量可以在首次启动时补全一份空的配置文件，供容器和无人值守安装使用——这些场景下只监听 `127.0.0.1` 的安装向导无法访问：
 
-| 环境变量           | 配置项      | 示例值                                          |
-|----------------|----------|----------------------------------------------|
-| `PPANEL_DB`    | MySQL/MariaDB 配置 | `root:password@tcp(localhost:3306)/vpnboard` |
-| `PPANEL_REDIS` | Redis 配置 | `redis://localhost:6379`                     |
+| 环境变量 | 配置项 | 格式 | 示例 |
+|----------------|----------|------|------|
+| `PPANEL_DB` | `Database` | MySQL DSN `user:password@tcp(host:port)/dbname[?params]`，或 URL：`mysql://user:password@host:3306/dbname`、`postgres://user:password@host:5432/dbname[?sslmode=require]` | `ppanel:secret@tcp(127.0.0.1:3306)/ppanel` |
+| `PPANEL_REDIS` | `Redis` | `redis://[:password@]host[:port][/db]`（省略时端口为 `6379`、数据库为 `0`） | `redis://:secret@127.0.0.1:6379/0` |
 
-二者共同补全一份新的默认配置文件（尚无 `JwtAuth.AccessSecret`）时，服务会把文件写回：包含生成的密钥、带有
-`AppLocation` 时区的数据库连接参数和 Redis 连接；写回的文件保留 `Transport`、`TLS` 与 `EdgeSubscribe` 段。
+- 两者都必须设置，且只在配置文件（默认的 `etc/ppanel.yaml` 或 `--config` 指定的文件）还没有 `JwtAuth.AccessSecret`
+  时读取；文件一旦有了密钥就会忽略它们，因此可以一直留在环境中。
+- 服务会把文件写回：包含生成的密钥、数据库连接（DSN 不带参数时使用 `Config` 的默认值，带有 `AppLocation` 的时区）和
+  Redis 连接，并保留文件中已有的其他启动配置（`Host`、`Port`、`TLS`、`Logger`、`Trace`、`EdgeSubscribe` 等）。随后正常启动、执行迁移并创建首位管理员（见 3.8）。
+- 此时运行服务的用户必须对该文件有写权限；容器镜像以 uid 65532 运行。
 
-## 5. 最佳实践
+## 5. 健康检查
+
+| 端点 | 含义 | 响应 |
+|---|---|---|
+| `GET /healthz` | 存活探针：进程及其监听器已启动。 | `200` |
+| `GET /readyz` | 就绪探针：启动流程已完成，且数据库与 Redis 均有响应（ping 结果缓存数秒）。 | `200`，否则 `503` 并附简短的 JSON 原因 |
+
+两者都不需要认证，除原因外不泄露任何信息，可以开放给监控与负载均衡；负载均衡的健康检查请指向 `/readyz`。安装向导运行期间两者都不提供。
+
+`ppanel-server healthcheck [--config etc/ppanel.yaml]` 从配置文件读取 `Port`，请求 `http://127.0.0.1:<Port>/healthz`，
+3 秒内没有得到响应即以非零状态退出。容器镜像的 `HEALTHCHECK` 就运行它，systemd 或 cron 的看门狗也可以使用。
+
+## 6. 最佳实践
 
 - **安全性**：首次登录后请修改首位管理员的密码。只要还有管理员在使用旧默认密码 `password`，服务启动时都会记录错误日志。
+- **反向代理**：部署在 nginx、Caddy 或负载均衡之后时，把代理地址填入 `TrustedProxies`，否则日志和限流看到的都是代理而不是客户端；把前端来源填入 `AllowedOrigins`。
 - **日志**：生产环境中建议使用 `file` 或 `volume` 模式持久化日志，将 `Level` 设置为 `error` 以减少日志量；`severe`
   会关闭全部日志输出。
-- **数据库**：确保 `Database` 和 `Redis` 凭据安全，避免在版本控制中暴露。
+- **数据库**：确保 `Database` 和 `Redis` 凭据安全，避免在版本控制中暴露，并把 `etc/ppanel.yaml` 保持为 `0600`。经网络访问的 PostgreSQL 请使用 `sslmode=require` 或 `verify-full`。
 - **JWT**：为 `JwtAuth` 的 `AccessSecret` 设置强密钥以增强安全性。
 
 如需进一步帮助，请参考 PPanel 官方文档或联系支持团队。
