@@ -73,9 +73,9 @@ func TestPostgresTimestampRoundTripsWithCustomParameters(t *testing.T) {
 		t.Fatalf("timestamp read back as %s, written %s: skew %s", read.At, written, skew)
 	}
 	// The SQL side compares in the same zone: the row is in the past there
-	// too.
+	// too. (The application's naming strategy keeps table names singular.)
 	var expired int64
-	if err := db.Raw("SELECT count(*) FROM zone_probe_rows WHERE at < ?", written.Add(time.Hour)).Scan(&expired).Error; err != nil {
+	if err := db.Raw("SELECT count(*) FROM zone_probe_row WHERE at < ?", written.Add(time.Hour)).Scan(&expired).Error; err != nil {
 		t.Fatal(err)
 	}
 	if expired != 1 {
