@@ -28,21 +28,29 @@ type Config struct {
 // Boot is the configuration fixed for the life of the process: the listener,
 // the connections and the secrets. Changing it takes a restart.
 type Boot struct {
-	Model         string              `yaml:"Model" default:"prod"`
-	Host          string              `yaml:"Host" default:"0.0.0.0"`
-	Port          int                 `yaml:"Port" default:"8080"`
-	Debug         bool                `yaml:"Debug" default:"false"`
-	AppLocation   string              `yaml:"AppLocation" default:"Asia/Shanghai"`
-	Transport     TransportConfig     `yaml:"Transport"`
-	TLS           TLS                 `yaml:"TLS"`
-	JwtAuth       JwtAuth             `yaml:"JwtAuth"`
-	Logger        logger.LogConf      `yaml:"Logger"`
-	Trace         trace.Config        `yaml:"Trace"`
-	Database      orm.Config          `yaml:"Database"`
-	MySQL         *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
-	Redis         RedisConfig         `yaml:"Redis"`
-	EdgeSubscribe EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
-	Administrator struct {
+	Host  string `yaml:"Host" default:"0.0.0.0"`
+	Port  int    `yaml:"Port" default:"8080"`
+	Debug bool   `yaml:"Debug" default:"false"`
+	// TrustedProxies lists the reverse proxies (IP addresses or CIDRs) whose
+	// X-Forwarded-For and X-Real-IP headers name the real client. Empty trusts
+	// no header: the client address is the connection's remote address.
+	TrustedProxies []string `yaml:"TrustedProxies"`
+	// AllowedOrigins lists the browser origins CORS admits, as scheme://host[:port].
+	// Empty keeps the permissive default of reflecting the request's Origin.
+	AllowedOrigins []string            `yaml:"AllowedOrigins"`
+	HTTP           HTTPConfig          `yaml:"HTTP"`
+	GeoIP          GeoIPConfig         `yaml:"GeoIP"`
+	AppLocation    string              `yaml:"AppLocation" default:"Asia/Shanghai"`
+	Transport      TransportConfig     `yaml:"Transport"`
+	TLS            TLS                 `yaml:"TLS"`
+	JwtAuth        JwtAuth             `yaml:"JwtAuth"`
+	Logger         logger.LogConf      `yaml:"Logger"`
+	Trace          trace.Config        `yaml:"Trace"`
+	Database       orm.Config          `yaml:"Database"`
+	MySQL          *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
+	Redis          RedisConfig         `yaml:"Redis"`
+	EdgeSubscribe  EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
+	Administrator  struct {
 		Email string `yaml:"Email" default:"admin@ppanel.dev"`
 		// Password seeds the first administrator. Left empty, a random one is
 		// generated and printed once at the first start.
@@ -73,6 +81,38 @@ type RedisConfig struct {
 	Host string `yaml:"Host" default:"localhost:6379"`
 	Pass string `yaml:"Pass" default:""`
 	DB   int    `yaml:"DB" default:"0"`
+	// QueueDB is the Redis database of the asynq task queue, shared by the
+	// producer, the consumer and the scheduler. It defaults to the database
+	// the server always used, so an upgrade keeps its queued tasks; give
+	// every deployment sharing one Redis its own value.
+	QueueDB int `yaml:"QueueDB" default:"5"`
+}
+
+// HTTPConfig bounds the API listener. The defaults are the values the server
+// ran with before they were configurable.
+type HTTPConfig struct {
+	ReadTimeoutSeconds int `yaml:"ReadTimeoutSeconds" default:"180"`
+	// WriteTimeoutSeconds 0 leaves response writes unbounded, which the
+	// streaming endpoints (order events over SSE, WebSocket) need.
+	WriteTimeoutSeconds int `yaml:"WriteTimeoutSeconds" default:"0"`
+	IdleTimeoutSeconds  int `yaml:"IdleTimeoutSeconds" default:"180"`
+	MaxRequestBodyMB    int `yaml:"MaxRequestBodyMB" default:"4"`
+}
+
+// GeoIPConfig locates the MaxMind city database that enriches the audit
+// logs with a location.
+type GeoIPConfig struct {
+	// Path of the GeoLite2-City.mmdb file.
+	Path string `yaml:"Path" default:"./cache/GeoLite2-City.mmdb"`
+	// Download fetches the database from DownloadURL (the built-in mirror when
+	// empty) when Path is missing.
+	Download    bool   `yaml:"Download" default:"true"`
+	DownloadURL string `yaml:"DownloadURL" default:""`
+	// SHA256 is the hex digest the file must have; empty skips the check.
+	SHA256 string `yaml:"SHA256" default:""`
+	// Required makes a missing or invalid database fatal at start-up; by
+	// default the server starts without geolocation and logs the reason.
+	Required bool `yaml:"Required" default:"false"`
 }
 
 type TransportConfig struct {
@@ -291,18 +331,22 @@ func (n *NodeOutbound) Marshal() ([]byte, error) {
 }
 
 type File struct {
-	Host          string              `yaml:"Host" default:"0.0.0.0"`
-	Port          int                 `yaml:"Port" default:"8080"`
-	Transport     TransportConfig     `yaml:"Transport"`
-	TLS           TLS                 `yaml:"TLS"`
-	Debug         bool                `yaml:"Debug" default:"true"`
-	JwtAuth       JwtAuth             `yaml:"JwtAuth"`
-	Logger        logger.LogConf      `yaml:"Logger"`
-	Trace         trace.Config        `yaml:"Trace"`
-	Database      orm.Config          `yaml:"Database"`
-	MySQL         *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
-	Redis         RedisConfig         `yaml:"Redis"`
-	EdgeSubscribe EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
+	Host           string              `yaml:"Host" default:"0.0.0.0"`
+	Port           int                 `yaml:"Port" default:"8080"`
+	Transport      TransportConfig     `yaml:"Transport"`
+	TLS            TLS                 `yaml:"TLS"`
+	Debug          bool                `yaml:"Debug" default:"false"`
+	TrustedProxies []string            `yaml:"TrustedProxies"`
+	AllowedOrigins []string            `yaml:"AllowedOrigins"`
+	HTTP           HTTPConfig          `yaml:"HTTP"`
+	GeoIP          GeoIPConfig         `yaml:"GeoIP"`
+	JwtAuth        JwtAuth             `yaml:"JwtAuth"`
+	Logger         logger.LogConf      `yaml:"Logger"`
+	Trace          trace.Config        `yaml:"Trace"`
+	Database       orm.Config          `yaml:"Database"`
+	MySQL          *orm.Config         `yaml:"MySQL,omitempty"` // Deprecated: use Database.
+	Redis          RedisConfig         `yaml:"Redis"`
+	EdgeSubscribe  EdgeSubscribeConfig `yaml:"EdgeSubscribe"`
 	// AppLocation survives the installation's rewrite of the file: the new
 	// database's session zone is set from it.
 	AppLocation string `yaml:"AppLocation" default:"Asia/Shanghai"`

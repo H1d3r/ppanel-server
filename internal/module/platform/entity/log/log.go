@@ -22,6 +22,7 @@ Log Types:
 	2X Subscription Logs
 	3X User Logs
 	4X Traffic Ranking Logs
+	5X Administration Logs
 */
 
 const (
@@ -37,9 +38,11 @@ const (
 	TypeCommission        Type = 33 // Commission log
 	TypeGift              Type = 34 // Gift log
 	TypeOrderCreated      Type = 35 // Order creation audit log
+	TypeUnmatchedPayment  Type = 36 // Gateway-confirmed payment that could not settle an order
 	TypeUserTrafficRank   Type = 40 // Top 10 User traffic rank log
 	TypeServerTrafficRank Type = 41 // Top 10 Server traffic rank log
 	TypeTrafficStat       Type = 42 // Daily traffic statistics log
+	TypeAdminAction       Type = 50 // Administrator mutation audit log
 )
 const (
 	ResetSubscribeTypeAuto       uint16 = 231 // Auto reset
@@ -520,3 +523,60 @@ func (t *TrafficStat) Marshal() ([]byte, error) { return marshalEntry(t) }
 func (t *TrafficStat) Unmarshal(data []byte) error { return unmarshalEntry(data, t) }
 
 func (t *TrafficStat) clean() { t.Metadata = sanitizeRequestMetadata(t.Metadata) }
+
+// UnmatchedPayment records a payment a gateway confirmed that could not
+// settle its order: the order was already closed or finished, the trade
+// differs from the one bound to it, or the gateway asks for manual review. It
+// is the durable trace an operator refunds from, so it is a financial record
+// and never expires.
+type UnmatchedPayment struct {
+	requestmeta.Metadata
+	OrderNo   string `json:"order_no"`
+	TradeNo   string `json:"trade_no"`
+	Platform  string `json:"platform"`
+	Amount    int64  `json:"amount"`
+	Currency  string `json:"currency"`
+	Reason    string `json:"reason"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// Marshal encodes the entry as stored, its request bounded.
+func (u *UnmatchedPayment) Marshal() ([]byte, error) { return marshalEntry(u) }
+
+// Unmarshal decodes a stored entry, its request bounded.
+func (u *UnmatchedPayment) Unmarshal(data []byte) error { return unmarshalEntry(data, u) }
+
+func (u *UnmatchedPayment) clean() {
+	u.Metadata = sanitizeRequestMetadata(u.Metadata)
+	u.Reason = requestmeta.Bound(u.Reason, maxAdminDetailBytes)
+}
+
+// maxAdminDetailBytes bounds the free-text detail of an administration entry.
+const maxAdminDetailBytes = 2048
+
+// AdminAction records a mutation an administrator made: which action, on
+// which object, from the HTTP API (ActorID) or the Telegram bot
+// (TelegramSenderID). Detail is a short, bounded description and must never
+// carry a secret: settings entries name the changed keys, not their values.
+// The type is not expirable, so the trail survives a shortened retention.
+type AdminAction struct {
+	requestmeta.Metadata
+	Action           string `json:"action"`
+	Object           string `json:"object,omitempty"`
+	ObjectID         int64  `json:"object_id,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	Source           string `json:"source"` // "http" or "telegram"
+	TelegramSenderID int64  `json:"telegram_sender_id,omitempty"`
+	Timestamp        int64  `json:"timestamp"`
+}
+
+// Marshal encodes the entry as stored, its request bounded.
+func (a *AdminAction) Marshal() ([]byte, error) { return marshalEntry(a) }
+
+// Unmarshal decodes a stored entry, its request bounded.
+func (a *AdminAction) Unmarshal(data []byte) error { return unmarshalEntry(data, a) }
+
+func (a *AdminAction) clean() {
+	a.Metadata = sanitizeRequestMetadata(a.Metadata)
+	a.Detail = requestmeta.Bound(a.Detail, maxAdminDetailBytes)
+}

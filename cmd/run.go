@@ -151,18 +151,22 @@ func initConfig(c *config.Config) bool {
 	// Every boot setting the file already had is written back with the
 	// generated secret and the connections.
 	newConfig := config.File{
-		Host:          c.Host,
-		AppLocation:   c.AppLocation,
-		Port:          c.Port,
-		Transport:     c.Transport,
-		TLS:           c.TLS,
-		Debug:         c.Debug,
-		JwtAuth:       c.JwtAuth,
-		Logger:        c.Logger,
-		Trace:         c.Trace,
-		Database:      c.DatabaseConfig(),
-		Redis:         c.Redis,
-		EdgeSubscribe: c.EdgeSubscribe,
+		Host:           c.Host,
+		AppLocation:    c.AppLocation,
+		Port:           c.Port,
+		Transport:      c.Transport,
+		TLS:            c.TLS,
+		Debug:          c.Debug,
+		TrustedProxies: c.TrustedProxies,
+		AllowedOrigins: c.AllowedOrigins,
+		HTTP:           c.HTTP,
+		GeoIP:          c.GeoIP,
+		JwtAuth:        c.JwtAuth,
+		Logger:         c.Logger,
+		Trace:          c.Trace,
+		Database:       c.DatabaseConfig(),
+		Redis:          c.Redis,
+		EdgeSubscribe:  c.EdgeSubscribe,
 	}
 	fileData, err := yaml.Marshal(newConfig)
 	if err != nil {
