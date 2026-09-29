@@ -210,8 +210,9 @@ func newBatchHandler(store *workerTaskStore, queue *recordingQueue, sender mail.
 	return h
 }
 
-func batchTask(id int64) *asynq.Task {
-	return asynq.NewTask(taskqueue.ScheduledBatchSendEmail, []byte(strconv.FormatInt(id, 10)))
+// batchTask is the queue task of campaign 7, the one the worker store holds.
+func batchTask() *asynq.Task {
+	return asynq.NewTask(taskqueue.ScheduledBatchSendEmail, []byte(strconv.FormatInt(7, 10)))
 }
 
 // A run that stops for lack of budget is not a failed attempt: the handler
@@ -226,7 +227,7 @@ func TestProcessTaskContinuesAnExhaustedRunAtOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := newBatchHandler(store, queue, sender).ProcessTask(ctx, batchTask(7)); err != nil {
+	if err := newBatchHandler(store, queue, sender).ProcessTask(ctx, batchTask()); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 	if len(sender.sent) != 0 || store.task.Status != task.StatusInProgress || store.task.Current != 2 {
@@ -256,7 +257,7 @@ func TestProcessTaskTreatsAQueuedContinuationAsDone(t *testing.T) {
 	queue := &recordingQueue{err: asynq.ErrTaskIDConflict}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := newBatchHandler(store, queue, &workerSender{}).ProcessTask(ctx, batchTask(7)); err != nil {
+	if err := newBatchHandler(store, queue, &workerSender{}).ProcessTask(ctx, batchTask()); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 }
@@ -273,7 +274,7 @@ func TestProcessTaskResumesAnInterruptedActiveCampaign(t *testing.T) {
 	// before the second recipient then sees the cancelled context.
 	sender.afterSend = func() { NewWorkerManager().RemoveWorker(7) }
 
-	if err := newBatchHandler(store, queue, sender).ProcessTask(context.Background(), batchTask(7)); err != nil {
+	if err := newBatchHandler(store, queue, sender).ProcessTask(context.Background(), batchTask()); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 	if store.task.Status != task.StatusInProgress || store.task.Current != 1 {
@@ -296,7 +297,7 @@ func TestProcessTaskFinishesACancelledCampaign(t *testing.T) {
 		NewWorkerManager().RemoveWorker(7)
 	}
 
-	if err := newBatchHandler(store, queue, sender).ProcessTask(context.Background(), batchTask(7)); err != nil {
+	if err := newBatchHandler(store, queue, sender).ProcessTask(context.Background(), batchTask()); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
 	if len(queue.tasks) != 0 {

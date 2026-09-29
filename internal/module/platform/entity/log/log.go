@@ -104,6 +104,11 @@ type FilterParams struct {
 	Search    string
 	ObjectID  int64
 	SkipCount bool // when true, skip the COUNT(*) query (total will be 0)
+	// ContentInt64 keeps the rows whose JSON content has each named
+	// top-level field equal to the value, matched by the database's JSON
+	// extraction rather than by a text pattern (which "12" would share with
+	// "120"). The keys are field names of the content types in this package.
+	ContentInt64 map[string]int64
 }
 
 // SystemLog represents a log entry in the system.

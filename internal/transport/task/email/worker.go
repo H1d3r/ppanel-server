@@ -109,14 +109,6 @@ func WithRecipientResolver(recipients RecipientResolver) WorkerOption {
 	}
 }
 
-// withBudgetReserve changes the budget the worker keeps before its deadline;
-// tests shorten it.
-func withBudgetReserve(reserve time.Duration) WorkerOption {
-	return func(worker *Worker) {
-		worker.reserve = reserve
-	}
-}
-
 // NewWorker builds the worker of task id; ctx bounds the run.
 func NewWorker(ctx context.Context, id int64, tasks TaskStore, sender mail.Sender, options ...WorkerOption) *Worker {
 	worker := &Worker{id: id, tasks: tasks, ctx: ctx, sender: sender, reserve: runBudgetReserve}

@@ -11,7 +11,12 @@ import (
 // UpdateVerifyCodeConfig stores the verification code settings and reloads
 // the verify subsystem, which enforces them.
 func (s *Service) UpdateVerifyCodeConfig(ctx context.Context, req *dto.VerifyCodeConfig) error {
-	if err := updateConfigFields(ctx, s.deps, "verify_code", convertedConfigFields(*req)); err != nil {
+	change := settingsChange{
+		category: "verify_code",
+		next:     convertedConfigFields(*req),
+		previous: previousFields(ctx, "verify_code", s.GetVerifyCodeConfig, convertedConfigFields),
+	}
+	if err := updateConfigFields(ctx, s.deps, change); err != nil {
 		logger.WithContext(ctx).Errorw("[UpdateVerifyCodeConfig] update verify code config error", logger.Field("error", err.Error()))
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update verify code config error: %v", err.Error())
 	}

@@ -2,20 +2,21 @@ package auditlog
 
 import (
 	"context"
-	"strconv"
 
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 )
 
 // FilterSubscribeLog pages a user's subscription fetches, optionally those of
-// one subscription.
+// one subscription. The subscription is matched on the content's
+// user_subscribe_id field itself: a text pattern for 12 would also find 120
+// and 1200.
 func (s *Service) FilterSubscribeLog(ctx context.Context, req *dto.FilterSubscribeLogRequest) (*dto.FilterSubscribeLogResponse, error) {
 	params := filterParams(log.TypeSubscribe, req.UserId, req.FilterLogParams)
 	// The subscription log is searched by subscription only.
 	params.Search = ""
 	if req.UserSubscribeId != 0 {
-		params.Search = `"user_subscribe_id":` + strconv.FormatInt(req.UserSubscribeId, 10)
+		params.ContentInt64 = map[string]int64{"user_subscribe_id": req.UserSubscribeId}
 	}
 	total, list, err := logPage(ctx, s.deps.Logs, "subscription", params, func(row *log.SystemLog, content *log.Subscribe) dto.SubscribeLog {
 		return withRequestMetadata(&dto.SubscribeLog{

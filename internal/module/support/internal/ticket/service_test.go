@@ -86,12 +86,7 @@ func TestTicketStatusTransitions(t *testing.T) {
 
 				err := action.run(svc, id)
 				if from == entity.Closed && action.staffReply {
-					if !errors.Is(err, entity.ErrClosed) || xerr.CodeOf(err) != xerr.InvalidParams {
-						t.Fatalf("staff reply to a closed ticket: %v, want it refused as closed", err)
-					}
-					if env.ReloadTicket(t, id).Status != entity.Closed || len(env.Follows(t, id)) != 0 || len(mirror.Replies)+len(mirror.Statuses) != 0 {
-						t.Fatal("a refused staff reply changed or mirrored the closed ticket")
-					}
+					expectClosedRefusal(t, env, mirror, id, err)
 					return
 				}
 				if err != nil {
@@ -113,6 +108,18 @@ func TestTicketStatusTransitions(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// expectClosedRefusal checks that a staff reply to the closed ticket id was
+// refused as closed and changed or mirrored nothing.
+func expectClosedRefusal(t *testing.T, env *supporttest.Env, mirror *supporttest.Notifier, id int64, err error) {
+	t.Helper()
+	if !errors.Is(err, entity.ErrClosed) || xerr.CodeOf(err) != xerr.InvalidParams {
+		t.Fatalf("staff reply to a closed ticket: %v, want it refused as closed", err)
+	}
+	if env.ReloadTicket(t, id).Status != entity.Closed || len(env.Follows(t, id)) != 0 || len(mirror.Replies)+len(mirror.Statuses) != 0 {
+		t.Fatal("a refused staff reply changed or mirrored the closed ticket")
 	}
 }
 

@@ -44,6 +44,11 @@ type Service interface {
 	// the network's raw traffic log.
 	CleanupLogs(ctx context.Context) error
 	GetMessageLogList(ctx context.Context, req *dto.GetMessageLogListRequest) (*dto.GetMessageLogListResponse, error)
+	// FilterAdminActionLog pages the administrators' audit trail.
+	FilterAdminActionLog(ctx context.Context, req *dto.FilterAdminActionLogRequest) (*dto.FilterAdminActionLogResponse, error)
+	// FilterUnmatchedPaymentLog pages the gateway payments that could not
+	// settle an order.
+	FilterUnmatchedPaymentLog(ctx context.Context, req *dto.FilterUnmatchedPaymentLogRequest) (*dto.FilterUnmatchedPaymentLogResponse, error)
 
 	// System configuration management; updates persist the settings and
 	// re-initialize the owning subsystem through injected callbacks.
@@ -325,6 +330,14 @@ func (s *service) UpdateLogSetting(ctx context.Context, req *dto.LogSetting) err
 
 func (s *service) GetMessageLogList(ctx context.Context, req *dto.GetMessageLogListRequest) (*dto.GetMessageLogListResponse, error) {
 	return s.logs.GetMessageLogList(ctx, req)
+}
+
+func (s *service) FilterAdminActionLog(ctx context.Context, req *dto.FilterAdminActionLogRequest) (*dto.FilterAdminActionLogResponse, error) {
+	return s.logs.FilterAdminActionLog(ctx, req)
+}
+
+func (s *service) FilterUnmatchedPaymentLog(ctx context.Context, req *dto.FilterUnmatchedPaymentLogRequest) (*dto.FilterUnmatchedPaymentLogResponse, error) {
+	return s.logs.FilterUnmatchedPaymentLog(ctx, req)
 }
 
 func (s *service) GetCurrencyConfig(ctx context.Context) (*dto.CurrencyConfig, error) {

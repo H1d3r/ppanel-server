@@ -9,9 +9,20 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-// GetNodeConfig returns the stored node settings. A malformed DNS or outbound
-// document is reported as an error instead of taking the process down.
+// GetNodeConfig returns the stored node settings, the outbound credentials
+// masked. A malformed DNS or outbound document is reported as an error
+// instead of taking the process down.
 func (s *Service) GetNodeConfig(ctx context.Context) (*dto.NodeConfig, error) {
+	view, err := s.storedNodeConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	maskOutboundSecrets(view.Outbound)
+	return view, nil
+}
+
+// storedNodeConfig reads the node settings as stored, credentials in clear.
+func (s *Service) storedNodeConfig(ctx context.Context) (*dto.NodeConfig, error) {
 	rows, err := s.deps.System.GetNodeConfig(ctx)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "get node config: %v", err)
@@ -24,7 +35,10 @@ func (s *Service) GetNodeConfig(ctx context.Context) (*dto.NodeConfig, error) {
 }
 
 // nodeConfigView converts the parsed configuration to its admin view; the
-// snapshot types mirror the configuration types field for field.
+// snapshot types mirror the configuration types field for field. NodeSecret
+// is deliberately shown in clear: it is the credential administrators copy
+// into every node's configuration to deploy a node, and there is no other
+// way to read it.
 func nodeConfigView(c config.NodeConfig) *dto.NodeConfig {
 	view := &dto.NodeConfig{
 		NodeSecret:             c.NodeSecret,

@@ -26,6 +26,8 @@ type Logs interface {
 	GetLogSetting(ctx context.Context) (*dto.LogSetting, error)
 	UpdateLogSetting(ctx context.Context, req *dto.LogSetting) error
 	GetMessageLogList(ctx context.Context, req *dto.GetMessageLogListRequest) (*dto.GetMessageLogListResponse, error)
+	FilterAdminActionLog(ctx context.Context, req *dto.FilterAdminActionLogRequest) (*dto.FilterAdminActionLogResponse, error)
+	FilterUnmatchedPaymentLog(ctx context.Context, req *dto.FilterUnmatchedPaymentLogRequest) (*dto.FilterUnmatchedPaymentLogResponse, error)
 }
 
 // The platform facade serves the log handlers.

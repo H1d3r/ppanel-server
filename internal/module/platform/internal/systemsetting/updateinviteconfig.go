@@ -11,7 +11,12 @@ import (
 // UpdateInviteConfig stores the invitation settings and reloads the invite
 // subsystem.
 func (s *Service) UpdateInviteConfig(ctx context.Context, req *dto.InviteConfig) error {
-	if err := updateConfigFields(ctx, s.deps, "invite", convertedConfigFields(*req)); err != nil {
+	change := settingsChange{
+		category: "invite",
+		next:     convertedConfigFields(*req),
+		previous: previousFields(ctx, "invite", s.GetInviteConfig, convertedConfigFields),
+	}
+	if err := updateConfigFields(ctx, s.deps, change); err != nil {
 		logger.WithContext(ctx).Errorw("[UpdateInviteConfig] update invite config error", logger.Field("error", err.Error()))
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update invite config error: %v", err)
 	}
