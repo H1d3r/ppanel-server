@@ -234,6 +234,13 @@ func (s *Service) payWithBalance(ctx context.Context, orderInfo *order.Order) (*
 // debitBalance marks the order paid and takes its amount from the wallet,
 // gift credit first. A free order is marked paid without touching the
 // wallet.
+//
+// The order's money columns keep the meaning pricing gave them at creation:
+// Amount is what was paid with money and GiftAmount the gift credit the
+// order consumed. Gift credit spent here therefore moves from Amount into
+// GiftAmount instead of being added on top, so a refund, which returns
+// Amount to the balance and GiftAmount to the gift balance, pays back
+// exactly what was paid and RefundBasis (their sum) counts it once.
 func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 	if o.Amount == 0 {
 		updated, err := s.deps.Orders.UpdateOrderStatusFrom(ctx, o.OrderNo, order.StatusPending, order.StatusPaid)
@@ -261,11 +268,12 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 		if err != nil {
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "lock wallet of user %d", o.UserId)
 		}
-		if available := wallet.Balance + wallet.GiftAmount; available < o.Amount {
-			return xerr.Errorf(xerr.InsufficientBalance, "Insufficient balance: required %d, available %d", o.Amount, available)
+		if available := wallet.Balance + wallet.GiftAmount; available < current.Amount {
+			return xerr.Errorf(xerr.InsufficientBalance, "Insufficient balance: required %d, available %d", current.Amount, available)
 		}
-		giftUsed := min(wallet.GiftAmount, o.Amount)
-		balanceUsed := o.Amount - giftUsed
+		// The debit is priced from the locked row, not the caller's snapshot.
+		giftUsed := min(wallet.GiftAmount, current.Amount)
+		balanceUsed := current.Amount - giftUsed
 		wallet.GiftAmount -= giftUsed
 		wallet.Balance -= balanceUsed
 		if err := tx.Wallet().UpdateBalanceFields(ctx, wallet); err != nil {
@@ -277,12 +285,15 @@ func (s *Service) debitBalance(ctx context.Context, o *order.Order) error {
 			}); err != nil {
 				return err
 			}
-			// The order keeps the gift credit it consumed, on top of any
-			// recorded at creation, for refund tracking.
+			// The gift credit spent here moves from the amount paid with
+			// money to the order's gift credit, alongside what was reserved
+			// at creation; each unit is then refunded from one column only.
 			current.GiftAmount += giftUsed
+			current.Amount -= giftUsed
 			if err := tx.Order().Update(ctx, current); err != nil {
 				return xerr.Wrapf(err, xerr.DatabaseUpdateError, "record gift credit of order %s", o.OrderNo)
 			}
+			o.GiftAmount, o.Amount = current.GiftAmount, current.Amount
 		}
 		if balanceUsed > 0 {
 			if err := ledger.PayWithBalance(ctx, tx.Log(), ledger.Balance{

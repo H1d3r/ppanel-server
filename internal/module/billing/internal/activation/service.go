@@ -293,9 +293,12 @@ func (s *Service) RefundUnfulfillable(ctx context.Context, orderNo string) error
 }
 
 // refundTx moves the order's money back under the wallet lock: Amount is
-// what the buyer paid at checkout and returns to the balance, as a
-// cancellation refund returns it; GiftAmount is the gift credit the order
-// held and returns to the gift balance, as a close returns it.
+// what the buyer paid with money (a gateway charge or the wallet balance) and
+// returns to the balance, as a cancellation refund returns it; GiftAmount is
+// the gift credit the order consumed, at creation or at its balance checkout,
+// and returns to the gift balance, as a close returns it. A balance checkout
+// moves the gift credit it spends out of Amount, so the two never hold the
+// same unit and the refund pays back exactly what was paid.
 func (s *Service) refundTx(ctx context.Context, store repository.BillingStore, o *order.Order) error {
 	wallet, err := store.Wallet().FindOneForUpdate(ctx, o.UserId)
 	if err != nil {
