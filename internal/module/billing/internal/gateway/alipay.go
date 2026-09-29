@@ -152,7 +152,7 @@ type alipayNotice struct {
 // ParseCallback verifies the notification signature. Only a successful or
 // finished trade concerns the order; other notifications are acknowledged.
 func (g *alipayGateway) ParseCallback(ctx context.Context, n Notification) (*Notice, error) {
-	notify, err := g.client.DecodeNotification(n.Form)
+	notify, err := g.client.DecodeNotification(ctx, n.Form)
 	if err != nil {
 		return nil, err
 	}

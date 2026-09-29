@@ -226,8 +226,11 @@ func asTradeNotExist(err error) error {
 	return err
 }
 
-func (c *Client) DecodeNotification(form url.Values) (*Notification, error) {
-	notify, err := c.client.DecodeNotification(form)
+// DecodeNotification verifies and decodes an asynchronous notification;
+// ctx bounds the SDK's fetch of Alipay's certificates when they are not
+// cached yet.
+func (c *Client) DecodeNotification(ctx context.Context, form url.Values) (*Notification, error) {
+	notify, err := c.client.DecodeNotification(ctx, form)
 	if err != nil {
 		return nil, err
 	}
