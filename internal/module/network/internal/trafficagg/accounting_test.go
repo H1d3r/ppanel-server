@@ -27,6 +27,13 @@ type accountingStore struct {
 	upload, download int64
 	logs             int
 	fail             string
+	// applies counts the ApplyBucketOnce calls that charged a bucket;
+	// applyHook, when set, runs inside ApplyBucketOnce before the charge,
+	// while a flush is between taking its bucket over and cleaning it up.
+	applies   int
+	applyHook func()
+	// reportTimes counts the server report times persisted.
+	reportTimes int
 }
 
 var (
@@ -36,8 +43,9 @@ var (
 	_ subscription.TrafficUsage = (*accountingStore)(nil)
 )
 
-func (s *accountingStore) BatchUpdateServerLastReportedAt(context.Context, map[int64]time.Time) error {
-	return errors.New("a bucket flush does not persist report times")
+func (s *accountingStore) BatchUpdateServerLastReportedAt(_ context.Context, reports map[int64]time.Time) error {
+	s.reportTimes += len(reports)
+	return nil
 }
 
 func (s *accountingStore) FindInboxRecord(_ context.Context, consumer, key string) (*inbox.Record, error) {
@@ -88,9 +96,13 @@ func (s *accountingStore) ApplyBucketOnce(_ context.Context, bucket string, delt
 	if s.marks[usageBucketConsumer+"|"+bucket] {
 		return nil
 	}
+	if s.applyHook != nil {
+		s.applyHook()
+	}
 	if s.fail == "usage" || s.fail == usageBucketConsumer {
 		return errAccounting
 	}
+	s.applies++
 	for _, delta := range deltas {
 		s.upload += delta.Upload
 		s.download += delta.Download
