@@ -109,6 +109,8 @@ func registerAdminToolRoutes(router *server.Hertz, deps Dependencies) {
 	group := deps.adminGroup(router, "/v1/admin/tool")
 	group.GET("/ip/location", adminTool.QueryIPLocationHandler(deps.Platform))
 	group.GET("/log", adminTool.GetSystemLogHandler(deps.Platform))
-	group.GET("/restart", adminTool.RestartSystemHandler(deps.Platform))
+	// A restart is a mutation: it takes a POST, which a browser does not
+	// issue from a link or a prefetch.
+	group.POST("/restart", adminTool.RestartSystemHandler(deps.Platform))
 	group.GET("/version", adminTool.GetVersionHandler(deps.Platform))
 }

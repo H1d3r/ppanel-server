@@ -40,6 +40,14 @@ func (a sessionAccounts) FindUser(_ context.Context, id int64) (*user.User, erro
 	return &user.User{Id: id, Enable: &enabled, IsAdmin: &admin}, nil
 }
 
+func (a sessionAccounts) FindAccountStateForAuth(_ context.Context, id int64) (*user.AccountState, error) {
+	if a.missing != nil {
+		return nil, a.missing
+	}
+	enabled, admin := true, a.admins[id]
+	return &user.AccountState{Id: id, Enable: &enabled, IsAdmin: &admin}, nil
+}
+
 func (a sessionAccounts) FindDeviceForAuth(_ context.Context, id int64) (*user.Device, error) {
 	if device, ok := a.devices[id]; ok {
 		return device, nil

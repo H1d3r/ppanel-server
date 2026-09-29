@@ -63,7 +63,6 @@ GET /v1/admin/ticket/detail github.com/perfect-panel/server/internal/module/supp
 GET /v1/admin/ticket/list github.com/perfect-panel/server/internal/module/support/transport/http/admin/ticket.GetTicketListHandler
 GET /v1/admin/tool/ip/location github.com/perfect-panel/server/internal/module/platform/transport/http/admin/tool.QueryIPLocationHandler
 GET /v1/admin/tool/log github.com/perfect-panel/server/internal/module/platform/transport/http/admin/tool.GetSystemLogHandler
-GET /v1/admin/tool/restart github.com/perfect-panel/server/internal/module/platform/transport/http/admin/tool.RestartSystemHandler
 GET /v1/admin/tool/version github.com/perfect-panel/server/internal/module/platform/transport/http/admin/tool.GetVersionHandler
 GET /v1/admin/user/auth_method github.com/perfect-panel/server/internal/module/identity/transport/http/admin/user.GetUserAuthMethodHandler
 GET /v1/admin/user/current github.com/perfect-panel/server/internal/module/identity/transport/http/admin/user.CurrentUserHandler
@@ -149,6 +148,7 @@ POST /v1/admin/subscribe/sort github.com/perfect-panel/server/internal/module/su
 POST /v1/admin/system/set_node_multiplier github.com/perfect-panel/server/internal/module/platform/transport/http/admin/system.SetNodeMultiplierHandler
 POST /v1/admin/system/setting_telegram_bot github.com/perfect-panel/server/internal/module/platform/transport/http/admin/system.SettingTelegramBotHandler
 POST /v1/admin/ticket/follow github.com/perfect-panel/server/internal/module/support/transport/http/admin/ticket.CreateTicketFollowHandler
+POST /v1/admin/tool/restart github.com/perfect-panel/server/internal/module/platform/transport/http/admin/tool.RestartSystemHandler
 POST /v1/admin/user/ github.com/perfect-panel/server/internal/module/identity/transport/http/admin/user.CreateUserHandler
 POST /v1/admin/user/auth_method github.com/perfect-panel/server/internal/module/identity/transport/http/admin/user.CreateUserAuthMethodHandler
 POST /v1/admin/user/subscribe github.com/perfect-panel/server/internal/module/subscription/transport/http/admin/user.CreateUserSubscribeHandler
