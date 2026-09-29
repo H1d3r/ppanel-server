@@ -29,11 +29,7 @@ import (
 func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) (*dto.SendCodeResponse, error) {
 	cfg := s.deps.Config()
 	verifyType := auth.ParseVerifyType(req.Type)
-	if verifyType == auth.Register {
-		if err := s.deps.Policy.EnsureRegistrationOpen(ctx, identifier.Mobile); err != nil {
-			return nil, err
-		}
-	} else if err := s.deps.Policy.EnsureMethodEnabled(ctx, identifier.Mobile); err != nil {
+	if err := s.ensureCodeAllowed(ctx, verifyType, identifier.Mobile); err != nil {
 		return nil, err
 	}
 	// Each code costs the operator money; outside the configured countries a

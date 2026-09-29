@@ -78,7 +78,9 @@ func (h *fakeAdminHandler) Handle(_ context.Context, msg *models.Message) {
 // fakeRedisStore stands in for binding tokens and administrator
 // confirmations; a missing key reads as redis.Nil, as Redis reports it.
 type fakeRedisStore struct {
-	values  map[string]string
+	values map[string]string
+	// deleted records the keys removed through Delete; a GetDel consumes its
+	// key without a trace, like the Redis command.
 	deleted []string
 }
 
@@ -88,6 +90,12 @@ func (s *fakeRedisStore) Get(_ context.Context, key string) (string, error) {
 		return "", redis.Nil
 	}
 	return value, nil
+}
+
+func (s *fakeRedisStore) GetDel(ctx context.Context, key string) (string, error) {
+	value, err := s.Get(ctx, key)
+	delete(s.values, key)
+	return value, err
 }
 
 func (s *fakeRedisStore) Set(_ context.Context, key, value string, _ time.Duration) error {
@@ -119,6 +127,10 @@ type fakeAccounts struct {
 	bound        []*user.AuthMethods
 	registered   int64
 	err          error
+	// afterSetEnabled, when set, runs once right after the next SetEnabled
+	// write, so a test can interleave a second command with the first one's
+	// write.
+	afterSetEnabled func()
 }
 
 func newFakeAccounts() *fakeAccounts {
@@ -194,6 +206,10 @@ func (f *fakeAccounts) SetEnabled(_ context.Context, userID int64, enabled bool)
 		return gorm.ErrRecordNotFound
 	}
 	u.Enable = &enabled
+	if hook := f.afterSetEnabled; hook != nil {
+		f.afterSetEnabled = nil
+		hook()
+	}
 	return nil
 }
 

@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"context"
-	"time"
 
 	walletEntity "github.com/perfect-panel/server/internal/module/billing/entity/wallet"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
@@ -46,52 +45,74 @@ func (s *Service) OpenWallet(ctx context.Context, opening walletEntity.Wallet) e
 	})
 }
 
-// AdjustWallet applies an administrator's edit of the user's wallet: it sets
-// the balance, gift amount and commission to the target's. It runs in a
-// billing transaction of its own after the identity transaction of the edit;
-// a failure leaves the money unadjusted for the administrator to retry.
-func (s *Service) AdjustWallet(ctx context.Context, target walletEntity.Wallet) error {
+// AdjustWallet applies an administrator's edit of the user's wallet: each
+// amount the adjustment sets becomes the wallet's, its audit log recording
+// the change and the resulting amount (so the amount before it is the
+// difference); amounts left nil or equal to the wallet's are left alone,
+// which is why a form that carries only the edited amounts cannot revert the
+// movements made since it was loaded. It runs in a billing transaction of
+// its own after the identity transaction of the edit; a failure leaves the
+// money unadjusted for the administrator to retry.
+func (s *Service) AdjustWallet(ctx context.Context, adjustment walletEntity.Adjustment) error {
+	if adjustment.Balance == nil && adjustment.GiftAmount == nil && adjustment.Commission == nil {
+		return nil
+	}
 	return s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
 		// Financial adjustments must compare and write the latest values
 		// under the wallet lock, with their audit logs in the same
 		// transaction.
-		walletInfo, err := store.Wallet().FindOneForUpdate(ctx, target.UserId)
+		walletInfo, err := store.Wallet().FindOneForUpdate(ctx, adjustment.UserId)
 		if err != nil {
-			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find wallet of user %d", target.UserId)
+			return xerr.Wrapf(err, xerr.DatabaseQueryError, "find wallet of user %d", adjustment.UserId)
 		}
-		if walletInfo.Balance == target.Balance &&
-			walletInfo.GiftAmount == target.GiftAmount &&
-			walletInfo.Commission == target.Commission {
-			return nil
+		now := timeutil.Now()
+		record := func(kind log.Type, entry interface{ Marshal() ([]byte, error) }) error {
+			content, err := entry.Marshal()
+			if err != nil {
+				return xerr.Wrapf(err, xerr.ERROR, "encode wallet adjustment log of user %d", adjustment.UserId)
+			}
+			return insertLog(ctx, store, kind, adjustment.UserId, now, content)
 		}
-		if walletInfo.Balance != target.Balance {
-			content, _ := (&log.Balance{Type: log.BalanceTypeAdjust, Amount: target.Balance - walletInfo.Balance, Balance: target.Balance, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeBalance.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: target.UserId, Content: string(content)}); err != nil {
+		moneyChanged, commissionChanged := false, false
+		if target, ok := adjusted(adjustment.Balance, walletInfo.Balance); ok {
+			if err := record(log.TypeBalance, &log.Balance{Type: log.BalanceTypeAdjust, Amount: target - walletInfo.Balance, Balance: target, Timestamp: now.UnixMilli()}); err != nil {
 				return err
 			}
+			walletInfo.Balance, moneyChanged = target, true
 		}
-		if walletInfo.GiftAmount != target.GiftAmount {
+		if target, ok := adjusted(adjustment.GiftAmount, walletInfo.GiftAmount); ok {
 			changeType := log.GiftTypeReduce
-			if target.GiftAmount > walletInfo.GiftAmount {
+			if target > walletInfo.GiftAmount {
 				changeType = log.GiftTypeIncrease
 			}
-			content, _ := (&log.Gift{Type: changeType, Amount: target.GiftAmount - walletInfo.GiftAmount, Balance: target.GiftAmount, Remark: "Admin adjustment", Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeGift.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: target.UserId, Content: string(content)}); err != nil {
+			if err := record(log.TypeGift, &log.Gift{Type: changeType, Amount: target - walletInfo.GiftAmount, Balance: target, Remark: "Admin adjustment", Timestamp: now.UnixMilli()}); err != nil {
+				return err
+			}
+			walletInfo.GiftAmount, moneyChanged = target, true
+		}
+		if target, ok := adjusted(adjustment.Commission, walletInfo.Commission); ok {
+			if err := record(log.TypeCommission, &log.Commission{Type: log.CommissionTypeAdjust, Amount: target - walletInfo.Commission, Balance: target, Timestamp: now.UnixMilli()}); err != nil {
+				return err
+			}
+			walletInfo.Commission, commissionChanged = target, true
+		}
+		if moneyChanged {
+			if err := store.Wallet().UpdateBalanceFields(ctx, walletInfo); err != nil {
 				return err
 			}
 		}
-		if walletInfo.Commission != target.Commission {
-			content, _ := (&log.Commission{Type: log.CommissionTypeAdjust, Amount: target.Commission - walletInfo.Commission, Timestamp: timeutil.Now().UnixMilli()}).Marshal()
-			if err := store.Log().Insert(ctx, &log.SystemLog{Type: log.TypeCommission.Uint8(), Date: timeutil.Now().Format(time.DateOnly), ObjectID: target.UserId, Content: string(content)}); err != nil {
-				return err
-			}
+		if commissionChanged {
+			return store.Wallet().UpdateCommission(ctx, walletInfo)
 		}
-		walletInfo.Balance = target.Balance
-		walletInfo.GiftAmount = target.GiftAmount
-		walletInfo.Commission = target.Commission
-		if err := store.Wallet().UpdateBalanceFields(ctx, walletInfo); err != nil {
-			return err
-		}
-		return store.Wallet().UpdateCommission(ctx, walletInfo)
+		return nil
 	})
+}
+
+// adjusted reports whether the adjustment sets the amount to something other
+// than current, and to what.
+func adjusted(target *int64, current int64) (int64, bool) {
+	if target == nil || *target == current {
+		return 0, false
+	}
+	return *target, true
 }

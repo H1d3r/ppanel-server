@@ -9,6 +9,7 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	entity "github.com/perfect-panel/server/internal/module/billing/entity/coupon"
+	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/slicesx"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -117,7 +118,13 @@ func (s *Service) List(ctx context.Context, req *dto.GetCouponListRequest) (*dto
 	for _, item := range list {
 		plans, parseErr := slicesx.ParseInt64CSV(item.Subscribe)
 		if parseErr != nil {
-			return nil, xerr.Wrapf(parseErr, xerr.ERROR, "coupon %d plans: %v", item.Id, parseErr)
+			// A damaged plan list must not hide the whole page: the row is
+			// listed without plans so the administrator can find and repair
+			// it. Checkout keeps refusing the coupon meanwhile, as pricing
+			// reads the same column fail-closed.
+			logger.WithContext(ctx).Errorw("[GetCouponList] coupon plan list is damaged",
+				logger.Field("coupon_id", item.Id), logger.Field("error", parseErr.Error()))
+			plans = nil
 		}
 		resp.List = append(resp.List, dto.Coupon{
 			Id:         item.Id,

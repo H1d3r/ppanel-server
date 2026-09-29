@@ -13,6 +13,7 @@ import (
 	dysmsapi "github.com/alibabacloud-go/dysmsapi-20170525/v2/client"
 	util "github.com/alibabacloud-go/tea-utils/service"
 	"github.com/alibabacloud-go/tea/tea"
+	"github.com/perfect-panel/server/internal/infra/integration"
 )
 
 // defaultEndpoint serves accounts whose configuration names no endpoint.
@@ -87,7 +88,10 @@ func (c *Client) SendTemplate(ctx context.Context, area, mobile string, params m
 		TemplateParam: tea.String(string(templateParam)),
 	}, &util.RuntimeOptions{ConnectTimeout: milliseconds, ReadTimeout: milliseconds})
 	if err != nil {
-		return err
+		// The SDK sends the number and the template parameters, the code
+		// among them, in the query string and returns a failed round trip
+		// as is: integration.RequestError drops the URL.
+		return integration.RequestError("alibaba cloud sms", err)
 	}
 	if resp.Body == nil || resp.Body.Code == nil {
 		return errors.New("alibaba cloud send sms failed: empty response")

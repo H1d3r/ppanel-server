@@ -7,7 +7,7 @@
 
 | 目录 | 职责与入口 |
 |---|---|
-| `app` | `NewServices` 是唯一组装入口：`NewApplication` 连接基础设施并组装七个模块，`services.go` 拼出 HTTP、任务与调度服务的依赖；`server.go` 管理启动与重启；`bootstrap` 加载及重载运行时配置；`state` 发布快照，`lifecycle` 管理停止钩子，`buildinfo` 保存版本元数据；`scheduler` 管理定时调度，`migration` 管理迁移 |
+| `app` | `NewServices` 是唯一组装入口：`NewApplication` 连接基础设施并组装七个模块，`services.go` 拼出 HTTP、任务与调度服务的依赖；`server.go` 管理启动与重启；`bootstrap` 加载及重载运行时配置；`state` 发布快照，`lifecycle` 管理停止钩子与启动就绪信号（`lifecycle.Readiness`，任务消费者等到它才开始消费任务，最长等待 10 分钟），`buildinfo` 保存版本元数据；`scheduler` 管理定时调度，`migration` 管理迁移 |
 | `config` | 配置结构（启动配置 `Boot` 与运行时配置 `Runtime` 两部分）、系统设置转换、数据库和 Redis 配置解析 |
 | `auth` | 跨模块的令牌、设备签名与会话、标识规范化、密码、挑战和限流 |
 | `module` | 七个业务模块，各自拥有门面、契约、实体、内部实现与业务 handler |
@@ -66,6 +66,8 @@
 
 - 原 `queue/queue.go` 与 `queue/handler` 合并到 `internal/transport/task`，
   各任务处理器直接位于 `task/email`、`order`、`traffic`、`events`、`sms`、`subscription`、`maintenance`。
+  任务消费服务先等待 `lifecycle.Readiness` 的启动就绪信号再开始消费；其 `Stop` 通过 asynq 的 `Shutdown`
+  停止，等待正在运行的处理器结束（最长 8 秒），然后关闭队列连接。
 - 原 `queue/types` 的任务名称、消息字段和任务 ID 算法并入 `internal/infra/taskqueue`。
   业务生产者依赖这些共享消息定义，不依赖任务消费者。
 - 原 `scheduler` 归 `internal/app/scheduler`，负责定时注册任务，调度表达式、重试配置和时区策略保持一致。
@@ -86,6 +88,7 @@
   同级的 `mysql2postgres` 继续负责数据迁移工具。
 
 启动顺序仍为迁移、站点、节点密钥、节点配置、邮件、设备、邀请、校验、订阅、注册、手机、汇率、Telegram。
+Telegram 认证方式的配置缺失或无法解码时只记录日志并跳过，不会中止启动。
 `bootstrap.Reload` 仅重载所选配置项，不运行启动迁移或节点密钥初始化。
 SQL 文件移动时保留原有文件名与内容；分支迁移检查兼容基准提交中的旧目录，目录移动不视为新增迁移。
 空的 `mysql.go` 和无调用的自定义 SQL 执行工具已移除。
@@ -101,7 +104,8 @@ SQL 文件移动时保留原有文件名与内容；分支迁移检查兼容基�
 - HTTP 参数绑定与响应包装统一到 `pkg/httpx`，保留原有 JSON 与 Swagger schema 名称。
 - AES 加解密内聚到 `internal/auth/deviceauth`，签名与密文格式不变。
 - 邮件与唯一的 SMTP 实现统一到 `internal/infra/mail`。
-- 服务组、停机钩子统一到 `internal/app/lifecycle`，保留停止顺序、只执行一次及 panic 恢复行为。
+- 服务组、停机钩子统一到 `internal/app/lifecycle`，保留停止顺序、只执行一次及 panic 恢复行为；
+  启动就绪信号 `lifecycle.Readiness` 也在这里，任务消费者等到它才开始消费任务，最长等待 10 分钟。
 - trace ID/Span ID 直接使用 OpenTelemetry SDK，移除重复的上下文包，避免日志循环依赖。
 - 邮箱、手机号与标识规范化统一到 `internal/auth/identifier`。
 - Telegram webhook 密钥推导并入 notification 模块。

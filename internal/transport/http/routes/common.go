@@ -15,8 +15,11 @@ func registerCommonRoutes(router *server.Hertz, deps Dependencies) {
 		commonGroupRouter.POST("/check_verification_code", identityCommon.CheckVerificationCodeHandler(deps.Identity))
 		commonGroupRouter.GET("/client", platformCommon.GetClientHandler(deps.Platform))
 		commonGroupRouter.GET("/heartbeat", platformCommon.HeartbeatHandler(deps.Platform))
-		commonGroupRouter.POST("/send_code", identityCommon.SendEmailCodeHandler(deps.Identity))
-		commonGroupRouter.POST("/send_sms_code", identityCommon.SendSmsCodeHandler(deps.Identity))
+		// A signed-in caller asks for a code to bind an address to its own
+		// account, which stays possible while registration is closed; the
+		// optional authentication tells the identity module who asks.
+		commonGroupRouter.POST("/send_code", deps.optionalAuthMiddleware(), identityCommon.SendEmailCodeHandler(deps.Identity))
+		commonGroupRouter.POST("/send_sms_code", deps.optionalAuthMiddleware(), identityCommon.SendSmsCodeHandler(deps.Identity))
 		commonGroupRouter.GET("/site/config", platformCommon.GetGlobalConfigHandler(deps.Platform))
 		commonGroupRouter.GET("/site/privacy", platformCommon.GetPrivacyPolicyHandler(deps.Platform))
 		commonGroupRouter.GET("/site/stat", platformCommon.GetStatHandler(deps.Platform))

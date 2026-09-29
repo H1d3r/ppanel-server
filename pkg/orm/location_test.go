@@ -1,6 +1,27 @@
 package orm
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+// loc=Local names the process zone, which the server sets to AppLocation at
+// startup, so the session zone is that zone's name and the startup
+// comparison with AppLocation holds instead of reporting a false mismatch.
+func TestSessionLocationResolvesLocalToTheProcessZone(t *testing.T) {
+	paris, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := time.Local
+	time.Local = paris
+	t.Cleanup(func() { time.Local = previous })
+
+	m := Mysql{Config: Config{Driver: DriverMySQL, Config: "charset=utf8mb4&parseTime=true&loc=Local"}}
+	if got := m.SessionLocation(); got != "Europe/Paris" {
+		t.Fatalf("SessionLocation = %q, want the process zone Europe/Paris", got)
+	}
+}
 
 // Only a zone both drivers accept may reach the connection parameters:
 // PostgreSQL rejects "Local", and a misspelt zone would fail every connect.

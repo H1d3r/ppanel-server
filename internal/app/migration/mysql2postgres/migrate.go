@@ -565,11 +565,17 @@ func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, 
 		// rows must not be touched after this function returns.
 		_ = reader.CloseWithError(errCopyStopped)
 		written.Wait()
-		if writeErr != nil {
+		// A writer that ran into the closed pipe only saw COPY stop; the
+		// reason is COPY's own error (PostgreSQL rejecting a row), which
+		// must be the one the operator reads.
+		if writeErr != nil && !errors.Is(writeErr, errCopyStopped) {
 			return writeErr
 		}
 		if copyErr != nil {
 			return fmt.Errorf("copy rows into %s: %w", plan.Name, copyErr)
+		}
+		if writeErr != nil {
+			return writeErr
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit postgres copy for %s: %w", plan.Name, err)

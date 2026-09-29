@@ -174,8 +174,8 @@ func TestRenewalPreviewValidatesTargetBeforeSkippingQuota(t *testing.T) {
 				SubscribeId: 10,
 				Status:      usersub.SubscribeStatusDeducted,
 			},
-			wantError: "status does not allow renewal",
-			wantCode:  xerr.InvalidParams,
+			wantError: "refunded or stopped subscription cannot be renewed",
+			wantCode:  xerr.SubscribeNotAvailable,
 		},
 	}
 

@@ -79,8 +79,9 @@ func (s *Service) UpdateUserBasicInfo(ctx context.Context, req *dto.UpdateUserBa
 
 	// The money adjustment is billing's: it compares and writes the latest
 	// values under the wallet lock, with their audit logs, in the billing
-	// module's own transaction.
-	err = s.deps.Wallet.AdjustWallet(ctx, wallet.Wallet{
+	// module's own transaction. Only the amounts the request carries are
+	// forwarded; an omitted one stays as it is.
+	err = s.deps.Wallet.AdjustWallet(ctx, wallet.Adjustment{
 		UserId:     req.UserId,
 		Balance:    req.Balance,
 		GiftAmount: req.GiftAmount,

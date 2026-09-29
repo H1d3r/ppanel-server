@@ -4,13 +4,56 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
+
+// hangingExporter never finishes an export or its shutdown until the
+// context ends, like a collector that accepted the connection and stopped
+// answering.
+type hangingExporter struct{}
+
+func (hangingExporter) ExportSpans(ctx context.Context, _ []sdktrace.ReadOnlySpan) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (hangingExporter) Shutdown(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// StopAgent runs at process exit, inside Docker's default stop grace of 10 s:
+// a hanging collector must not hold it past that, or the process is killed
+// before the logs are closed. The give-up is logged.
+func TestStopAgentGivesUpOnAHangingExporter(t *testing.T) {
+	logs := logtest.NewCollector(t)
+	previous := shutdownTimeout
+	shutdownTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { shutdownTimeout = previous })
+	lock.Lock()
+	tp = sdktrace.NewTracerProvider(sdktrace.WithBatcher(hangingExporter{}))
+	lock.Unlock()
+	_, span := tp.Tracer("test").Start(context.Background(), "pending")
+	span.End()
+
+	start := time.Now()
+	StopAgent()
+
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("StopAgent took %s with a hanging exporter, want it to give up at the shutdown timeout", elapsed)
+	}
+	if !strings.Contains(logs.String(), "timed out") {
+		t.Fatalf("logs = %q, want the shutdown timeout reported", logs.String())
+	}
+}
 
 // The jaeger batcher exports OTLP over HTTP: Jaeger receives it natively.
 func TestJaegerBatcherExportsOTLPOverHTTP(t *testing.T) {
@@ -59,7 +102,9 @@ func TestJaegerEndpointMapsOntoOTLP(t *testing.T) {
 }
 
 func TestStartAgent(t *testing.T) {
-	logger.Disable()
+	// Discard rather than Disable: Disable silences the process logger for
+	// good, which would also blind the collectors of the tests after this one.
+	logtest.Discard(t)
 
 	const (
 		endpoint1  = "localhost:1234"

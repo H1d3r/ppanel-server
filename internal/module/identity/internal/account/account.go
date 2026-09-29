@@ -6,6 +6,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
@@ -184,27 +185,56 @@ type SessionConfig struct {
 	Lifetime int64
 }
 
-// IssueSession issues the session a successful sign-in ends with. The login
-// type the device transport put in ctx wins over the requested one. A
-// device session must be bound to the device, which must be the user's and
-// enabled.
-func IssueSession(ctx context.Context, store usersession.Store, cfg SessionConfig, userID int64, loginType string, device *user.Device) (string, error) {
+// Login is the successful sign-in a session is issued for.
+type Login struct {
+	UserID int64
+	// LoginType records how the user signed in; the login type the device
+	// transport put in ctx wins over it.
+	LoginType string
+	// Epoch is the account's session epoch the flow read (ReadEpoch) before
+	// it checked the credential, or the one its own revocation set
+	// (usersession.Rotate). No session is issued once the epoch moved: a
+	// revocation overtook the sign-in, and the session must not outlive it.
+	// Empty skips the comparison.
+	Epoch string
+	// Device binds the session to the device, which must be the user's and
+	// enabled.
+	Device *user.Device
+}
+
+// ReadEpoch returns the account's current session epoch. A sign-in reads it
+// before it checks the credential and hands it on in Login.Epoch.
+func ReadEpoch(ctx context.Context, store usersession.Store, userID int64) (string, error) {
+	epoch, err := usersession.AcquireEpoch(ctx, store, userID)
+	if err != nil {
+		return "", xerr.Wrapf(err, xerr.ERROR, "read session epoch of user %d", userID)
+	}
+	return epoch, nil
+}
+
+// IssueSession issues the session a successful sign-in ends with. A device
+// session must be bound to the device.
+func IssueSession(ctx context.Context, store usersession.Store, cfg SessionConfig, login Login) (string, error) {
+	loginType := login.LoginType
 	if value, ok := ctx.Value(requestctx.LoginType).(string); ok {
 		loginType = value
 	}
-	if loginType == "device" && device == nil {
+	if loginType == "device" && login.Device == nil {
 		return "", xerr.Errorf(xerr.InvalidAccess, "device session requires a binding")
 	}
-	grant := usersession.Grant{UserID: userID, LoginType: loginType}
-	if device != nil {
-		if device.Id <= 0 || device.UserId != userID || !device.Enabled {
+	grant := usersession.Grant{UserID: login.UserID, LoginType: loginType, Epoch: login.Epoch}
+	if device := login.Device; device != nil {
+		if device.Id <= 0 || device.UserId != login.UserID || !device.Enabled {
 			return "", xerr.Errorf(xerr.InvalidAccess, "device session binding invalid")
 		}
 		grant.DeviceID = device.Id
 	}
 	token, err := usersession.Issue(ctx, store, cfg.Secret, cfg.Lifetime, grant)
+	if errors.Is(err, usersession.ErrEpochMoved) {
+		return "", xerr.Wrapf(err, xerr.InvalidAccess, "sessions of user %d were revoked during sign-in", login.UserID)
+	}
 	if err != nil {
-		return "", xerr.Wrapf(err, xerr.ERROR, "issue session for user %d", userID)
+		return "", xerr.Wrapf(err, xerr.ERROR, "issue session for user %d", login.UserID)
 	}
 	return token, nil
 }

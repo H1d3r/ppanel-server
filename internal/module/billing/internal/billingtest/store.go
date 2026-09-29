@@ -30,6 +30,7 @@ import (
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/platform/entity/outbox"
 	"github.com/perfect-panel/server/internal/module/subscription"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/entitlement"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support"
@@ -51,8 +52,9 @@ type Harness struct {
 
 var databases atomic.Int64
 
-// New opens a fresh database with the billing tables and the subscription,
-// identity and platform tables the order flows touch.
+// New opens a fresh database with the billing tables and the subscription
+// (plans, user subscriptions, entitlement periods), identity and platform
+// tables the order flows touch.
 func New(t testing.TB) *Harness {
 	t.Helper()
 	// A file database in WAL mode lets a flow read outside its open
@@ -85,6 +87,7 @@ func New(t testing.TB) *Harness {
 		&wallet.Wallet{}, &wallet.Withdrawal{},
 		&logEntity.SystemLog{}, &inbox.Record{}, &outbox.Event{},
 		&subscribe.Subscribe{}, &user.User{}, &user.AuthMethods{}, &user.Device{},
+		&entitlement.State{}, &entitlement.Period{}, &entitlement.Revision{},
 	} {
 		if err := db.AutoMigrate(model); err != nil {
 			t.Fatalf("migrate %T: %v", model, err)

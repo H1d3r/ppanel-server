@@ -354,10 +354,14 @@ func (b *Balance) clean() { b.Metadata = sanitizeRequestMetadata(b.Metadata) }
 // Commission represents a commission log entry.
 type Commission struct {
 	requestmeta.Metadata
-	Type      uint16 `json:"type"`
-	Amount    int64  `json:"amount"`
-	OrderNo   string `json:"order_no"`
-	Timestamp int64  `json:"timestamp"`
+	Type    uint16 `json:"type"`
+	Amount  int64  `json:"amount"`
+	OrderNo string `json:"order_no"`
+	// Balance is the commission balance after the movement, so the balance
+	// before it is Balance - Amount. Writers that do not know it leave it
+	// out; an administrator's adjustment always records it.
+	Balance   int64 `json:"balance,omitempty"`
+	Timestamp int64 `json:"timestamp"`
 }
 
 // Marshal encodes the entry as stored, its request bounded.

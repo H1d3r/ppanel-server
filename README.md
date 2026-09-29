@@ -99,6 +99,9 @@ proxy services. Built with Go, it emphasizes performance, security, and scalabil
        volumes:
          - ./etc:/app/etc
        environment:
+         # Optional, for the container's own tools: the server keeps time in
+         # AppLocation (etc/ppanel.yaml), and any IANA zone works there because
+         # the binary embeds the time zone database (time/tzdata).
          - TZ=Asia/Shanghai
    ```
    Run:

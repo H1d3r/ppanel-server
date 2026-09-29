@@ -25,7 +25,14 @@ import (
 const (
 	inboxRecharge   = "identity.balance_recharge"
 	inboxCommission = "identity.commission"
+	// inboxUnfulfillableRefund marks the refund of a paid order whose
+	// fulfillment the subscription domain refused for good.
+	inboxUnfulfillableRefund = "billing.unfulfillable_refund"
 )
+
+// unfulfillableRefundRemark labels the gift movement of such a refund in the
+// gift log.
+const unfulfillableRefundRemark = "Unfulfillable order refund"
 
 // ErrInvalidOrderStatus reports a lost Paid->Finished CAS: the order left
 // the Paid state underneath the settlement.
@@ -203,8 +210,9 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 	if err := store.Wallet().UpdateCommission(ctx, referer); err != nil {
 		return err
 	}
-	// The order keeps what it earned so a refund can take it back.
-	if err := store.Order().SetCommission(ctx, orderInfo.OrderNo, amount); err != nil {
+	// The order keeps what it earned and who earned it so a refund can take
+	// it back from that referrer.
+	if err := store.Order().SetCommission(ctx, orderInfo.OrderNo, amount, referer.UserId); err != nil {
 		return err
 	}
 	commissionType := log.CommissionTypePurchase
@@ -233,6 +241,98 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 // percentage has no exact binary fraction (29% of 100 came out as 28).
 func calculateCommission(price int64, percentage uint8) int64 {
 	return price * int64(percentage) / 100
+}
+
+// UnfulfillableRefunded reports whether the order was refunded because the
+// subscription domain could not fulfil it.
+func (s *Service) UnfulfillableRefunded(ctx context.Context, orderNo string) (bool, error) {
+	mark, err := s.deps.Store.Inbox().Find(ctx, inboxUnfulfillableRefund, orderNo)
+	if err != nil {
+		return false, err
+	}
+	return mark != nil, nil
+}
+
+// RefundUnfulfillable returns what a paid order collected when the
+// subscription domain refuses to fulfil it for good (its subscription was
+// refunded, stopped or handed to a payment provider between checkout and
+// payment): the payment goes back to the buyer's balance and the gift credit
+// the order held to the gift balance, each with the ledger entry a refund
+// writes, a reserved coupon use is released as a close releases it, and the
+// order ends Closed with its event. Everything commits in one billing
+// transaction with the inbox marker, so a redelivered activation refunds
+// once; the order row lock serializes concurrent deliveries.
+func (s *Service) RefundUnfulfillable(ctx context.Context, orderNo string) error {
+	return s.deps.Store.InBillingTx(ctx, func(store repository.BillingStore) error {
+		mark, err := store.Inbox().Find(ctx, inboxUnfulfillableRefund, orderNo)
+		if err != nil {
+			return err
+		}
+		if mark != nil {
+			return nil
+		}
+		current, err := store.Order().FindOneByOrderNoForUpdate(ctx, orderNo)
+		if err != nil {
+			return err
+		}
+		if current.Status != order.StatusPaid {
+			return ErrInvalidOrderStatus
+		}
+		if err := s.refundTx(ctx, store, current); err != nil {
+			return err
+		}
+		closed, err := store.Order().UpdateOrderStatusFrom(ctx, orderNo, order.StatusPaid, order.StatusClosed)
+		if err != nil {
+			return err
+		}
+		if !closed {
+			return ErrInvalidOrderStatus
+		}
+		return store.Inbox().Insert(ctx, inboxUnfulfillableRefund, orderNo, "")
+	})
+}
+
+// refundTx moves the order's money back under the wallet lock: Amount is
+// what the buyer paid at checkout and returns to the balance, as a
+// cancellation refund returns it; GiftAmount is the gift credit the order
+// held and returns to the gift balance, as a close returns it.
+func (s *Service) refundTx(ctx context.Context, store repository.BillingStore, o *order.Order) error {
+	wallet, err := store.Wallet().FindOneForUpdate(ctx, o.UserId)
+	if err != nil {
+		return err
+	}
+	now := timeutil.Now()
+	if o.GiftAmount > 0 {
+		wallet.GiftAmount += o.GiftAmount
+		if err := ledger.RefundGift(ctx, store.Log(), ledger.Gift{
+			UserID: wallet.UserId, OrderNo: o.OrderNo, Amount: o.GiftAmount, Balance: wallet.GiftAmount, Remark: unfulfillableRefundRemark,
+		}); err != nil {
+			return err
+		}
+	}
+	if o.Amount > 0 {
+		wallet.Balance += o.Amount
+		content, err := (&log.Balance{
+			Type: log.BalanceTypeRefund, Amount: o.Amount, OrderNo: o.OrderNo, Balance: wallet.Balance, Timestamp: now.UnixMilli(),
+		}).Marshal()
+		if err != nil {
+			return err
+		}
+		if err := store.Log().Insert(ctx, &log.SystemLog{
+			Type: log.TypeBalance.Uint8(), Date: now.Format(time.DateOnly), ObjectID: wallet.UserId, Content: string(content),
+		}); err != nil {
+			return err
+		}
+	}
+	if o.GiftAmount > 0 || o.Amount > 0 {
+		if err := store.Wallet().UpdateBalanceFields(ctx, wallet); err != nil {
+			return err
+		}
+	}
+	if o.Coupon != "" && o.CouponReserved {
+		return store.Coupon().ReleaseUsage(ctx, o.Coupon)
+	}
+	return nil
 }
 
 // FinalizeOrder is the billing-domain settlement: coupon accounting and the

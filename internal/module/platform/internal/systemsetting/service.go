@@ -68,13 +68,15 @@ type Deps struct {
 
 // reinit applies a subsystem's changed settings to the running server. A
 // failure leaves the settings saved but not in effect until a reload
-// succeeds or the server restarts, which the administrator has to learn.
+// succeeds or the server restarts, which the administrator has to learn:
+// it is reported under a code of its own, since an internal error would
+// read as the settings not having been saved.
 func (d Deps) reinit(subsystem string) error {
 	if d.Reinitialize == nil {
 		return nil
 	}
 	if err := d.Reinitialize(subsystem); err != nil {
-		return xerr.Wrapf(err, xerr.ERROR, "the %s settings are saved but could not be applied", subsystem)
+		return xerr.Wrapf(err, xerr.SettingsSavedNotApplied, "the %s settings are saved but could not be applied", subsystem)
 	}
 	return nil
 }

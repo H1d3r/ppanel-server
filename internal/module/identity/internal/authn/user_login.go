@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
-	"github.com/perfect-panel/server/internal/auth/password"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
@@ -44,19 +43,20 @@ func (s *Service) UserLogin(ctx context.Context, req *dto.UserLoginRequest) (res
 		return nil, xerr.Errorf(xerr.UserNotExist, "user %d is deleted", userInfo.Id)
 	}
 
-	if err := ensureLoginAllowed(ctx, s.deps.Redis, userInfo.Id); err != nil {
+	// The epoch is read before the password check, so a reset that lands
+	// while the password is checked ends this sign-in too.
+	epoch, err := account.ReadEpoch(ctx, s.deps.Redis, userInfo.Id)
+	if err != nil {
 		return nil, err
 	}
-	if !password.MultiPasswordVerify(userInfo.Algo, userInfo.Salt, req.Password, userInfo.Password) {
-		recordLoginFailure(ctx, s.deps.Redis, userInfo.Id)
-		return nil, xerr.Errorf(xerr.UserPasswordError, "wrong password")
+	if err := s.checkPassword(ctx, userInfo, req.Password); err != nil {
+		return nil, err
 	}
-	clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
 	// The account state is only revealed to the owner of the password.
 	if err := account.EnsureActive(userInfo); err != nil {
 		return nil, err
 	}
 	upgradePasswordAfterLogin(ctx, s.deps.Store.User(), userInfo, req.Password)
 
-	return s.signIn(ctx, userInfo.Id, req.Identifier)
+	return s.signIn(ctx, userInfo.Id, epoch, req.Identifier)
 }

@@ -192,3 +192,77 @@ func TestReconnectReplacesPreviousSocket(t *testing.T) {
 		t.Errorf("totalOnline = %d after reconnect, want 1", got)
 	}
 }
+
+// serverSocket returns the server side of a websocket connection no manager
+// knows about, for a device registered by hand.
+func serverSocket(t *testing.T) *websocket.Conn {
+	t.Helper()
+	accepted := make(chan *websocket.Conn, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("websocket upgrade: %v", err)
+			return
+		}
+		accepted <- conn
+	}))
+	t.Cleanup(srv.Close)
+	client, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("websocket dial: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return <-accepted
+}
+
+// The heartbeat sweep gets each user's device list from the map's Range,
+// before it holds the user's lock. A device that connects in between is in
+// the map but not in that list; a sweep storing a list rebuilt from it
+// would drop the device, leaving a socket nothing can kick and a
+// totalOnline that never comes down.
+func TestHeartbeatSweepKeepsADeviceConnectedWhileItWaited(t *testing.T) {
+	dm := NewDeviceManager(3600, 3600)
+	defer dm.Stop()
+
+	const userID = int64(13)
+	srv := deviceTestServer(t, dm, userID, 2)
+	conn := dialDevice(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// The sweep starts while the test holds the user's lock: it has taken
+	// its snapshot from Range and waits for the lock.
+	mu := dm.getUserMutex(userID)
+	mu.Lock()
+	swept := make(chan struct{})
+	go func() {
+		defer close(swept)
+		dm.checkHeartbeats()
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	// Meanwhile a second device connects: AddDevice's registration, as it
+	// runs under the lock.
+	late := &Device{Session: "session", DeviceID: "dev2", Conn: serverSocket(t), CreatedAt: time.Now(), LastPingTime: time.Now()}
+	current, _ := dm.userDevices.Load(userID)
+	dm.userDevices.Store(userID, append(append([]*Device(nil), current.([]*Device)...), late))
+	atomic.AddInt32(&dm.totalOnline, 1)
+	mu.Unlock()
+	<-swept
+
+	if devices := dm.snapshotDevices(userID); len(devices) != 2 || devices[1] != late {
+		t.Fatalf("devices after the sweep = %d, want both, the late one included", len(devices))
+	}
+	if got := atomic.LoadInt32(&dm.totalOnline); got != 2 {
+		t.Fatalf("totalOnline after the sweep = %d, want 2", got)
+	}
+	if err := dm.SendToDevice(userID, "dev2", "hello"); err != nil {
+		t.Fatalf("the late device is unreachable: %v", err)
+	}
+	dm.KickDevice(userID, "dev2")
+	if got := atomic.LoadInt32(&dm.totalOnline); got != 1 {
+		t.Fatalf("totalOnline after kicking the late device = %d, want 1", got)
+	}
+}

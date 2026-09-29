@@ -66,9 +66,9 @@ type Wallets interface {
 	// OpenWallet sets the opening amounts of an account the administrator
 	// created.
 	OpenWallet(ctx context.Context, opening wallet.Wallet) error
-	// AdjustWallet sets the user's wallet to the target's amounts, auditing
-	// each change; an unchanged wallet is left alone.
-	AdjustWallet(ctx context.Context, target wallet.Wallet) error
+	// AdjustWallet sets the wallet amounts the adjustment carries, auditing
+	// each change; amounts left nil or already equal are left alone.
+	AdjustWallet(ctx context.Context, adjustment wallet.Adjustment) error
 }
 
 func (d Deps) kickDevice(userID int64, identifier string) {

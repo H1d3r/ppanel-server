@@ -25,10 +25,18 @@ const (
 	sendTimeout = 60 * time.Second
 )
 
+// errSTARTTLSRequired refuses a relay that offers no STARTTLS while the
+// configuration requires encryption.
+var errSTARTTLSRequired = errors.New("smtp: the relay does not offer STARTTLS but ssl requires encryption; " +
+	"enable STARTTLS on the relay, use implicit TLS (port 465 or implicit_tls), or clear ssl to send in the clear")
+
 // SMTPClient sends through an SMTP relay, one connection per message.
 type SMTPClient struct {
-	conf        SMTPConfig
+	conf SMTPConfig
+	// implicitTLS starts the connection with a TLS handshake; otherwise the
+	// session upgrades through STARTTLS, which requireTLS makes mandatory.
 	implicitTLS bool
+	requireTLS  bool
 	tlsConfig   *tls.Config
 	// timeout bounds one delivery (sendTimeout).
 	timeout time.Duration
@@ -37,14 +45,23 @@ type SMTPClient struct {
 // SMTPConfig is the stored configuration of the SMTP provider; SiteName,
 // the sender's display name, comes from the site settings instead.
 type SMTPConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	User     string `json:"user"`
-	Pass     string `json:"pass"`
-	From     string `json:"from"`
-	ReplyTo  string `json:"reply_to"`
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	User    string `json:"user"`
+	Pass    string `json:"pass"`
+	From    string `json:"from"`
+	ReplyTo string `json:"reply_to"`
+	// SSL requires encryption: implicit TLS on port 465 or with ImplicitTLS,
+	// STARTTLS otherwise, refusing a relay that does not offer it. Unset,
+	// STARTTLS stays opportunistic and a relay without TLS is used in the
+	// clear.
 	SSL      bool   `json:"ssl"`
 	SiteName string `json:"siteName"`
+	// ImplicitTLS starts the connection with a TLS handshake (SMTPS) on a
+	// port other than 465, which is implicit TLS by definition. The relay and
+	// submission ports (25, 587, 2525) start in plaintext and upgrade through
+	// STARTTLS, so they never need it.
+	ImplicitTLS bool `json:"implicit_tls"`
 	// InsecureSkipVerify accepts any server certificate. It exists only for
 	// relays with self-signed certificates and must be set explicitly in the
 	// stored platform config; certificates are verified by default.
@@ -56,12 +73,15 @@ func NewSMTPClient(conf *SMTPConfig) *SMTPClient {
 	if conf == nil {
 		return nil
 	}
+	implicit := implicitTLS(conf)
 	return &SMTPClient{
 		conf:        *conf,
-		implicitTLS: implicitTLS(conf),
-		// Without implicit TLS the session upgrades with STARTTLS whenever
-		// the relay offers it and stays plain otherwise, so relays without
-		// TLS keep working.
+		implicitTLS: implicit,
+		// SSL makes encryption mandatory, so without implicit TLS the session
+		// has to upgrade through STARTTLS. Without the flag the upgrade stays
+		// opportunistic: it happens whenever the relay offers it, and relays
+		// without TLS keep working.
+		requireTLS: conf.SSL && !implicit,
 		tlsConfig: &tls.Config{
 			InsecureSkipVerify: conf.InsecureSkipVerify,
 			MinVersion:         tls.VersionTLS12,
@@ -72,19 +92,13 @@ func NewSMTPClient(conf *SMTPConfig) *SMTPClient {
 }
 
 // implicitTLS reports whether the connection starts with a TLS handshake
-// (SMTPS) instead of upgrading through STARTTLS. Port 465 is implicit TLS by
-// definition and the SSL flag selects it on any other port, except the
-// relay and submission ports 25 and 587: they always start in plaintext, so
-// honoring the flag there would only break configurations that set it to
-// mean "use encryption" and have been sending through STARTTLS.
+// (SMTPS) instead of upgrading through STARTTLS: on port 465, which is
+// implicit TLS by definition, and where the configuration asks for it. The
+// SSL flag does not select it: the relay providers document that flag on
+// their STARTTLS ports (587, 2525), where a TLS handshake meets a plaintext
+// greeting and no mail goes out.
 func implicitTLS(conf *SMTPConfig) bool {
-	switch conf.Port {
-	case 465:
-		return true
-	case 25, 587:
-		return false
-	}
-	return conf.SSL
+	return conf.Port == 465 || conf.ImplicitTLS
 }
 
 // SendContext delivers the message over one SMTP conversation, bounded by
@@ -142,8 +156,9 @@ func (m *SMTPClient) deliver(ctx context.Context, msg *gomail.Message) error {
 	return nil
 }
 
-// handshake opens the SMTP session on conn: implicit TLS or an opportunistic
-// STARTTLS, then authentication when credentials are configured and the
+// handshake opens the SMTP session on conn: implicit TLS or STARTTLS
+// (mandatory when the configuration requires encryption, opportunistic
+// otherwise), then authentication when credentials are configured and the
 // relay offers it.
 func (m *SMTPClient) handshake(conn net.Conn) (*smtp.Client, error) {
 	if m.implicitTLS {
@@ -154,10 +169,17 @@ func (m *SMTPClient) handshake(conn net.Conn) (*smtp.Client, error) {
 		return nil, err
 	}
 	if !m.implicitTLS {
-		if ok, _ := client.Extension("STARTTLS"); ok {
+		ok, _ := client.Extension("STARTTLS")
+		switch {
+		case ok:
 			if err := client.StartTLS(m.tlsConfig); err != nil {
 				return nil, err
 			}
+		case m.requireTLS:
+			// Only EHLO has left the client: refusing here keeps the
+			// credentials and the message off the wire, whether the relay
+			// lacks TLS or someone on the path stripped the extension.
+			return nil, errSTARTTLSRequired
 		}
 	}
 	if auth := m.auth(client); auth != nil {

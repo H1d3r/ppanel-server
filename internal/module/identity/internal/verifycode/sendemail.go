@@ -40,11 +40,7 @@ func (s *Service) SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid email")
 	}
-	if verifyType == auth.Register {
-		if err := s.deps.Policy.EnsureRegistrationOpen(ctx, identifier.Email); err != nil {
-			return nil, err
-		}
-	} else if err := s.deps.Policy.EnsureMethodEnabled(ctx, identifier.Email); err != nil {
+	if err := s.ensureCodeAllowed(ctx, verifyType, identifier.Email); err != nil {
 		return nil, err
 	}
 	cacheKey := verification.EmailCodeKey(verifyType, email)

@@ -32,6 +32,12 @@ func MarkOnline(ctx context.Context, devices repository.UserDeviceRepo, identifi
 // cleared, so its online time is recorded either way. A device removed
 // meanwhile is skipped.
 func MarkOffline(ctx context.Context, devices repository.UserDeviceRepo, userID int64, identifier string, connectedAt time.Time) error {
+	return markOffline(ctx, devices, userID, identifier, connectedAt, timeutil.Now())
+}
+
+// markOffline is MarkOffline at the instant now, which decides the day the
+// connection is recorded on; tests pin it.
+func markOffline(ctx context.Context, devices repository.UserDeviceRepo, userID int64, identifier string, connectedAt, now time.Time) error {
 	device, found, err := findDevice(ctx, devices, identifier)
 	if err != nil || !found {
 		return err
@@ -41,7 +47,6 @@ func MarkOffline(ctx context.Context, devices repository.UserDeviceRepo, userID 
 		offlineErr = fmt.Errorf("mark device %s offline: %w", identifier, err)
 	}
 
-	now := timeutil.Now()
 	record := user.DeviceOnlineRecord{
 		UserId:        userID,
 		Identifier:    identifier,

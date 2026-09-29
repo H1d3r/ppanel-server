@@ -7,6 +7,8 @@ import (
 	"context"
 
 	"github.com/hibiken/asynq"
+	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
 	"github.com/perfect-panel/server/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -60,4 +62,21 @@ type Service struct {
 // NewService builds the subdomain over the dependencies the facade forwards.
 func NewService(deps Deps) *Service {
 	return &Service{deps: deps}
+}
+
+// ensureCodeAllowed applies the account policy to a code request. A register
+// code proves an address no account holds: for an anonymous request it
+// starts a registration and needs registration open, while a signed-in
+// account asks for it to bind the address to itself (UpdateBindEmail,
+// UpdateBindMobile), which needs only the method enabled, so closing
+// registration does not stop members from binding or changing an address.
+// A security code proves an address an account holds and needs the method.
+func (s *Service) ensureCodeAllowed(ctx context.Context, verifyType auth.VerifyType, method string) error {
+	if verifyType != auth.Register {
+		return s.deps.Policy.EnsureMethodEnabled(ctx, method)
+	}
+	if _, signedIn := user.FromContext(ctx); signedIn {
+		return s.deps.Policy.EnsureMethodEnabled(ctx, method)
+	}
+	return s.deps.Policy.EnsureRegistrationOpen(ctx, method)
 }

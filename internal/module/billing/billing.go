@@ -144,11 +144,12 @@ type Service interface {
 	FindWallets(ctx context.Context, userIDs []int64) (map[int64]*walletEntity.Wallet, error)
 	// OpenWallet sets the opening balance, gift amount and commission of an
 	// account an administrator created. AdjustWallet applies an
-	// administrator's wallet edit: under the wallet lock the amounts are set
-	// to the target's, each changed one with its audit log; an unchanged
-	// wallet is left alone.
+	// administrator's wallet edit: under the wallet lock each amount the
+	// adjustment sets becomes the wallet's, with an audit log recording the
+	// change and the resulting amount; amounts left nil or already equal are
+	// left alone.
 	OpenWallet(ctx context.Context, opening walletEntity.Wallet) error
-	AdjustWallet(ctx context.Context, target walletEntity.Wallet) error
+	AdjustWallet(ctx context.Context, adjustment walletEntity.Adjustment) error
 	// UnsubscribeRefundSettled reports whether the refund of a cancelled user
 	// subscription was settled. SettleUnsubscribeRefund settles it: amount,
 	// capped at what the order and its paid renewals cost, goes back to the
@@ -221,6 +222,12 @@ type (
 // the gateway confirms payment; schedulers treat it as an expected outcome.
 var ErrGatewayUnconfirmed = checkout.ErrGatewayUnconfirmed
 
+// ErrInvalidPaymentCallback marks a rejected gateway callback that cannot be
+// authenticated or does not describe its order, which redelivery cannot
+// change; the notify handler answers a gateway that reads HTTP statuses with
+// 400 for it and 500 for any other failure.
+var ErrInvalidPaymentCallback = gateway.ErrInvalidCallback
+
 // CloseOrderTimeMinutes is the payment window of a pending order; the
 // composition root schedules the deferred close after it.
 const CloseOrderTimeMinutes = checkout.CloseOrderTimeMinutes
@@ -248,6 +255,13 @@ type (
 	ExchangeRateCache  = portal.ExchangeRateCache
 	PortalConfig       = portal.Config
 	GuestVerification  = portal.GuestVerification
+	// RegistrationPolicy is the registration settings a guest purchase
+	// follows; the composition root snapshots them per request from the
+	// same configuration identity's registration reads.
+	RegistrationPolicy = portal.RegistrationPolicy
+	// EmailAliasReader is the identity port extension that lets guest
+	// purchase refuse other spellings of an existing mailbox.
+	EmailAliasReader = portal.EmailAliasReader
 )
 
 // AffiliateReader and AuthMethodReader re-export the wallet subdomain's
@@ -366,6 +380,7 @@ func New(deps Deps) Service {
 	})
 	portalSvc := portal.NewService(portal.Deps{
 		Orders:             deps.Orders,
+		OrderEvents:        portalOrderEvents(deps.OrderEvents),
 		Coupons:            deps.Coupons,
 		Payments:           deps.Payments,
 		UserAuths:          deps.GuestAccounts,
@@ -386,6 +401,11 @@ func New(deps Deps) Service {
 	workflowDeps := deps.PaidOrders
 	workflowDeps.Orders = deps.Orders
 	workflowDeps.Profiles = deps.UserProfiles
+	if workflowDeps.GuestIdentities == nil {
+		// The guest account stage checks the mailbox against the same
+		// identity port the guest purchase checks it against.
+		workflowDeps.GuestIdentities = deps.GuestAccounts
+	}
 	return &service{
 		statistics: statistics{orders: deps.Orders},
 		orders: adminorder.NewService(adminorder.Deps{
@@ -649,8 +669,8 @@ func (s *service) OpenWallet(ctx context.Context, opening walletEntity.Wallet) e
 	return s.wallet.OpenWallet(ctx, opening)
 }
 
-func (s *service) AdjustWallet(ctx context.Context, target walletEntity.Wallet) error {
-	return s.wallet.AdjustWallet(ctx, target)
+func (s *service) AdjustWallet(ctx context.Context, adjustment walletEntity.Adjustment) error {
+	return s.wallet.AdjustWallet(ctx, adjustment)
 }
 
 func (s *service) UnsubscribeRefundSettled(ctx context.Context, subscriptionID int64) (bool, error) {
@@ -713,6 +733,17 @@ type Store interface {
 	InBillingTx(ctx context.Context, fn func(repository.BillingStore) error) error
 	Inbox() repository.InboxRepo
 	Wallet() repository.WalletRepo
+}
+
+// portalOrderEvents passes the order-event table to the storefront, which
+// dates a guest order's settlement by its payment event; a facade built
+// without the table (some flows' tests) hands it none, and the storefront
+// then refuses every guest session exchange.
+func portalOrderEvents(events OrderEventStore) portal.OrderEvents {
+	if events == nil {
+		return nil
+	}
+	return events
 }
 
 // storeWallets reads wallets through the store, which may be absent in a

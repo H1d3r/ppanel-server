@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
@@ -101,18 +102,77 @@ func TestPortalPurchaseCanonicalizesGuestIdentity(t *testing.T) {
 	}
 }
 
-// An address that already has an account is refused in any spelling.
+// A mailbox that already has an account is refused under its exact spelling
+// and, as registration refuses it, under the other spellings that reach the
+// same inbox: a paid order would otherwise open a second account for it.
 func TestPortalPurchaseRefusesAnExistingAccount(t *testing.T) {
-	s := newGuestShop(t)
-	owner := s.h.User()
-	if err := s.h.DB.Create(&user.AuthMethods{UserId: owner.Id, AuthType: "email", AuthIdentifier: "alice@example.com"}).Error; err != nil {
-		t.Fatal(err)
+	for name, spelling := range map[string]string{
+		"canonical form": "  Alice@Gmail.COM ",
+		"gmail dots":     "a.li.ce@gmail.com",
+		"plus tag":       "alice+shop@gmail.com",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newGuestShop(t)
+			owner := s.h.User()
+			if err := s.h.DB.Create(&user.AuthMethods{UserId: owner.Id, AuthType: "email", AuthIdentifier: "alice@gmail.com"}).Error; err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.svc.Purchase(context.Background(), s.request("email", spelling))
+			assertCode(t, err, xerr.UserExist)
+			if len(s.guestOrders()) != 0 {
+				t.Fatal("an order was created for an existing account")
+			}
+		})
 	}
-	_, err := s.svc.Purchase(context.Background(), s.request("email", "  Alice@Example.COM "))
-	assertCode(t, err, xerr.UserExist)
-	if len(s.guestOrders()) != 0 {
-		t.Fatal("an order was created for an existing account")
+}
+
+// Guest purchases open an account once paid, so the registration policy
+// applies to them: registration may be stopped, the sign-in method disabled
+// or the email domain outside the allowlist. Without a policy nothing is
+// gated.
+func TestPortalPurchaseAppliesTheRegistrationPolicy(t *testing.T) {
+	open := RegistrationPolicy{EmailEnabled: true, MobileEnabled: true}
+	refused := []struct {
+		name                 string
+		policy               RegistrationPolicy
+		authType, identifier string
+		code                 uint32
+	}{
+		{"registration stopped", RegistrationPolicy{StopRegister: true, EmailEnabled: true}, "email", "guest@example.com", xerr.StopRegister},
+		{"email sign-in disabled", RegistrationPolicy{MobileEnabled: true}, "email", "guest@example.com", xerr.GetAuthenticatorError},
+		{"mobile sign-in disabled", RegistrationPolicy{EmailEnabled: true}, "mobile", "+8615502505555", xerr.GetAuthenticatorError},
+		{"domain outside the allowlist", RegistrationPolicy{EmailEnabled: true, EmailEnableDomainSuffix: true, EmailDomainSuffixList: "example.org"}, "email", "guest@example.com", xerr.InvalidParams},
 	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := tt.policy
+			s := newGuestShop(t, func(d *Deps) { d.Config.Registration = func() RegistrationPolicy { return policy } })
+			_, err := s.svc.Purchase(context.Background(), s.request(tt.authType, tt.identifier))
+			assertCode(t, err, tt.code)
+			if len(s.guestOrders()) != 0 {
+				t.Fatal("a gated guest purchase created an order")
+			}
+		})
+	}
+	t.Run("allowlisted domain", func(t *testing.T) {
+		policy := RegistrationPolicy{EmailEnabled: true, EmailEnableDomainSuffix: true, EmailDomainSuffixList: "example.org, example.com"}
+		s := newGuestShop(t, func(d *Deps) { d.Config.Registration = func() RegistrationPolicy { return policy } })
+		if _, err := s.svc.Purchase(context.Background(), s.request("email", "guest@mail.example.com")); err != nil {
+			t.Fatalf("Purchase: %v", err)
+		}
+	})
+	t.Run("open registration", func(t *testing.T) {
+		s := newGuestShop(t, func(d *Deps) { d.Config.Registration = func() RegistrationPolicy { return open } })
+		if _, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com")); err != nil {
+			t.Fatalf("Purchase: %v", err)
+		}
+	})
+	t.Run("no policy", func(t *testing.T) {
+		s := newGuestShop(t)
+		if _, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com")); err != nil {
+			t.Fatalf("Purchase: %v", err)
+		}
+	})
 }
 
 func TestPortalPurchaseVerifiesTurnstileWhenEnabled(t *testing.T) {
@@ -177,6 +237,25 @@ func TestPortalPurchaseCapsPendingGuestOrders(t *testing.T) {
 	if got := len(s.guestOrders()); got != maxPendingGuestOrders {
 		t.Fatalf("guest orders = %d, want %d", got, maxPendingGuestOrders)
 	}
+}
+
+// A pending order past the unpaid close age is abandoned: a gateway without
+// a query API never confirms it closed, so it stays pending for good and
+// must not lock the identity out. Only younger pending orders count.
+func TestPortalPurchaseCapIgnoresAbandonedPendingOrders(t *testing.T) {
+	s := newGuestShop(t)
+	abandoned := time.Now().Add(-order.UnpaidCloseAge - time.Minute)
+	for i := range maxPendingGuestOrders {
+		s.h.Order(&order.Order{OrderNo: fmt.Sprintf("abandoned-%d", i), Status: order.StatusPending, GuestAuthType: "email", GuestIdentifier: "guest@example.com", CreatedAt: abandoned})
+	}
+	if _, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com")); err != nil {
+		t.Fatalf("Purchase with only abandoned pending orders: %v", err)
+	}
+	for i := range maxPendingGuestOrders - 1 {
+		s.h.Order(&order.Order{OrderNo: fmt.Sprintf("recent-%d", i), Status: order.StatusPending, GuestAuthType: "email", GuestIdentifier: "guest@example.com"})
+	}
+	_, err := s.svc.Purchase(context.Background(), s.request("email", "guest@example.com"))
+	assertCode(t, err, xerr.TooManyRequests)
 }
 
 // A guest order holds a plan unit and returns a capability the buyer pays

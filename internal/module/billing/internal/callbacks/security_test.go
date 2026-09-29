@@ -23,6 +23,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/billingtest"
 	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 	"github.com/perfect-panel/server/internal/module/billing/internal/settle"
+	"github.com/perfect-panel/server/pkg/xerr"
 	stripeSDK "github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/webhook"
 	"gorm.io/gorm"
@@ -519,4 +520,54 @@ func signEPayTestParams(params map[string]string, key string) string {
 	}
 	digest := md5.Sum([]byte(strings.Join(parts, "&") + key))
 	return hex.EncodeToString(digest[:])
+}
+
+// A rejection redelivery cannot fix (a forged signature, an unknown order, an
+// amount that is not the order's) is marked ErrInvalidCallback, so the notify
+// route answers Stripe with 400; a failure the next delivery may get past
+// (the order closed meanwhile, Stripe unreachable) is not, so Stripe retries.
+// The error text the other gateways receive as their failure body is kept.
+func TestStripeNotifyClassifiesRejections(t *testing.T) {
+	registry, _, method := stripeFixture(t, "succeeded")
+	forged := stripeEvent("payment_intent.succeeded", 1990, "usd", "card")
+	forged.Signature = "t=1,v1=forged"
+	unreachable := httptest.NewServer(http.NotFoundHandler())
+	unreachable.Close()
+	offline := gateway.NewRegistry(gateway.WithStripeBackends(stripeSDK.NewBackendsWithConfig(&stripeSDK.BackendConfig{
+		URL: stripeSDK.String(unreachable.URL), HTTPClient: unreachable.Client(), MaxNetworkRetries: stripeSDK.Int64(0),
+		LeveledLogger: &stripeSDK.LeveledLogger{Level: stripeSDK.LevelNull},
+	})))
+	closed := pendingOrder(method, 1990, "USD")
+	closed.Status = order.StatusClosed
+	tests := []struct {
+		name     string
+		registry *gateway.Registry
+		orders   *callbackOrders
+		event    gateway.Notification
+		invalid  bool
+	}{
+		{"forged signature", registry, &callbackOrders{}, forged, true},
+		{"unknown order", registry, &callbackOrders{}, stripeEvent("payment_intent.succeeded", 1990, "usd", "card"), true},
+		{"amount mismatch", registry, &callbackOrders{order: pendingOrder(method, 1990, "USD")}, stripeEvent("payment_intent.succeeded", 999, "usd", "card"), true},
+		{"order closed meanwhile", registry, &callbackOrders{order: closed}, stripeEvent("payment_intent.succeeded", 1990, "usd", "card"), false},
+		{"Stripe unreachable", offline, &callbackOrders{order: pendingOrder(method, 1990, "USD")}, stripeEvent("payment_intent.succeeded", 1990, "usd", "card"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewService(tt.orders, &fakeActivationQueue{}, tt.registry).Notify(paymentContext(method), tt.event)
+			if err == nil {
+				t.Fatal("the callback was accepted")
+			}
+			if errors.Is(err, gateway.ErrInvalidCallback) != tt.invalid {
+				t.Fatalf("Notify = %v; invalid = %t, want %t", err, !tt.invalid, tt.invalid)
+			}
+			if tt.orders.markCount != 0 {
+				t.Fatal("the order was settled")
+			}
+		})
+	}
+	marked := gateway.InvalidCallback(errors.New("verify sign failed"))
+	if marked.Error() != "verify sign failed" || xerr.CodeOf(gateway.InvalidCallback(xerr.Errorf(xerr.OrderNotExist, "order not exist"))) != xerr.OrderNotExist {
+		t.Fatal("marking a callback invalid changed its text or hid its code")
+	}
 }

@@ -4,15 +4,23 @@ import (
 	"context"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // BindOAuth returns the URL that starts binding a req.Method identity to the
-// calling account.
+// calling account. The state it issues completes only this account's binding
+// callback.
 func (s *Service) BindOAuth(ctx context.Context, req *dto.BindOAuthRequest) (*dto.BindOAuthResponse, error) {
 	if err := s.deps.Policy.EnsureMethodEnabled(ctx, req.Method); err != nil {
 		return nil, err
 	}
-	uri, err := s.deps.OAuth.AuthURL(ctx, req.Method, req.Redirect)
+	current, ok := user.FromContext(ctx)
+	if !ok {
+		return nil, xerr.Errorf(xerr.InvalidAccess, "no signed-in user")
+	}
+	uri, err := s.deps.OAuth.AuthURL(ctx, oauthstate.BindScope(current.Id), req.Method, req.Redirect)
 	if err != nil {
 		return nil, err
 	}

@@ -29,7 +29,10 @@ pre-commit:
 commit-msg:
   jobs:
     # The repository has no package.json: npx fetches the pinned commitlint
-    # packages into its cache on first use and reuses them afterwards.
-    # Requires Node.js 22.12 or newer.
+    # into its cache on first use and reuses it afterwards. The rules are
+    # those of @commitlint/config-conventional, inlined in .commitlintrc.json:
+    # commitlint resolves an `extends` from the config's directory and the
+    # global npm modules, never from the npx cache, so the shareable config
+    # cannot be loaded this way. Requires Node.js 22.12 or newer.
     - name: commitlint
-      run: npx --yes -p @commitlint/cli@21.2.3 -p @commitlint/config-conventional@21.2.3 -- commitlint --edit {1}
+      run: npx --yes -p @commitlint/cli@21.2.3 -- commitlint --edit {1}

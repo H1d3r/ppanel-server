@@ -17,7 +17,8 @@ func (s *Service) QueryPurchaseOrder(ctx context.Context, req *dto.QueryPurchase
 	if err != nil {
 		return nil, err
 	}
-	if err := s.authorizePurchaseOrder(ctx, orderInfo, req.CheckoutToken); err != nil {
+	byOwner, err := s.authorizePurchaseOrder(ctx, orderInfo, req.CheckoutToken)
+	if err != nil {
 		return nil, err
 	}
 	var token string
@@ -25,7 +26,14 @@ func (s *Service) QueryPurchaseOrder(ctx context.Context, req *dto.QueryPurchase
 		if orderInfo.UserId == 0 {
 			return nil, xerr.Errorf(xerr.OrderStatusError, "guest account is not ready")
 		}
-		if token, err = s.IssueSession(ctx, orderInfo.UserId); err != nil {
+		// The authenticated owner already holds a session; only the guest
+		// capability is an exchange, bound by the shared rule.
+		if byOwner {
+			token, err = s.IssueSession(ctx, orderInfo.UserId)
+		} else {
+			token, err = s.ExchangeGuestSession(ctx, orderInfo)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -52,15 +60,15 @@ func (s *Service) QueryPurchaseOrder(ctx context.Context, req *dto.QueryPurchase
 
 // authorizePurchaseOrder accepts either the authenticated owner of a completed
 // guest order or the unguessable checkout capability issued when that order was
-// created.  An email/identifier is not authentication and must never be used to
-// mint a session token.
-func (s *Service) authorizePurchaseOrder(ctx context.Context, orderInfo *order.Order, checkoutToken string) error {
+// created, and reports which of the two it accepted.  An email/identifier is
+// not authentication and must never be used to mint a session token.
+func (s *Service) authorizePurchaseOrder(ctx context.Context, orderInfo *order.Order, checkoutToken string) (byOwner bool, err error) {
 	if orderInfo.UserId != 0 {
 		if currentUser, ok := user.FromContext(ctx); ok && currentUser.Id == orderInfo.UserId {
-			return nil
+			return true, nil
 		}
 	}
-	return s.authorizeGuest(ctx, orderInfo, checkoutToken)
+	return false, s.authorizeGuest(ctx, orderInfo, checkoutToken)
 }
 
 // fetchOrderDetails reads the plan and the payment method of the order for

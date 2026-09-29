@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/pkg/logger"
-	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // telegramPoll tracks the long-polling loop across re-initialisations. The
@@ -74,20 +74,29 @@ func telegramUpdateHandler(deps *Dependencies) tgbot.HandlerFunc {
 // it returns without touching the running state, so a transient error during
 // re-initialisation leaves the previous bot working instead of none at all.
 //
-// Reading and decoding the stored configuration fail the load like every
-// other subsystem. Failures talking to the Telegram API are only logged: the
-// panel has to start and reload while Telegram is unreachable.
+// A failed read of the stored configuration fails the load like every other
+// subsystem. A missing telegram method or a stored configuration that does
+// not decode is only logged: the bot is optional, so the panel starts, or
+// keeps its running bot, without it. Failures talking to the Telegram API are
+// only logged as well: the panel has to start and reload while Telegram is
+// unreachable.
 func Telegram(ctx context.Context, deps *Dependencies) error {
 	log := logger.WithContext(ctx)
 	method, err := findAuthMethod(ctx, deps, "telegram")
+	if errors.Is(err, errAuthMethodMissing) {
+		log.Errorw("[Init Telegram Config] no stored telegram auth method, running without a bot",
+			logger.Field("method", "telegram"))
+		return nil
+	}
 	if err != nil {
 		log.Errorf("[Init Telegram Config] Get Telegram Config Error: %s", err.Error())
 		return err
 	}
 	tgConfig := new(auth.TelegramAuthConfig)
 	if err = tgConfig.Unmarshal(method.Config); err != nil {
-		log.Errorf("[Init Telegram Config] Unmarshal Telegram Config Error: %s", err.Error())
-		return wrapf(err, xerr.ERROR, "decode the telegram auth method config")
+		log.Errorw("[Init Telegram Config] stored auth method config is invalid, keeping the current bot",
+			logger.Field("method", "telegram"), logger.Field("error", err.Error()))
+		return nil
 	}
 
 	if tgConfig.BotToken == "" {

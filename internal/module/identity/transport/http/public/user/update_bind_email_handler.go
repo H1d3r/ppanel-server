@@ -13,6 +13,7 @@ import (
 // UpdateBindEmailHandler documents Update Bind Email.
 //
 // @Summary Update Bind Email
+// @Description Binds the email address proven by the code sent to it. Replacing the one the account already has also requires the current password (password), or, for an account without a password, the security code sent to the current email address (current_code), and ends every session of the account.
 // @Tags user
 // @Accept json
 // @Produce json

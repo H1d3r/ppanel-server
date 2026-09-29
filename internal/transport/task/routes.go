@@ -30,6 +30,9 @@ type Dependencies struct {
 	Tasks        repository.TaskRepo
 	System       repository.SystemRepo
 	ExchangeRate *billing.CurrencyRateCache
+	// Bootstrapped fires once the runtime settings the handlers read are
+	// loaded; the worker consumes only after it.
+	Bootstrapped Readiness
 }
 
 // RegisterHandlers binds every task type to its handler.

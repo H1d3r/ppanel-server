@@ -128,7 +128,9 @@ func initConfig(c *config.Config) bool {
 	if dsn == "" {
 		return true
 	}
-	cfg := orm.ParseDSN(dsn)
+	// The session zone of the new database follows the file's AppLocation:
+	// stored times and daily statistics are read in the session zone.
+	cfg := orm.ParseDSNIn(dsn, c.AppLocation)
 	if cfg == nil {
 		return true
 	}
@@ -146,16 +148,21 @@ func initConfig(c *config.Config) bool {
 	c.Redis.Pass = pass
 	c.Redis.DB = db
 
+	// Every boot setting the file already had is written back with the
+	// generated secret and the connections.
 	newConfig := config.File{
-		Host:        c.Host,
-		AppLocation: c.AppLocation,
-		Port:        c.Port,
-		Debug:       c.Debug,
-		JwtAuth:     c.JwtAuth,
-		Logger:      c.Logger,
-		Trace:       c.Trace,
-		Database:    c.DatabaseConfig(),
-		Redis:       c.Redis,
+		Host:          c.Host,
+		AppLocation:   c.AppLocation,
+		Port:          c.Port,
+		Transport:     c.Transport,
+		TLS:           c.TLS,
+		Debug:         c.Debug,
+		JwtAuth:       c.JwtAuth,
+		Logger:        c.Logger,
+		Trace:         c.Trace,
+		Database:      c.DatabaseConfig(),
+		Redis:         c.Redis,
+		EdgeSubscribe: c.EdgeSubscribe,
 	}
 	fileData, err := yaml.Marshal(newConfig)
 	if err != nil {

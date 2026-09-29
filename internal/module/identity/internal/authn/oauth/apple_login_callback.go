@@ -35,8 +35,20 @@ func (s *Service) AppleLoginCallback(ctx context.Context, req *dto.AppleLoginCal
 		return appleLoginRedirect(fallback, req, http.StatusTemporaryRedirect), nil
 	}
 	redirect := appleLoginRedirect(stored, req, http.StatusFound)
-	log.Infow("redirect to apple login page", logger.Field("url", redirect.Location))
+	// The location carries Apple's authorization code and the state, which
+	// together sign the user in; only where the browser is sent is logged.
+	log.Infow("redirect to apple login page", redirectFields(redirect.Location)...)
 	return redirect, nil
+}
+
+// redirectFields names where a redirect sends the browser, its host and
+// path, leaving out the query that carries the credential.
+func redirectFields(location string) []logger.LogField {
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return []logger.LogField{logger.Field("host", "<unparsable>")}
+	}
+	return []logger.LogField{logger.Field("host", parsed.Host), logger.Field("path", parsed.Path)}
 }
 
 func appleLoginRedirect(location string, req *dto.AppleLoginCallbackRequest, statusCode int) *AppleLoginRedirect {

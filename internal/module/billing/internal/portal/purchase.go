@@ -21,6 +21,7 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/random"
 	"github.com/perfect-panel/server/pkg/requestmeta"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"gorm.io/gorm"
 )
@@ -58,6 +59,70 @@ func NormalizeGuestIdentity(authType, value string) (string, string, error) {
 	default:
 		return "", "", xerr.Errorf(xerr.InvalidParams, "unsupported guest auth type")
 	}
+}
+
+// ensureRegistrationOpen applies the registration policy to a guest
+// purchase, which creates an account once paid: registration may be stopped,
+// the account's sign-in method disabled, or the email outside the domain
+// allowlist, each refused as identity's registration refuses it. Without a
+// configured policy no gate applies.
+func (s *Service) ensureRegistrationOpen(authType, guestIdentifier string) error {
+	if s.deps.Config.Registration == nil {
+		return nil
+	}
+	policy := s.deps.Config.Registration()
+	if policy.StopRegister {
+		return xerr.Errorf(xerr.StopRegister, "registration is disabled")
+	}
+	switch authType {
+	case identifier.Email:
+		if !policy.EmailEnabled {
+			return xerr.Errorf(xerr.GetAuthenticatorError, "auth method %q is disabled", authType)
+		}
+		if _, err := identifier.ValidateEmail(guestIdentifier, policy.EmailDomainSuffixList, policy.EmailEnableDomainSuffix); err != nil {
+			return xerr.Wrapf(err, xerr.InvalidParams, "invalid guest email")
+		}
+	case identifier.Mobile:
+		if !policy.MobileEnabled {
+			return xerr.Errorf(xerr.GetAuthenticatorError, "auth method %q is disabled", authType)
+		}
+	}
+	return nil
+}
+
+// ensureNoAccount refuses an identity that already has an account, under
+// its exact spelling or, for an email, under another spelling of the same
+// mailbox: the paid order would create a second account for one inbox.
+func (s *Service) ensureNoAccount(ctx context.Context, authType, guestIdentifier string) error {
+	userAuth, err := s.deps.UserAuths.FindUserAuthMethodByOpenID(ctx, authType, guestIdentifier)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find user auth")
+	}
+	if userAuth != nil && userAuth.UserId != 0 {
+		return xerr.Errorf(xerr.UserExist, "user already exists")
+	}
+	return EnsureNoMailboxAlias(ctx, s.deps.UserAuths, authType, guestIdentifier)
+}
+
+// EnsureNoMailboxAlias runs the mailbox-alias check registration runs: an
+// email that reaches the mailbox of a live account under another spelling
+// is refused as an existing account (UserExist). Only a reader with
+// EmailAliasReader can check; the guest purchase and the guest account
+// stage share this rule.
+func EnsureNoMailboxAlias(ctx context.Context, reader GuestAccountReader, authType, guestIdentifier string) error {
+	if authType != identifier.Email {
+		return nil
+	}
+	aliases, ok := reader.(EmailAliasReader)
+	if !ok {
+		return nil
+	}
+	if _, err := aliases.FindEmailAlias(ctx, guestIdentifier); err == nil {
+		return xerr.Errorf(xerr.UserExist, "the email reaches the mailbox of an existing account")
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find email aliases")
+	}
+	return nil
 }
 
 // verifyGuestHuman applies the registration Turnstile check to a guest
@@ -101,19 +166,20 @@ func (s *Service) Purchase(ctx context.Context, req *dto.PortalPurchaseRequest) 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ensureRegistrationOpen(authType, guestIdentifier); err != nil {
+		return nil, err
+	}
 	if err := s.verifyGuestHuman(ctx, req.TurnstileToken); err != nil {
 		return nil, err
 	}
-	userAuth, err := s.deps.UserAuths.FindUserAuthMethodByOpenID(ctx, authType, guestIdentifier)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user auth")
-	}
-	if userAuth != nil && userAuth.UserId != 0 {
-		return nil, xerr.Errorf(xerr.UserExist, "user already exists")
+	if err := s.ensureNoAccount(ctx, authType, guestIdentifier); err != nil {
+		return nil, err
 	}
 	// The cap is best effort under concurrent requests for one identity;
-	// the Turnstile check is the rate control.
-	pending, err := s.deps.Orders.CountPendingGuestOrders(ctx, authType, guestIdentifier)
+	// the Turnstile check is the rate control. An order past the unpaid
+	// close age is abandoned: a gateway without a query API can never
+	// confirm it closed, and it must not lock the identity out for good.
+	pending, err := s.deps.Orders.CountPendingGuestOrders(ctx, authType, guestIdentifier, timeutil.Now().Add(-order.UnpaidCloseAge))
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "count pending guest orders")
 	}

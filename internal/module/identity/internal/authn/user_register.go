@@ -93,7 +93,11 @@ func (s *Service) signInRegistered(ctx context.Context, userID int64, method, de
 			resp = nil
 		}
 	}()
-	return s.signIn(ctx, userID, deviceIdentifier)
+	epoch, err := account.ReadEpoch(ctx, s.deps.Redis, userID)
+	if err != nil {
+		return nil, err
+	}
+	return s.signIn(ctx, userID, epoch, deviceIdentifier)
 }
 
 // resolveReferer returns the account whose invite code a registration

@@ -86,30 +86,39 @@ func TestPasswordNeedsRehashForNonCurrentArgon2idPHC(t *testing.T) {
 }
 
 // Concurrent hashing never holds more argon2id memory than the slots allow.
+// The hashes go through the production path; only the derivation itself is
+// replaced, by a counter that records how many run at once.
 func TestArgon2DerivationsShareBoundedSlots(t *testing.T) {
 	var running, peak atomic.Int32
+	previous := argon2Derive
+	argon2Derive = func(_, _ []byte, _, _ uint32, _ uint8, keyLen uint32) []byte {
+		now := running.Add(1)
+		defer running.Add(-1)
+		for {
+			old := peak.Load()
+			if now <= old || peak.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+		return make([]byte, keyLen)
+	}
+	t.Cleanup(func() { argon2Derive = previous })
+
 	var wg sync.WaitGroup
 	for i := 0; i < 4*cap(argon2Slots); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			argon2Slots <- struct{}{}
-			now := running.Add(1)
-			for {
-				old := peak.Load()
-				if now <= old || peak.CompareAndSwap(old, now) {
-					break
-				}
-			}
-			time.Sleep(time.Millisecond)
-			running.Add(-1)
-			<-argon2Slots
+			_ = EncodePassWord("slot-test")
 		}()
 	}
 	wg.Wait()
-	if int(peak.Load()) > cap(argon2Slots) {
-		t.Fatalf("peak concurrent derivations = %d, want at most %d", peak.Load(), cap(argon2Slots))
+	if peak.Load() == 0 || int(peak.Load()) > cap(argon2Slots) {
+		t.Fatalf("peak concurrent derivations = %d, want between 1 and %d", peak.Load(), cap(argon2Slots))
 	}
+
+	argon2Derive = previous
 	if hash := EncodePassWord("slot-test"); !VerifyPassWord("slot-test", hash) {
 		t.Fatal("hashing through the slots broke verification")
 	}

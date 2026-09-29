@@ -231,18 +231,38 @@ type calendar struct {
 }
 
 func today() calendar {
-	now := timeutil.Now()
+	return calendarAt(timeutil.Now())
+}
+
+// calendarAt is the calendar of the day of now. Yesterday is one calendar
+// day back (AddDate), as the dashboard computes it: on the day after clocks
+// went forward, 24 hours back lands two days back.
+func calendarAt(now time.Time) calendar {
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	c := calendar{
 		now:       now,
 		today:     start.Format(time.DateOnly),
-		yesterday: start.Add(-24 * time.Hour).Format(time.DateOnly),
+		yesterday: start.AddDate(0, 0, -1).Format(time.DateOnly),
 		lastMonth: time.Date(now.Year(), now.Month(), 0, 0, 0, 0, 0, now.Location()).Format(time.DateOnly),
 	}
 	for day := 1; day < now.Day(); day++ {
 		c.earlierDay = append(c.earlierDay, time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, now.Location()).Format(time.DateOnly))
 	}
 	return c
+}
+
+// On the day after clocks went forward, yesterday is still the calendar day
+// before: the archive must be seeded on the date the dashboard reads.
+func TestCalendarYesterdayAcrossDaylightSaving(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Clocks went forward on 2026-03-29.
+	cal := calendarAt(time.Date(2026, time.March, 30, 12, 0, 0, 0, berlin))
+	if cal.today != "2026-03-30" || cal.yesterday != "2026-03-29" {
+		t.Fatalf("today %s, yesterday %s; want 2026-03-30 and 2026-03-29", cal.today, cal.yesterday)
+	}
 }
 
 func TestServerTotalDataCombinesLiveTrafficWithArchivedRankings(t *testing.T) {

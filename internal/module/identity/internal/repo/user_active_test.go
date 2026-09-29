@@ -3,6 +3,8 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -13,12 +15,25 @@ import (
 	"gorm.io/gorm"
 )
 
+// sqliteDatabases numbers the in-memory databases the tests open, so two
+// tests, or two runs of one, never share one.
+var sqliteDatabases atomic.Int64
+
 func newSQLiteUserRepo(t *testing.T, name string) (*gorm.DB, *UserRepo) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared"), &gorm.Config{})
+	// A shared-cache in-memory database is found again by its name for as
+	// long as a connection to it stays open, so each call opens a database
+	// of its own and closes it when the test ends.
+	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared", name, sqliteDatabases.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&user.User{}, &user.AuthMethods{}); err != nil {
 		t.Fatal(err)
 	}

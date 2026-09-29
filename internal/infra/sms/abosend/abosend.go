@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/perfect-panel/server/internal/infra/integration"
 	"github.com/perfect-panel/server/internal/infra/protocolkey"
 	"github.com/perfect-panel/server/pkg/random"
 )
@@ -84,12 +85,12 @@ func (c *Client) SendText(ctx context.Context, area, mobile, text string) error 
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v2/api/sendSMS", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return integration.RequestError("abosend", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return integration.RequestError("abosend", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

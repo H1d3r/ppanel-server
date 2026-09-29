@@ -71,10 +71,11 @@ func (s *Service) resetPassword(ctx context.Context, reset passwordReset) (resp 
 		return nil, xerr.Wrapf(err, xerr.DatabaseUpdateError, "update password of user %d", userInfo.Id)
 	}
 	// A reset usually follows a compromise: end every earlier session before
-	// issuing the new one.
-	if err := usersession.Revoke(ctx, s.deps.Redis, userInfo.Id); err != nil {
+	// issuing the new one, which is pinned to the epoch the revocation set.
+	epoch, err := usersession.Rotate(ctx, s.deps.Redis, userInfo.Id)
+	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "revoke sessions of user %d", userInfo.Id)
 	}
-	clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
-	return s.signIn(ctx, userInfo.Id, reset.device)
+	account.ClearPasswordAttempts(ctx, s.deps.Redis, userInfo.Id)
+	return s.signIn(ctx, userInfo.Id, epoch, reset.device)
 }

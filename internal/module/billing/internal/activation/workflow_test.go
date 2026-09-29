@@ -9,6 +9,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/identity"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -97,5 +99,39 @@ func TestDurableGuestSnapshotDoesNotRequireRedis(t *testing.T) {
 	}
 	if orders.boundUser != 11 || guests.command.PasswordHash != "durable-hash" || guests.command.LegacyPassword != "" {
 		t.Fatal("durable checkout data was not used")
+	}
+}
+
+// aliasIdentities is the identity port of the mailbox-alias check, answering
+// with one alias binding or none.
+type aliasIdentities struct{ alias *user.AuthMethods }
+
+func (aliasIdentities) FindUserAuthMethodByOpenID(context.Context, string, string) (*user.AuthMethods, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (a aliasIdentities) FindEmailAlias(context.Context, string) (*user.AuthMethods, error) {
+	if a.alias == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return a.alias, nil
+}
+
+// A mailbox that gained an account under another spelling since the purchase
+// must not get a second account; the stage fails for an operator instead.
+func TestGuestAccountStageRefusesAMailboxAlias(t *testing.T) {
+	ctx := context.Background()
+	guestOrder := &order.Order{OrderNo: "aliased", GuestAuthType: "email", GuestIdentifier: "gu.est@gmail.com", GuestPasswordHash: "durable-hash"}
+	guests := &workflowGuests{}
+	taken := aliasIdentities{alias: &user.AuthMethods{UserId: 5, AuthType: "email", AuthIdentifier: "guest@gmail.com"}}
+	workflow := NewWorkflow(WorkflowDeps{Orders: &workflowOrders{}, GuestAccounts: guests, GuestIdentities: taken}, nil)
+	if err := workflow.ensureGuestAccount(ctx, guestOrder); xerr.CodeOf(err) != xerr.UserExist || guests.creates != 0 {
+		t.Fatalf("ensureGuestAccount = %v with %d accounts created, want UserExist and none", err, guests.creates)
+	}
+
+	orders := &workflowOrders{}
+	workflow = NewWorkflow(WorkflowDeps{Orders: orders, GuestAccounts: guests, GuestIdentities: aliasIdentities{}}, nil)
+	if err := workflow.ensureGuestAccount(ctx, guestOrder); err != nil || guests.creates != 1 || orders.boundUser != 11 {
+		t.Fatalf("ensureGuestAccount without an alias = %v, %d accounts, bound %d; want the account created and bound", err, guests.creates, orders.boundUser)
 	}
 }

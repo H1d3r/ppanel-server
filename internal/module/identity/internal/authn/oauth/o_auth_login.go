@@ -4,6 +4,7 @@ import (
 	"context"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
 )
 
 // OAuthLogin returns the URL that starts a sign-in through req.Method.
@@ -11,7 +12,7 @@ func (s *Service) OAuthLogin(ctx context.Context, req *dto.OAuthLoginRequest) (*
 	if err := s.deps.Policy.EnsureMethodEnabled(ctx, req.Method); err != nil {
 		return nil, err
 	}
-	uri, err := s.deps.Flow.AuthURL(ctx, req.Method, req.Redirect)
+	uri, err := s.deps.Flow.AuthURL(ctx, oauthstate.LoginScope(), req.Method, req.Redirect)
 	if err != nil {
 		return nil, err
 	}

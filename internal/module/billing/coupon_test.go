@@ -76,3 +76,36 @@ func TestQueryOrderDetailEnforcesOwnershipAndHidesCommission(t *testing.T) {
 		t.Fatalf("detail = %+v, want the order without its commission", got)
 	}
 }
+
+// A coupon whose plan list column is damaged is listed without plans, so the
+// administrator can find and repair it, instead of failing the whole page;
+// checkout keeps refusing it meanwhile.
+func TestGetCouponListSurvivesADamagedPlanList(t *testing.T) {
+	f := newFacade(t)
+	f.h.Coupon("HEALTHY", func(c *coupon.Coupon) { c.Subscribe = "3" })
+	damaged := f.h.Coupon("DAMAGED", func(c *coupon.Coupon) { c.Subscribe = "1,2," })
+
+	resp, err := f.svc.GetCouponList(adminContext, &dto.GetCouponListRequest{Page: 1, Size: 10})
+	if err != nil {
+		t.Fatalf("GetCouponList: %v", err)
+	}
+	if resp.Total != 2 || len(resp.List) != 2 {
+		t.Fatalf("coupon list = %+v, want both coupons", resp)
+	}
+	byCode := map[string]dto.Coupon{}
+	for _, c := range resp.List {
+		byCode[c.Code] = c
+	}
+	if got := byCode["HEALTHY"].Subscribe; len(got) != 1 || got[0] != 3 {
+		t.Fatalf("healthy coupon plans = %v, want [3]", got)
+	}
+	if got := byCode["DAMAGED"]; got.Id != damaged.Id || len(got.Subscribe) != 0 {
+		t.Fatalf("damaged coupon = %+v, want it listed without plans", got)
+	}
+
+	buyer := f.h.User()
+	plan := f.h.Plan(1000)
+	method := f.h.Payment("EPay", epayConfig)
+	_, err = f.svc.Purchase(billingtest.UserContext(buyer), &dto.PurchaseOrderRequest{SubscribeId: plan.Id, Quantity: 1, Payment: method.Id, Coupon: "DAMAGED"})
+	assertCode(t, err, xerr.CouponNotApplicable)
+}

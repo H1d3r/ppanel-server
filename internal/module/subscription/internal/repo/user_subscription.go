@@ -634,15 +634,16 @@ func (m *UserSubscriptionRepo) FindExpiredSubscribes(ctx context.Context, now ti
 }
 
 // FindExpiringSubscribes returns the active subscriptions whose expiry falls
-// inside the window, so the owner can be reminded before service stops. The
-// epoch sentinel marks a no-limit subscription and never expires.
+// inside the window, so the owner can be reminded before service stops. A
+// no-limit subscription never expires (usersub.ExpiringCondition).
 func (m *UserSubscriptionRepo) FindExpiringSubscribes(ctx context.Context, from, to time.Time) ([]*usersub.Subscribe, error) {
 	var list []*usersub.Subscribe
+	expiring, args := usersub.ExpiringCondition(from, to)
 	err := m.QueryNoCacheCtx(ctx, &list, func(conn *gorm.DB, v any) error {
 		return activeLifecycleSubscribes(conn).
 			// Provider renewals need provider-specific messaging and prices.
 			Where("entitlement_source = ''").
-			Where("expire_time >= ? AND expire_time < ? AND expire_time != ?", from, to, usersub.NoLimitExpiry).
+			Where(expiring, args...).
 			Find(&list).Error
 	})
 	return list, err

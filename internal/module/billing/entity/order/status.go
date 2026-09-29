@@ -10,6 +10,13 @@ const PaymentWindowMinutes = 15
 // PaymentWindow is PaymentWindowMinutes as a duration.
 const PaymentWindow = PaymentWindowMinutes * time.Minute
 
+// UnpaidCloseAge is the age from which a pending order is treated as
+// abandoned: the expiry close releases an order a gateway that cannot cancel
+// an issued payment page lists as unpaid, and a guest's pending order no
+// longer counts toward the pending-order cap. It doubles the payment window
+// so a payer who opened the gateway page near expiry still finishes.
+const UnpaidCloseAge = 2 * PaymentWindow
+
 // Order types, the values of the Type column.
 const (
 	TypeSubscribe    uint8 = 1

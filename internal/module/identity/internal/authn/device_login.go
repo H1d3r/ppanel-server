@@ -72,7 +72,7 @@ func (s *Service) DeviceLogin(ctx context.Context, req *dto.DeviceLoginRequest) 
 	if !touched {
 		return nil, xerr.Errorf(xerr.InvalidAccess, "device binding changed")
 	}
-	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().sessions(), userInfo.Id, identifier.Device, deviceInfo)
+	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().sessions(), account.Login{UserID: userInfo.Id, LoginType: identifier.Device, Device: deviceInfo})
 	if err != nil {
 		return nil, err
 	}

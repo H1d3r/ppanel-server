@@ -26,8 +26,9 @@
 
 ### 本地检查
 
-Makefile 执行与 CI 相同的检查。所需的 Go 工具（goimports、golangci-lint、govulncheck）
-在首次使用时按 Makefile 固定的版本安装到 `bin/tools`（已被 git 忽略），不会做任何全局安装。
+Makefile 执行与 CI 相同的检查。所需的 Go 工具（goimports、golangci-lint）在首次使用时按 Makefile
+固定的版本安装到 `bin/tools`（已被 git 忽略）；govulncheck 通过 `go run` 以固定版本运行，只存在于 Go
+模块缓存中。不会做任何全局安装。
 
 | 命令 | 作用 |
 |---|---|

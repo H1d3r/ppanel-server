@@ -38,10 +38,12 @@ func (s *Service) ResetTraffic(ctx context.Context, req *dto.ResetTrafficOrderRe
 	if usersub.OnHold(userSubscribe.Status) {
 		return nil, xerr.Errorf(xerr.SubscribeNotAvailable, "refunded or stopped subscription cannot reset traffic")
 	}
-	// NoLimit subscriptions use the Unix epoch as their expiry sentinel. A paid
-	// traffic reset must not be created for a subscription whose finite term has
-	// already elapsed, because it cannot restore access or extend that term.
-	if now := timeutil.Now(); userSubscribe.ExpireTime.Unix() > 0 && userSubscribe.ExpireTime.Before(now) {
+	// A paid traffic reset must not be created for a subscription whose
+	// finite term has already elapsed, because it cannot restore access or
+	// extend that term. Whether a subscription has a term at all is the
+	// subscription entity's rule (usersub.NoExpiry): its no-limit marker may
+	// read back shifted by the zone of the process that wrote it.
+	if now := timeutil.Now(); !usersub.NoExpiry(userSubscribe.ExpireTime) && !userSubscribe.ExpireTime.After(now) {
 		return nil, xerr.Errorf(xerr.SubscribeNotAvailable, "subscription expired")
 	}
 	if userSubscribe.Subscribe == nil {

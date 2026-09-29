@@ -7,8 +7,13 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/perfect-panel/server/internal/app/bootstrap"
+	"github.com/perfect-panel/server/internal/app/lifecycle"
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/infra/geoip"
+	httpserver "github.com/perfect-panel/server/internal/transport/http/server"
+	"github.com/perfect-panel/server/pkg/logger/logtest"
+	"github.com/perfect-panel/server/pkg/orm"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -44,13 +49,14 @@ func TestAssembledDependenciesAreComplete(t *testing.T) {
 	})
 
 	srv := assemble(c, db, rds, &geoip.IPLocation{}, queue, inspector)
-	service := srv.serviceDependencies()
+	bootstrapped := lifecycle.NewReadiness()
+	service := srv.serviceDependencies(bootstrapped)
 	for name, deps := range map[string]any{
 		"application": *srv,
 		"service":     service,
 		"bootstrap":   *service.Bootstrap,
 		"http":        service.HTTP(),
-		"tasks":       srv.taskDependencies(),
+		"tasks":       srv.taskDependencies(bootstrapped),
 	} {
 		for _, field := range unwired(reflect.ValueOf(deps), name) {
 			if _, optional := optionalDependencies[field]; !optional {
@@ -84,4 +90,41 @@ func unwired(v reflect.Value, path string) []string {
 // dependencies: its zero fields are settings, not missing wiring.
 func isConfigValue(t reflect.Type) bool {
 	return t.PkgPath() == "github.com/perfect-panel/server/internal/config" || strings.HasSuffix(fmt.Sprint(t), "Snapshot")
+}
+
+// The task worker waits for the HTTP service's bootstrap. A bootstrap that
+// fails is reported to it before the HTTP service gives up, so nothing waits
+// on a process that is going down.
+func TestHTTPServiceReportsAFailedBootstrap(t *testing.T) {
+	logtest.Discard(t)
+	bootstrapped := lifecycle.NewReadiness()
+	var c config.Config
+	// A driver the migration does not support fails the bootstrap before
+	// anything connects.
+	c.SetDatabaseConfig(orm.Config{Driver: "sqlite", Dbname: "ppanel"})
+	current := func() config.Config { return c }
+	svc := NewService(Dependencies{
+		Config:       current,
+		Bootstrap:    &bootstrap.Dependencies{Config: current},
+		HTTP:         func() httpserver.Dependencies { return httpserver.Dependencies{} },
+		Bootstrapped: bootstrapped,
+	})
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("Start went on although the bootstrap failed")
+			}
+		}()
+		svc.Start()
+	}()
+
+	select {
+	case <-bootstrapped.Done():
+	default:
+		t.Fatal("the bootstrap's failure was not signalled")
+	}
+	if bootstrapped.Err() == nil {
+		t.Fatal("the signal reports success after a failed bootstrap")
+	}
 }

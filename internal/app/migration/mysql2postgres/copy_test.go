@@ -3,12 +3,15 @@ package mysql2postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -227,5 +230,59 @@ func TestCopyTableIntoPostgres(t *testing.T) {
 	}
 	if got != len(notes) {
 		t.Fatalf("copied %d rows, want %d", got, len(notes))
+	}
+}
+
+// A row PostgreSQL rejects stops COPY while the writer is still streaming
+// the rows behind it; the writer then only sees the closed pipe. The
+// operator needs PostgreSQL's error, which names the constraint, not the
+// pipe's.
+func TestCopyTableReportsTheRejectedRow(t *testing.T) {
+	postgresDSN := os.Getenv("PPANEL_TEST_POSTGRES_DSN")
+	if postgresDSN == "" {
+		t.Skip("set PPANEL_TEST_POSTGRES_DSN to run the PostgreSQL copy test")
+	}
+	ctx := context.Background()
+	table := fmt.Sprintf("m2p_reject_%d", time.Now().UnixNano())
+
+	source, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDatabase("sqlite", source)
+	source.SetMaxOpenConns(1)
+	postgresDB, err := sql.Open("pgx", postgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDatabase("postgres", postgresDB)
+
+	// Enough rows behind the rejected fifth one that the writer is still
+	// streaming when PostgreSQL reports it.
+	const rows = 200000
+	if _, err := source.ExecContext(ctx, "CREATE TABLE "+quoteMySQLIdent(table)+" (id INTEGER, note TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.ExecContext(ctx, "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?) "+
+		"INSERT INTO "+quoteMySQLIdent(table)+" SELECT n, CASE WHEN n = 5 THEN NULL ELSE 'note ' || n END FROM seq", rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := postgresDB.ExecContext(ctx, "CREATE TABLE public."+quotePGIdent(table)+" (id bigint, note text NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = postgresDB.ExecContext(ctx, "DROP TABLE IF EXISTS public."+quotePGIdent(table)) })
+
+	plan := tablePlan{Name: table, RowCount: rows, OrderColumns: []string{"id"}, Columns: []postgresColumn{
+		{Name: "id", DataType: "bigint", UDTName: "int8"},
+		{Name: "note", DataType: "text", UDTName: "text"},
+	}}
+	err = copyTable(ctx, source, postgresDB, "public", plan, rows)
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23502" {
+		t.Fatalf("copyTable() = %v, want PostgreSQL's not-null violation (SQLSTATE 23502)", err)
+	}
+	if errors.Is(err, errCopyStopped) || !strings.Contains(err.Error(), "copy rows into "+table) {
+		t.Fatalf("copyTable() = %v, want the table's copy error, not the pipe's", err)
 	}
 }

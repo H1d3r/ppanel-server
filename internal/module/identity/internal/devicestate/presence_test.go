@@ -190,9 +190,11 @@ func (f *presenceFixture) onlineRecord(t *testing.T, at time.Time, streak int64)
 }
 
 // A connection continues the streak of the previous day's connections; one
-// after a day offline, or the day's second one, does not lengthen it.
+// after a day offline, or the day's second one, does not lengthen it. The
+// connection closes at a pinned instant, so the day it is recorded on and
+// the seeded history agree whatever the wall clock says.
 func TestMarkOfflineContinuesTheStreakOfThePreviousDay(t *testing.T) {
-	now := timeutil.Now()
+	now := time.Date(2026, time.March, 14, 15, 9, 26, 0, timeutil.Location())
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	for _, tc := range []struct {
 		name string
@@ -200,6 +202,10 @@ func TestMarkOfflineContinuesTheStreakOfThePreviousDay(t *testing.T) {
 		want int64
 	}{
 		{"yesterday online", func(f *presenceFixture, t *testing.T) { f.onlineRecord(t, today.Add(-12*time.Hour), 3) }, 4},
+		{"the day's second connection", func(f *presenceFixture, t *testing.T) {
+			f.onlineRecord(t, today.Add(-12*time.Hour), 3)
+			f.onlineRecord(t, today.Add(2*time.Hour), 4)
+		}, 4},
 		{"a day offline", func(f *presenceFixture, t *testing.T) { f.onlineRecord(t, today.Add(-36*time.Hour), 3) }, 1},
 		{"no history", func(*presenceFixture, *testing.T) {}, 1},
 	} {
@@ -207,8 +213,8 @@ func TestMarkOfflineContinuesTheStreakOfThePreviousDay(t *testing.T) {
 			f := newPresenceFixture(t)
 			tc.seed(f, t)
 			d := f.device(t, "phone", true, true)
-			if err := MarkOffline(context.Background(), f.Store.UserDevice(), f.owner.Id, d.Identifier, now.Add(-time.Minute)); err != nil {
-				t.Fatalf("MarkOffline() = %v", err)
+			if err := markOffline(context.Background(), f.Store.UserDevice(), f.owner.Id, d.Identifier, now.Add(-time.Minute), now); err != nil {
+				t.Fatalf("markOffline() = %v", err)
 			}
 			records := f.records(t)
 			if got := records[len(records)-1].DurationDays; got != tc.want {

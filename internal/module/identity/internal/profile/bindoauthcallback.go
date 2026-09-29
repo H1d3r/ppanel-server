@@ -6,6 +6,7 @@ import (
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"gorm.io/gorm"
 )
@@ -27,7 +28,7 @@ func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallb
 	if !ok {
 		return xerr.Errorf(xerr.InvalidParams, "OAuth callback must be an object")
 	}
-	identity, err := s.deps.OAuth.Identify(ctx, req.Method, fields)
+	identity, err := s.deps.OAuth.Identify(ctx, oauthstate.BindScope(current.Id), req.Method, fields)
 	if err != nil {
 		return err
 	}
@@ -35,7 +36,17 @@ func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallb
 	holder, err := s.deps.UserAuth.FindUserAuthMethodByOpenID(ctx, req.Method, identity.Subject)
 	switch {
 	case err == nil && holder.UserId == current.Id:
-		return nil
+		// The caller just proved the identity with the provider, which is
+		// what verified means; an administrator's binding from before that
+		// flag was set signs in again once its owner proves it here.
+		if holder.Verified {
+			return nil
+		}
+		holder.Verified = true
+		if err := s.deps.UserAuth.UpdateUserAuthMethods(ctx, holder); err != nil {
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "verify %s identity", req.Method)
+		}
+		return s.clearCache(ctx, current)
 	case err == nil:
 		return xerr.Errorf(xerr.UserExist, "the %s identity belongs to another account", req.Method)
 	case !errors.Is(err, gorm.ErrRecordNotFound):
@@ -55,6 +66,11 @@ func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallb
 	}); err != nil {
 		return xerr.Wrapf(err, xerr.DatabaseInsertError, "bind %s identity", req.Method)
 	}
+	return s.clearCache(ctx, current)
+}
+
+// clearCache drops the account's cached view, which lists its identities.
+func (s *Service) clearCache(ctx context.Context, current *user.User) error {
 	if err := s.deps.UserCache.ClearUserCache(ctx, current); err != nil {
 		return xerr.Wrapf(err, xerr.ERROR, "clear user cache")
 	}

@@ -2,7 +2,6 @@ package usersub
 
 import (
 	"context"
-	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
@@ -30,8 +29,7 @@ func (s *Service) UpdateUserSubscribe(ctx context.Context, req *dto.UpdateUserSu
 	}
 	edited := *current
 	edited.SubscribeId = req.SubscribeId
-	// ExpiredAt == 0 is the no-limit sentinel, not an expired epoch time.
-	edited.ExpireTime = time.UnixMilli(req.ExpiredAt)
+	edited.ExpireTime = usersub.ExpiryFromMilli(req.ExpiredAt)
 	edited.Traffic, edited.Download, edited.Upload = req.Traffic, req.Download, req.Upload
 	edited.Status = usersub.SubscribeStatusActive
 	if edited.ExpiredAt(timeutil.Now()) {

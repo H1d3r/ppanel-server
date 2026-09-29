@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -23,9 +25,19 @@ const (
 	// statRefreshTimeout bounds one refresh of the statistics, which runs
 	// on behalf of every caller waiting for it rather than of one request.
 	statRefreshTimeout = 30 * time.Second
+	// statResolveTimeout bounds the resolution of all node hostnames
+	// together, well inside statRefreshTimeout: with DNS degraded, the
+	// refresh gives up on the hostnames still unresolved at the deadline and
+	// counts the countries of the addresses it has, so that the statistics
+	// still arrive and get cached instead of every call waiting again.
+	statResolveTimeout = 10 * time.Second
 	// statLookupTimeout bounds the DNS lookup of one node hostname.
 	statLookupTimeout = 5 * time.Second
 	statLookupWorkers = 8
+	// statCacheWriteTimeout bounds caching the refreshed statistics, which
+	// runs on a context of its own: a refresh that used up its budget
+	// building the statistics still caches them.
+	statCacheWriteTimeout = 2 * time.Second
 )
 
 // GetStat returns the public site statistics: the enabled users (rounded
@@ -37,9 +49,19 @@ func (s *Service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
 	if cached := s.cachedStat(ctx); cached != nil {
 		return cached, nil
 	}
-	refresh := s.statRefresh.DoChan(config.CommonStatCacheKey, func() (any, error) {
-		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statRefreshTimeout)
+	refresh := s.statRefresh.DoChan(config.CommonStatCacheKey, func() (stat any, err error) {
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.refreshTimeout)
 		defer cancel()
+		// With callers waiting on its channel, singleflight re-raises a panic
+		// of this function on a goroutine of its own, out of reach of the
+		// HTTP recovery, and the process dies; the refresh fails instead.
+		defer func() {
+			if r := recover(); r != nil {
+				logger.WithContext(refreshCtx).Errorw("[GetStat] refresh panicked",
+					logger.Field("panic", fmt.Sprint(r)), logger.Field("stack", string(debug.Stack())))
+				stat, err = nil, xerr.Errorf(xerr.ERROR, "refresh the site statistics: %v", r)
+			}
+		}()
 		// A refresh that finished while this one was being scheduled has
 		// already done the work.
 		if cached := s.cachedStat(refreshCtx); cached != nil {
@@ -105,7 +127,11 @@ func (s *Service) refreshStat(ctx context.Context) (*dto.GetStatResponse, error)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.ERROR, "encode the site statistics: %v", err)
 	}
-	if err := s.deps.Redis.Set(ctx, config.CommonStatCacheKey, string(data), statCacheTTL).Err(); err != nil {
+	// The refresh may have used up its budget building the statistics; not
+	// caching them would make every following call build them again.
+	cacheCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statCacheWriteTimeout)
+	defer cancel()
+	if err := s.deps.Redis.Set(cacheCtx, config.CommonStatCacheKey, string(data), statCacheTTL).Err(); err != nil {
 		logger.WithContext(ctx).Errorw("[GetStat] cache the statistics", logger.Field("error", err.Error()))
 	}
 	return stat, nil
@@ -136,8 +162,9 @@ func distinctProtocols(protocols []string) []string {
 }
 
 // countCountries counts the countries the local GeoIP database places the
-// node addresses in. An address that does not resolve, or that the database
-// has no country for, is left out.
+// node addresses in. An address that does not resolve within the resolution
+// budget, or that the database has no country for, is left out: the count
+// is a lower bound.
 func (s *Service) countCountries(ctx context.Context, addresses []string) int {
 	if len(addresses) == 0 {
 		return 0
@@ -170,12 +197,15 @@ func (s *Service) countCountries(ctx context.Context, addresses []string) int {
 }
 
 // resolve returns the IPs of the node addresses, looking hostnames up with
-// bounded concurrency; the addresses that do not resolve are left out.
+// bounded concurrency and within the resolution budget altogether; the
+// addresses that have not resolved by then are left out.
 func (s *Service) resolve(ctx context.Context, addresses []string) []net.IP {
 	resolver := s.deps.Resolver
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.resolveTimeout)
+	defer cancel()
 	ips := make([]net.IP, len(addresses))
 	slots := make(chan struct{}, statLookupWorkers)
 	var (
@@ -207,7 +237,8 @@ func (s *Service) resolve(ctx context.Context, addresses []string) []net.IP {
 	}
 	wg.Wait()
 	if n := failed.Load(); n > 0 {
-		logger.WithContext(ctx).Errorw("[GetStat] resolve node hostnames", logger.Field("failed", n))
+		logger.WithContext(ctx).Errorw("[GetStat] resolve node hostnames",
+			logger.Field("failed", n), logger.Field("budget_exhausted", ctx.Err() != nil))
 	}
 	return slices.DeleteFunc(ips, func(ip net.IP) bool { return ip == nil })
 }

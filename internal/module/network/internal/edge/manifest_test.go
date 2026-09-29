@@ -122,7 +122,7 @@ func TestSubscriptionState(t *testing.T) {
 		want string
 	}{
 		{"active", usersub.Subscribe{Status: usersub.SubscribeStatusActive, ExpireTime: future}, "active"},
-		{"no time limit", usersub.Subscribe{Status: usersub.SubscribeStatusActive, ExpireTime: usersub.NoLimitExpiry}, "active"},
+		{"no time limit", usersub.Subscribe{Status: usersub.SubscribeStatusActive, ExpireTime: usersub.NoLimitExpiry()}, "active"},
 		{"legacy pending is served like the node list serves it", usersub.Subscribe{Status: usersub.SubscribeStatusPending, ExpireTime: future}, "active"},
 		{"traffic used up", usersub.Subscribe{Status: usersub.SubscribeStatusActive, Traffic: 100, Upload: 40, Download: 60}, "traffic_exhausted"},
 		{"finished is exhausted, not expired", usersub.Subscribe{Status: usersub.SubscribeStatusFinished, ExpireTime: future}, "traffic_exhausted"},

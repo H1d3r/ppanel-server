@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/test/mock"
 	"github.com/cloudwego/hertz/pkg/route/param"
 	"github.com/perfect-panel/server/internal/module/billing"
+	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
@@ -140,5 +142,39 @@ func TestV2OrderEventsHandlerReplaysFromTheStartOnAnUnusableLastEventID(t *testi
 		if svc.got.AfterID != want {
 			t.Errorf("Last-Event-ID %q: replay after %d, want %d", lastEventID, svc.got.AfterID, want)
 		}
+	}
+}
+
+// sessionService answers the session exchange with a token or a refusal.
+type sessionService struct {
+	billing.Service
+	err error
+}
+
+func (s sessionService) V2Session(context.Context, string, string) (*dto.V2OrderSessionResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &dto.V2OrderSessionResponse{AccessToken: "session-token"}, nil
+}
+
+// An answer carrying a session token must not be cached anywhere.
+func TestV2OrderSessionHandlerForbidsCachingTheToken(t *testing.T) {
+	serve := func(svc billing.Service) *app.RequestContext {
+		engine := server.Default()
+		ctx := engine.NewContext()
+		ctx.Request.Header.SetMethod(http.MethodPost)
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		ctx.Request.SetRequestURI("/v2/public/orders/order-1/session")
+		ctx.Request.SetBodyString(`{"checkout_token":"capability"}`)
+		ctx.Params = append(ctx.Params, param.Param{Key: "orderNo", Value: "order-1"})
+		V2OrderSessionHandler(svc)(context.Background(), ctx)
+		return ctx
+	}
+	if ctx := serve(sessionService{}); ctx.Response.Header.Get("Cache-Control") != "no-store" || !strings.Contains(string(ctx.Response.Body()), "session-token") {
+		t.Fatalf("session answer: Cache-Control %q, body %s", ctx.Response.Header.Get("Cache-Control"), ctx.Response.Body())
+	}
+	if ctx := serve(sessionService{err: xerr.NewErrCode(xerr.InvalidAccess)}); ctx.Response.Header.Get("Cache-Control") != "" {
+		t.Fatalf("refusal: Cache-Control %q, want none", ctx.Response.Header.Get("Cache-Control"))
 	}
 }

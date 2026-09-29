@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/perfect-panel/server/internal/infra/integration"
 	"github.com/perfect-panel/server/internal/infra/protocolkey"
 )
 
@@ -54,13 +55,15 @@ func (c *Client) SendText(ctx context.Context, area, mobile, text string) error 
 		"m": {number},
 		"c": {text},
 	}
+	// The account, the password hash, the number and the code travel in the
+	// URL, so a failure is reported without it (integration.RequestError).
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path+"?"+query.Encode(), nil)
 	if err != nil {
-		return err
+		return integration.RequestError("smsbao", err)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return integration.RequestError("smsbao", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))

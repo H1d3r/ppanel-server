@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -76,6 +77,38 @@ func TestSendTextParsesTheStatusCode(t *testing.T) {
 			t.Fatalf("body %q: error = %v, want %q", body, err, want)
 		}
 	}
+}
+
+// A transport failure is logged by the sending task, so its error must not
+// carry the request URL: the query holds the account, the password hash,
+// the number and the code.
+func TestSendTextTransportFailureKeepsSecretsOutOfTheError(t *testing.T) {
+	client := NewClient(Config{Access: "panel", Secret: "s3cret"}, http.DefaultClient)
+	client.baseURL = "http://" + closedAddr(t)
+
+	err := client.SendText(context.Background(), "86", "13800000000", "验证码 123456")
+
+	if err == nil {
+		t.Fatal("a refused connection reported success")
+	}
+	for _, secret := range []string{"panel", md5Hex("s3cret"), "13800000000", "123456", "u=", "p=", "?"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q carries %q", err, secret)
+		}
+	}
+}
+
+// closedAddr returns an address nothing listens on, so connecting to it is
+// refused.
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+	return addr
 }
 
 func TestSendTextHonoursContext(t *testing.T) {

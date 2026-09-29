@@ -52,6 +52,7 @@ func newPortalFixture(t *testing.T, adjust ...func(*Deps)) *portalFixture {
 	f := &portalFixture{t: t, h: h, queue: &billingtest.Queue{}, rates: &rateCache{}, currency: "CNY", siteHost: "www.example.test"}
 	deps := Deps{
 		Orders:             h.Store.Order(),
+		OrderEvents:        h.Store.OrderEvent(),
 		Coupons:            h.Store.Coupon(),
 		Payments:           h.Store.Payment(),
 		UserAuths:          h.Store.UserAuth(),

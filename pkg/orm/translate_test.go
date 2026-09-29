@@ -25,6 +25,13 @@ func TestGormConfigTranslatesDuplicateKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A shared in-memory database lives as long as a connection to it is
+	// open; closing the pool drops it, so a repeated run (-count) starts empty.
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	if err := db.AutoMigrate(&uniqueRow{}); err != nil {
 		t.Fatal(err)
 	}

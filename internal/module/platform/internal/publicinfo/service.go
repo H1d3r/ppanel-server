@@ -5,6 +5,8 @@
 package publicinfo
 
 import (
+	"time"
+
 	"golang.org/x/sync/singleflight"
 )
 
@@ -14,9 +16,13 @@ type Service struct {
 	deps Deps
 	// statRefresh collapses concurrent refreshes of the site statistics.
 	statRefresh singleflight.Group
+	// refreshTimeout and resolveTimeout are the budgets of one statistics
+	// refresh and of the hostname resolution inside it (statRefreshTimeout
+	// and statResolveTimeout); tests shorten them.
+	refreshTimeout, resolveTimeout time.Duration
 }
 
 // NewService builds the public-info service.
 func NewService(deps Deps) *Service {
-	return &Service{deps: deps}
+	return &Service{deps: deps, refreshTimeout: statRefreshTimeout, resolveTimeout: statResolveTimeout}
 }

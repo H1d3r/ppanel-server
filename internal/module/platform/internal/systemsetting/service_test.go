@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +17,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform/internal/repo"
 	"github.com/perfect-panel/server/internal/repository/kernel"
 	"github.com/perfect-panel/server/pkg/cache"
+	"github.com/perfect-panel/server/pkg/httpx"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/sqlite"
@@ -223,17 +224,27 @@ func TestUpdatesReinitializeTheirSubsystem(t *testing.T) {
 	}
 }
 
-// A reload that fails reaches the administrator: the settings are stored,
-// but the running server still uses the old ones.
+// A reload that fails reaches the administrator under a code of its own: the
+// settings are stored, but the running server still uses the old ones, which
+// an internal error would hide.
 func TestUpdateReportsAFailedReload(t *testing.T) {
 	w := newSettingsWorld(t)
 	w.runtime.reloadErr = errors.New("reload failed")
 	err := w.svc.UpdateSiteConfig(context.Background(), &dto.SiteConfig{SiteName: "x"})
-	if !errors.Is(err, w.runtime.reloadErr) || !strings.Contains(err.Error(), "saved but could not be applied") {
-		t.Fatalf("update = %v, want the reload failure reported", err)
+	if !errors.Is(err, w.runtime.reloadErr) || xerr.CodeOf(err) != xerr.SettingsSavedNotApplied {
+		t.Fatalf("update = %v, want the reload failure under SettingsSavedNotApplied", err)
 	}
 	if got := w.runtime.calls(); !slices.Equal(got, []string{"site"}) {
 		t.Fatalf("re-initialized %v, want [site]", got)
+	}
+	if got, err := w.svc.GetSiteConfig(context.Background()); err != nil || got.SiteName != "x" {
+		t.Fatalf("site after the failed reload = %+v (err %v), want the saved settings", got, err)
+	}
+	// The admin panel reads the code and its message, not an internal error.
+	want := httpx.HTTPResult{StatusCode: http.StatusOK, Body: httpx.Error(xerr.SettingsSavedNotApplied,
+		"Settings saved but could not be applied; reload or restart the service")}
+	if got := httpx.BuildHTTPResult(nil, err); !reflect.DeepEqual(got, want) {
+		t.Fatalf("http result = %+v, want %+v", got, want)
 	}
 }
 

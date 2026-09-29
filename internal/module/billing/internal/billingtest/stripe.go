@@ -79,10 +79,12 @@ func (f *FakeStripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.write(w, intent)
 	case strings.HasPrefix(path, "payment_intents/") && strings.HasSuffix(path, "/cancel"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "payment_intents/"), "/cancel")
+		// Like Stripe, a succeeded or already canceled intent cannot be
+		// canceled (payment_intent_unexpected_state).
 		intent, ok := f.intents[id]
-		if !ok || intent["status"] == "succeeded" {
+		if !ok || intent["status"] == "succeeded" || intent["status"] == "canceled" {
 			w.WriteHeader(http.StatusBadRequest)
-			f.write(w, map[string]any{"error": map[string]any{"type": "invalid_request_error", "message": "cannot cancel payment_intent"}})
+			f.write(w, map[string]any{"error": map[string]any{"type": "invalid_request_error", "code": "payment_intent_unexpected_state", "message": "cannot cancel payment_intent"}})
 			return
 		}
 		intent["status"] = "canceled"

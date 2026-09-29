@@ -17,15 +17,21 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
-  # master is the LTS line and main takes the features, so the two can each
+  # master is the LTS line and dev takes the features, so the two can each
   # gain migrations. This keeps their numbering compatible; see the script for
-  # what an incompatible pair does to an upgrading database.
+  # what an incompatible pair does to an upgrading database. While master is
+  # only behind dev (fast-forwarded), the script sees one line and skips the
+  # band check.
   migration-lines:
     name: Check migration lines
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # The script tells one line from two by ancestry, which a shallow
+          # clone cannot answer.
+          fetch-depth: 0
 
       - name: Check migration lines
         run: |

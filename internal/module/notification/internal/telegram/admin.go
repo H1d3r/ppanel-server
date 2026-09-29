@@ -381,21 +381,44 @@ func (a *Admin) authenticate(ctx context.Context, msg *models.Message) (admin *u
 	return u, ""
 }
 
-// panelAdminRefusal explains why the account bound to a Telegram sender may
-// not act as a panel administrator, or returns "" when it may. FindUser is
-// unscoped, so a soft-deleted account comes back like any other; it is
-// refused here together with disabled ones, the same gates the HTTP admin
-// routes apply.
-func panelAdminRefusal(u *user.User) string {
+// accountRefusal explains why an account may not use the bot, or returns ""
+// when it may. FindUser is unscoped, so a soft-deleted account comes back
+// like any other; it is refused here together with disabled ones, the same
+// gates the HTTP routes apply.
+func accountRefusal(u *user.User) string {
 	switch {
 	case u.DeletedAt.Valid:
 		return "account deleted"
 	case u.Enable == nil || !*u.Enable:
 		return "account disabled"
-	case u.IsAdmin == nil || !*u.IsAdmin:
+	}
+	return ""
+}
+
+// panelAdminRefusal explains why the account bound to a Telegram sender may
+// not act as a panel administrator, or returns "" when it may.
+func panelAdminRefusal(u *user.User) string {
+	if refusal := accountRefusal(u); refusal != "" {
+		return refusal
+	}
+	if u.IsAdmin == nil || !*u.IsAdmin {
 		return "not an administrator"
 	}
 	return ""
+}
+
+// accountDisabled reports whether /ban finds the account switched off. Only
+// an explicit false counts: the column is NOT NULL and defaults to on.
+func accountDisabled(u *user.User) bool {
+	return u.Enable != nil && !*u.Enable
+}
+
+// enabledLabel names an account switch state for staff.
+func enabledLabel(enabled bool) string {
+	if enabled {
+		return "启用"
+	}
+	return "禁用"
 }
 
 // userEmail labels a user for staff: the bound email, or the numeric id.
@@ -480,12 +503,8 @@ func (a *Admin) userDetail(ctx context.Context, msg *models.Message, input strin
 	for _, s := range subs {
 		fmt.Fprintf(&sb, "  /reset_%d 重置  /toggle_%d 启停\n", s.Id, s.Id)
 	}
-	banOp := "禁用"
-	if u.Enable != nil && !*u.Enable {
-		banOp = "启用"
-	}
 	fmt.Fprintf(&sb, "\n  /user_sub_%d  /user_log_%d  /ban_%d %s",
-		u.Id, u.Id, u.Id, banOp,
+		u.Id, u.Id, u.Id, enabledLabel(accountDisabled(u)),
 	)
 
 	a.reply(ctx, msg, sb.String())
@@ -622,24 +641,24 @@ func (a *Admin) confirmBanUser(ctx context.Context, msg *models.Message, adminUs
 		a.reply(ctx, msg, "无法对自己的账号执行此操作。")
 		return
 	}
-	opLabel := "禁用"
-	if u.Enable != nil && !*u.Enable {
-		opLabel = "启用"
-	}
-	actionID := a.saveAction(ctx, "ban", adminUser.Id, strconv.FormatInt(u.Id, 10), "")
+	// The confirmation carries the state the prompt was worded for, so it
+	// cannot apply the opposite change if the account was switched meanwhile.
+	target := accountDisabled(u)
+	actionID := a.saveAction(ctx, "ban", adminUser.Id, strconv.FormatInt(u.Id, 10), strconv.FormatBool(target))
 	a.reply(ctx, msg, fmt.Sprintf("确认%s用户 %s (ID:%d) ？\n/confirm_%s 确认\n/cancel_%s 取消",
-		opLabel, a.userEmail(ctx, u.Id), u.Id, actionID, actionID))
+		enabledLabel(target), a.userEmail(ctx, u.Id), u.Id, actionID, actionID))
 }
 
 func (a *Admin) confirmAction(ctx context.Context, msg *models.Message, adminUser *user.User, actionID string) {
-	act, ok := a.loadAction(ctx, actionID, adminUser.Id)
+	// The action is consumed before it is applied, in one step: two
+	// confirmations racing each other must not both find it, or the first
+	// would switch the account and the second switch it back.
+	act, ok := a.takeAction(ctx, actionID, adminUser.Id)
 	if !ok {
 		a.reply(ctx, msg, "操作已过期或无效。")
 		return
 	}
 	id, _ := strconv.ParseInt(act.Target, 10, 64)
-	// A confirmation that failed stays redeemable, so the administrator can
-	// retry it; one that settled the action is consumed.
 	settled := true
 	switch act.Cmd {
 	case "close":
@@ -649,15 +668,14 @@ func (a *Admin) confirmAction(ctx context.Context, msg *models.Message, adminUse
 	case "toggle":
 		settled = a.toggleSubscription(ctx, msg, id, act.Extra)
 	case "ban":
-		settled = a.toggleBan(ctx, msg, id)
+		settled = a.toggleBan(ctx, msg, id, act.Extra)
 	default:
 		a.reply(ctx, msg, "未知操作。")
 	}
 	if !settled {
-		return
-	}
-	if err := a.deps.Actions.Delete(ctx, tgActionPrefix+actionID); err != nil {
-		logger.WithContext(ctx).Errorw("admin confirm action: redis del failed", logger.Field("error", err.Error()))
+		// A confirmation that failed stays redeemable, so the administrator
+		// can retry it.
+		a.storeAction(ctx, actionID, act)
 	}
 }
 
@@ -717,26 +735,36 @@ func (a *Admin) toggleSubscription(ctx context.Context, msg *models.Message, id 
 	return true
 }
 
-func (a *Admin) toggleBan(ctx context.Context, msg *models.Message, id int64) bool {
+// toggleBan applies a confirmed /ban. promptedTarget is the switch state the
+// confirmation prompt announced ("true" enables, "false" disables); it is
+// empty for confirmations issued before the prompt recorded it, which switch
+// the state found now.
+func (a *Admin) toggleBan(ctx context.Context, msg *models.Message, id int64, promptedTarget string) bool {
 	u, err := a.deps.Accounts.FindUser(ctx, id)
 	if err != nil {
 		a.reply(ctx, msg, "用户不存在。")
 		return false
 	}
-	enable := false
-	opLabel := "已禁用"
-	if u.Enable != nil && !*u.Enable {
-		enable = true
-		opLabel = "已启用"
+	enabled := !accountDisabled(u)
+	target := !enabled
+	if promptedTarget != "" {
+		target = promptedTarget == "true"
+		if target == enabled {
+			// The account already is where the prompt would move it: it was
+			// switched meanwhile, so there is nothing left to confirm and the
+			// account must not be switched back.
+			a.reply(ctx, msg, fmt.Sprintf("用户 (ID:%d) 已处于%s状态，本次操作未执行。", u.Id, enabledLabel(enabled)))
+			return true
+		}
 	}
 	// Only the flag: a full-row save from this lookup could revert a
 	// concurrent change to the account.
-	if err := a.deps.Accounts.SetEnabled(ctx, u.Id, enable); err != nil {
+	if err := a.deps.Accounts.SetEnabled(ctx, u.Id, target); err != nil {
 		logger.WithContext(ctx).Errorw("ban user failed", logger.Field("error", err.Error()))
 		a.reply(ctx, msg, "操作失败。")
 		return false
 	}
-	a.reply(ctx, msg, fmt.Sprintf("✅ 用户 (ID:%d) %s", u.Id, opLabel))
+	a.reply(ctx, msg, fmt.Sprintf("✅ 用户 (ID:%d) 已%s", u.Id, enabledLabel(target)))
 	return true
 }
 
@@ -756,20 +784,29 @@ func (a *Admin) findSubscription(ctx context.Context, id int64) (*usersub.Subscr
 
 func (a *Admin) saveAction(ctx context.Context, cmd string, adminID int64, target, extra string) string {
 	actionID := random.KeyNew(8, 1)
-	data, err := json.Marshal(&tgAction{Cmd: cmd, AdminID: adminID, Target: target, Extra: extra})
+	a.storeAction(ctx, actionID, tgAction{Cmd: cmd, AdminID: adminID, Target: target, Extra: extra})
+	return actionID
+}
+
+// storeAction keeps act redeemable as actionID for one confirmation window.
+// A failed write is only logged: the prompt still goes out, and its
+// confirmation will report itself expired.
+func (a *Admin) storeAction(ctx context.Context, actionID string, act tgAction) {
+	data, err := json.Marshal(&act)
 	if err == nil {
 		err = a.deps.Actions.Set(ctx, tgActionPrefix+actionID, string(data), tgActionTTL)
 	}
 	if err != nil {
-		// The prompt still goes out; its confirmation will report itself
-		// expired.
-		logger.WithContext(ctx).Errorw("save admin action failed", logger.Field("error", err.Error()), logger.Field("cmd", cmd))
+		logger.WithContext(ctx).Errorw("save admin action failed", logger.Field("error", err.Error()), logger.Field("cmd", act.Cmd))
 	}
-	return actionID
 }
 
-func (a *Admin) loadAction(ctx context.Context, actionID string, adminID int64) (tgAction, bool) {
-	val, err := a.deps.Actions.Get(ctx, tgActionPrefix+actionID)
+// takeAction consumes the pending action actionID on behalf of adminID. The
+// read and the delete are one Redis command, so concurrent confirmations
+// cannot both receive the action. A confirmation belongs to whoever asked
+// for it: another administrator's action is put back and reads as missing.
+func (a *Admin) takeAction(ctx context.Context, actionID string, adminID int64) (tgAction, bool) {
+	val, err := a.deps.Actions.GetDel(ctx, tgActionPrefix+actionID)
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
 			logger.WithContext(ctx).Errorw("load action failed", logger.Field("error", err.Error()))
@@ -781,6 +818,7 @@ func (a *Admin) loadAction(ctx context.Context, actionID string, adminID int64) 
 		return tgAction{}, false
 	}
 	if act.AdminID != adminID {
+		a.storeAction(ctx, actionID, act)
 		return tgAction{}, false
 	}
 	return act, true

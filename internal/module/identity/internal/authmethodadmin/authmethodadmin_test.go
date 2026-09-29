@@ -31,7 +31,7 @@ func newFixture(t *testing.T) *fixture {
 		Config:       func() Snapshot { return f.senderCfg },
 		Reinitialize: func(subsystem string) error { f.reloaded = append(f.reloaded, subsystem); return f.reloadErr },
 	})
-	for _, method := range []string{"email", "mobile", "device", "github"} {
+	for _, method := range []string{"email", "mobile", "device", "telegram", "github"} {
 		env.EnableMethod(t, method, "{}")
 	}
 	return f
@@ -69,10 +69,11 @@ func assertCode(t *testing.T, err error, want uint32) {
 func TestUpdateAuthMethodConfigRefusesConfigsThatDoNotDecode(t *testing.T) {
 	f := newFixture(t)
 	for method, config := range map[string]any{
-		"email":  map[string]any{"enable_verify": "yes"},
-		"mobile": map[string]any{"whitelist": "86"},
-		"device": map[string]any{"enable_security": true},
-		"github": "not an object",
+		"email":    map[string]any{"enable_verify": "yes"},
+		"mobile":   map[string]any{"whitelist": "86"},
+		"device":   map[string]any{"enable_security": true},
+		"telegram": map[string]any{"enable_notify": "true"},
+		"github":   "not an object",
 	} {
 		_, err := f.svc.UpdateAuthMethodConfig(context.Background(), f.request(t, method, config))
 		assertCode(t, err, xerr.InvalidParams)
@@ -212,6 +213,49 @@ func TestUpdateAuthMethodConfigKeepsTheRowAndItsSwitch(t *testing.T) {
 	}
 }
 
+// Startup decodes the stored Telegram settings into auth.TelegramAuthConfig,
+// so a configuration that does not decode into it is refused on save rather
+// than failing the next start, and a saved one reaches the running bot
+// through the telegram reload.
+func TestUpdateAuthMethodConfigChecksAndReloadsTheTelegramSettings(t *testing.T) {
+	f := newFixture(t)
+	for name, config := range map[string]any{
+		"group chat id as a number": map[string]any{"bot_token": "123456:token", "group_chat_id": -1001234567890},
+		"switch as a string":        map[string]any{"bot_token": "123456:token", "enable_notify": "true"},
+	} {
+		_, err := f.svc.UpdateAuthMethodConfig(context.Background(), f.request(t, "telegram", config))
+		if got := xerr.CodeOf(err); err == nil || got != xerr.InvalidParams {
+			t.Fatalf("%s: error = %v (code %d), want code %d", name, err, got, xerr.InvalidParams)
+		}
+		if got := f.stored(t, "telegram"); got != "{}" {
+			t.Fatalf("%s: telegram config = %s, want it unchanged", name, got)
+		}
+	}
+	if len(f.reloaded) != 0 {
+		t.Fatalf("reloaded %v after refused updates", f.reloaded)
+	}
+
+	resp, err := f.svc.UpdateAuthMethodConfig(context.Background(), f.request(t, "telegram", map[string]any{
+		"bot_token": "123456:token", "enable_notify": true, "webhook_domain": "https://panel.example.com", "group_chat_id": "-1001234567890",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateAuthMethodConfig() error = %v", err)
+	}
+	var stored auth.TelegramAuthConfig
+	if err := json.Unmarshal([]byte(f.stored(t, "telegram")), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.BotToken != "123456:token" || !stored.EnableNotify || stored.WebHookDomain != "https://panel.example.com" || stored.GroupChatID != "-1001234567890" {
+		t.Fatalf("stored = %+v", stored)
+	}
+	if config, ok := resp.Config.(map[string]any); !ok || config["group_chat_id"] != "-1001234567890" {
+		t.Fatalf("response config = %#v", resp.Config)
+	}
+	if len(f.reloaded) != 1 || f.reloaded[0] != "telegram" {
+		t.Fatalf("reloaded = %v, want [telegram]", f.reloaded)
+	}
+}
+
 func TestDeviceConfigNeedsItsSecurityForRealDevices(t *testing.T) {
 	f := newFixture(t)
 	_, err := f.svc.UpdateAuthMethodConfig(context.Background(), f.request(t, "device", map[string]any{"only_real_device": true}))
@@ -235,7 +279,7 @@ func TestAuthMethodListAndConfigDecodeTheStoredConfig(t *testing.T) {
 		t.Fatalf("config = %#v", config.Config)
 	}
 	list, err := f.svc.GetAuthMethodList(context.Background())
-	if err != nil || len(list.List) != 4 {
+	if err != nil || len(list.List) != 5 {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
 

@@ -49,6 +49,11 @@ type Accounts interface {
 	// identifier is identifier, such as a Telegram chat id or an email
 	// address.
 	FindAuthMethodByIdentifier(ctx context.Context, authType, identifier string) (*user.AuthMethods, error)
+	// FindEmailAlias returns an email binding of a live account that reaches
+	// the same mailbox as email under another spelling (Gmail dots, "+tag"
+	// subaddresses), the check registration runs; a guest purchase must
+	// not create a second account for that mailbox.
+	FindEmailAlias(ctx context.Context, email string) (*user.AuthMethods, error)
 	// FindUserAuthMethod returns the account's binding of authType.
 	FindUserAuthMethod(ctx context.Context, userID int64, authType string) (*user.AuthMethods, error)
 	// ListUserAuthMethods returns every binding of the account.
@@ -152,6 +157,10 @@ func (a accounts) DailyUserStatistics(ctx context.Context, until time.Time) ([]u
 
 func (a accounts) MonthlyUserStatistics(ctx context.Context, date time.Time) ([]user.UserStatisticsWithDate, error) {
 	return a.users.QueryMonthlyUserStatisticsList(ctx, date)
+}
+
+func (a accounts) FindEmailAlias(ctx context.Context, email string) (*user.AuthMethods, error) {
+	return a.userAuths.FindEmailAlias(ctx, email)
 }
 
 func (a accounts) FindAuthMethodByIdentifier(ctx context.Context, authType, identifier string) (*user.AuthMethods, error) {

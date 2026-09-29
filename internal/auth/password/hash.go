@@ -162,10 +162,14 @@ func verifyLegacyPBKDF2(password, hash string) bool {
 // attempts would otherwise exhaust memory; extra callers wait for a slot.
 var argon2Slots = make(chan struct{}, max(2, runtime.NumCPU()))
 
+// argon2Derive is the derivation the slots guard; tests replace it to
+// observe how many derivations run at once.
+var argon2Derive = argon2.IDKey
+
 func argon2IDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
 	argon2Slots <- struct{}{}
 	defer func() { <-argon2Slots }()
-	return argon2.IDKey(password, salt, time, memory, threads, keyLen)
+	return argon2Derive(password, salt, time, memory, threads, keyLen)
 }
 
 func verifyArgon2id(password, hash string) bool {

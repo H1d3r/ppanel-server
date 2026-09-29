@@ -222,7 +222,7 @@ func TestGrantSubscriptionReactivatesTrafficFinishedSubscription(t *testing.T) {
 // Finite days never downgrade an unlimited subscription to a finite term.
 func TestGrantSubscriptionPreservesNoLimitExpiry(t *testing.T) {
 	f := subtest.New(t)
-	sub := f.Subscription(t, usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusActive, ExpireTime: usersub.NoLimitExpiry})
+	sub := f.Subscription(t, usersub.Subscribe{Id: 9, UserId: 3, Status: usersub.SubscribeStatusActive, ExpireTime: usersub.NoLimitExpiry()})
 	svc := NewService(Deps{Store: newQuotaStore(f)})
 
 	stale := *sub

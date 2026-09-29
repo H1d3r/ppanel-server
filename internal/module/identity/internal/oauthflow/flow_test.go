@@ -12,6 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/internal/oauthprovider"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
@@ -80,24 +81,54 @@ func TestStateTiesTheCallbackToItsURL(t *testing.T) {
 	flow, _ := newFlow(t, "", stateBased(provider), storedConfigs{"github": "{}"})
 	ctx := context.Background()
 
-	if _, err := flow.AuthURL(ctx, "github", "https://panel.example/oauth"); err != nil {
+	if _, err := flow.AuthURL(ctx, oauthstate.LoginScope(), "github", "https://panel.example/oauth"); err != nil {
 		t.Fatalf("AuthURL() error = %v", err)
 	}
 	if provider.state == "" || provider.redirect != "https://panel.example/oauth" {
 		t.Fatalf("provider saw state %q and redirect %q", provider.state, provider.redirect)
 	}
 	callback := map[string]any{"code": "authorization-code", "state": provider.state}
-	identity, err := flow.Identify(ctx, "github", callback)
+	identity, err := flow.Identify(ctx, oauthstate.LoginScope(), "github", callback)
 	if err != nil || identity.Subject != "583231" {
 		t.Fatalf("Identify() = %+v, %v", identity, err)
 	}
 	if provider.callback.Code != "authorization-code" || provider.callback.Redirect != "https://panel.example/oauth" || !provider.deadline {
 		t.Fatalf("provider callback = %+v (deadline %v)", provider.callback, provider.deadline)
 	}
-	_, err = flow.Identify(ctx, "github", callback)
+	_, err = flow.Identify(ctx, oauthstate.LoginScope(), "github", callback)
 	assertCode(t, err, xerr.OAuthStateInvalid)
-	_, err = flow.Identify(ctx, "github", map[string]any{"code": "authorization-code"})
+	_, err = flow.Identify(ctx, oauthstate.LoginScope(), "github", map[string]any{"code": "authorization-code"})
 	assertCode(t, err, xerr.InvalidParams)
+}
+
+// A state completes only the flow that issued it: a sign-in's state does
+// not complete a binding, and a binding's state completes neither a sign-in
+// nor another account's binding. The refused state is spent.
+func TestStateCompletesOnlyTheFlowThatIssuedIt(t *testing.T) {
+	provider := &recorder{identity: oauthprovider.Identity{Subject: "583231"}}
+	flow, _ := newFlow(t, "", stateBased(provider), storedConfigs{"github": "{}"})
+	ctx := context.Background()
+	start := func(scope oauthstate.Scope) map[string]any {
+		if _, err := flow.AuthURL(ctx, scope, "github", "https://panel.example/oauth"); err != nil {
+			t.Fatalf("AuthURL() error = %v", err)
+		}
+		return map[string]any{"code": "authorization-code", "state": provider.state}
+	}
+
+	callback := start(oauthstate.LoginScope())
+	_, err := flow.Identify(ctx, oauthstate.BindScope(7), "github", callback)
+	assertCode(t, err, xerr.OAuthStateInvalid)
+	_, err = flow.Identify(ctx, oauthstate.LoginScope(), "github", callback)
+	assertCode(t, err, xerr.OAuthStateInvalid)
+
+	_, err = flow.Identify(ctx, oauthstate.LoginScope(), "github", start(oauthstate.BindScope(7)))
+	assertCode(t, err, xerr.OAuthStateInvalid)
+	_, err = flow.Identify(ctx, oauthstate.BindScope(8), "github", start(oauthstate.BindScope(7)))
+	assertCode(t, err, xerr.OAuthStateInvalid)
+	identity, err := flow.Identify(ctx, oauthstate.BindScope(7), "github", start(oauthstate.BindScope(7)))
+	if err != nil || identity.Subject != "583231" {
+		t.Fatalf("Identify() by the issuing account = %+v, %v", identity, err)
+	}
 }
 
 func TestProviderFailuresReachTheClientAsTheirCodes(t *testing.T) {
@@ -114,10 +145,10 @@ func TestProviderFailuresReachTheClientAsTheirCodes(t *testing.T) {
 	} {
 		provider := &recorder{err: tc.err}
 		flow, _ := newFlow(t, "", stateBased(provider), storedConfigs{"github": "{}"})
-		if _, err := flow.AuthURL(context.Background(), "github", "https://panel.example/oauth"); err != nil {
+		if _, err := flow.AuthURL(context.Background(), oauthstate.LoginScope(), "github", "https://panel.example/oauth"); err != nil {
 			t.Fatal(err)
 		}
-		_, err := flow.Identify(context.Background(), "github", map[string]any{"code": "c", "state": provider.state})
+		_, err := flow.Identify(context.Background(), oauthstate.LoginScope(), "github", map[string]any{"code": "c", "state": provider.state})
 		assertCode(t, err, tc.want)
 		if !errors.Is(err, tc.err) {
 			t.Fatalf("the provider's error is not reachable from %v", err)
@@ -127,11 +158,11 @@ func TestProviderFailuresReachTheClientAsTheirCodes(t *testing.T) {
 
 func TestUnknownAndUnconfiguredMethods(t *testing.T) {
 	flow, _ := newFlow(t, "", stateBased(&recorder{}), storedConfigs{})
-	_, err := flow.AuthURL(context.Background(), "linkedin", "https://panel.example/oauth")
+	_, err := flow.AuthURL(context.Background(), oauthstate.LoginScope(), "linkedin", "https://panel.example/oauth")
 	assertCode(t, err, xerr.AuthenticatorNotSupportedError)
-	_, err = flow.Identify(context.Background(), "linkedin", map[string]any{})
+	_, err = flow.Identify(context.Background(), oauthstate.LoginScope(), "linkedin", map[string]any{})
 	assertCode(t, err, xerr.AuthenticatorNotSupportedError)
-	_, err = flow.AuthURL(context.Background(), "github", "https://panel.example/oauth")
+	_, err = flow.AuthURL(context.Background(), oauthstate.LoginScope(), "github", "https://panel.example/oauth")
 	assertCode(t, err, xerr.DatabaseQueryError)
 }
 
@@ -143,17 +174,17 @@ func TestSingleUseCallbacksAreRedeemedOnce(t *testing.T) {
 	flow, server := newFlow(t, "", methods, storedConfigs{"telegram": "{}"})
 	ctx := context.Background()
 
-	if _, err := flow.Identify(ctx, "telegram", map[string]any{}); err != nil {
+	if _, err := flow.Identify(ctx, oauthstate.LoginScope(), "telegram", map[string]any{}); err != nil {
 		t.Fatalf("first redemption: %v", err)
 	}
-	if _, err := flow.Identify(ctx, "telegram", map[string]any{}); err != nil {
+	if _, err := flow.Identify(ctx, oauthstate.LoginScope(), "telegram", map[string]any{}); err != nil {
 		t.Fatalf("a retry within the grace window was refused: %v", err)
 	}
 	// The flow's clock decides the window, so date the first use back.
 	if err := server.Set("auth:telegram_callback:fingerprint", fmt.Sprint(time.Now().Add(-2*replayGrace).Unix())); err != nil {
 		t.Fatal(err)
 	}
-	_, err := flow.Identify(ctx, "telegram", map[string]any{})
+	_, err := flow.Identify(ctx, oauthstate.LoginScope(), "telegram", map[string]any{})
 	assertCode(t, err, xerr.OAuthCallbackReplayed)
 }
 
@@ -180,7 +211,7 @@ func TestPinnedMethodsKeepTheRedirectOnTheSiteHost(t *testing.T) {
 		for _, method := range []string{"telegram", "apple"} {
 			t.Run(method+"/"+tt.name, func(t *testing.T) {
 				flow, _ := newFlow(t, tt.siteHost, oauthprovider.Default(), configs)
-				uri, err := flow.AuthURL(context.Background(), method, tt.redirect)
+				uri, err := flow.AuthURL(context.Background(), oauthstate.LoginScope(), method, tt.redirect)
 				if !tt.wantOK {
 					assertCode(t, err, xerr.InvalidParams)
 					return
@@ -209,9 +240,9 @@ func TestPinnedMethodsKeepTheRedirectOnTheSiteHost(t *testing.T) {
 // A malformed bot token is a misconfiguration, not an empty URL.
 func TestTelegramWithAMalformedBotTokenIsMisconfigured(t *testing.T) {
 	flow, _ := newFlow(t, "panel.example.com", oauthprovider.Default(), storedConfigs{"telegram": `{"bot_token":"no-colon-token"}`})
-	_, err := flow.AuthURL(context.Background(), "telegram", "https://panel.example.com/oauth")
+	_, err := flow.AuthURL(context.Background(), oauthstate.LoginScope(), "telegram", "https://panel.example.com/oauth")
 	assertCode(t, err, xerr.OAuthProviderMisconfigured)
 	flow, _ = newFlow(t, "", oauthprovider.Default(), storedConfigs{"telegram": `{`})
-	_, err = flow.AuthURL(context.Background(), "telegram", "https://panel.example.com/oauth")
+	_, err = flow.AuthURL(context.Background(), oauthstate.LoginScope(), "telegram", "https://panel.example.com/oauth")
 	assertCode(t, err, xerr.OAuthProviderMisconfigured)
 }

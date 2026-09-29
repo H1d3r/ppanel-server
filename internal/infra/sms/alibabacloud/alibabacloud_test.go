@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -153,6 +154,40 @@ func TestSendTemplateReportsProviderFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A transport failure is logged by the sending task, so its error must not
+// carry the request URL: the SDK sends the number and the template
+// parameters, the code among them, in the query string.
+func TestSendTemplateTransportFailureKeepsSecretsOutOfTheError(t *testing.T) {
+	client, err := newClient(Config{Access: testAccessKey, Secret: testSecret, SignName: "PPanel", TemplateCode: "SMS_1000", Endpoint: closedAddr(t)}, "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.SendTemplate(context.Background(), "86", "13800000000", map[string]string{"code": "123456"})
+
+	if err == nil {
+		t.Fatal("a refused connection reported success")
+	}
+	for _, secret := range []string{testAccessKey, testSecret, "13800000000", "123456", "TemplateParam", "?"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q carries %q", err, secret)
+		}
+	}
+}
+
+// closedAddr returns an address nothing listens on, so connecting to it is
+// refused.
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+	return addr
 }
 
 func TestSendTemplateHonoursContext(t *testing.T) {

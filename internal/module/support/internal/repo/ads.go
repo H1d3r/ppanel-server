@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/support/entity/ads"
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/orm"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"gorm.io/gorm"
 )
 
@@ -103,10 +104,22 @@ func (m *adsRepo) GetAdsListByPage(ctx context.Context, page, size int, filter a
 // adsActiveAt keeps the ads whose schedule covers at: start <= at < end. An
 // unset bound — NULL, or the Unix epoch the admin API stores for an omitted
 // time — leaves that side open. An unset start already sorts before any
-// instant; an unset end has to be matched explicitly.
+// instant; an unset end has to be matched explicitly, and with a margin: the
+// timestamp columns keep the wall clock of the process zone a row was written
+// under, so the epoch reads 1970-01-01 08:00 in a row written under the
+// image's Asia/Shanghai and 00:00 in one written under UTC, and the epoch
+// rendered in the current zone would miss the rows written under another.
+// Every end before 1971 is unset: no schedule ends that early.
 func adsActiveAt(at time.Time) func(*gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
 		return db.Where("(start_time IS NULL OR start_time <= ?)", at).
-			Where("(end_time IS NULL OR end_time <= ? OR end_time > ?)", time.UnixMilli(0), at)
+			Where("(end_time IS NULL OR end_time < ? OR end_time > ?)", unsetEndLimit(), at)
 	}
+}
+
+// unsetEndLimit is the instant every wall clock of the unset-bound epoch
+// falls before. It is built per query: the application zone is only loaded
+// at startup.
+func unsetEndLimit() time.Time {
+	return time.Date(1971, time.January, 1, 0, 0, 0, 0, timeutil.Location())
 }

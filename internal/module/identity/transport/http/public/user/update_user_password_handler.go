@@ -13,6 +13,7 @@ import (
 // UpdateUserPasswordHandler documents Update User Password.
 //
 // @Summary Update User Password
+// @Description Sets the account's password and ends every session of the account. Changing an existing password requires the current one (old_password); setting the first password of an account with a bound email or phone number requires the security code sent to it (current_code); an account with neither sets it with the session alone.
 // @Tags user
 // @Accept json
 // @Produce json

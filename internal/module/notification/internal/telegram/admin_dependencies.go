@@ -20,9 +20,11 @@ type TelegramMessenger interface {
 }
 
 // TelegramAdminActionStore persists short-lived confirmations for destructive
-// administrator commands.
+// administrator commands. GetDel returns a key's value and removes the key in
+// one step, so concurrent readers cannot both receive it; a missing key reads
+// as redis.Nil.
 type TelegramAdminActionStore interface {
-	Get(ctx context.Context, key string) (string, error)
+	GetDel(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key, value string, ttl time.Duration) error
 	Delete(ctx context.Context, key string) error
 }

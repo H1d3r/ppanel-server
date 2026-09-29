@@ -2,7 +2,6 @@ package usersub
 
 import (
 	"context"
-	"time"
 	"uuid"
 
 	dto "github.com/perfect-panel/server/internal/module/subscription/contract"
@@ -46,7 +45,7 @@ func (s *Service) CreateUserSubscribe(ctx context.Context, req *dto.CreateUserSu
 		UserId:      req.UserId,
 		SubscribeId: req.SubscribeId,
 		StartTime:   timeutil.Now(),
-		ExpireTime:  time.UnixMilli(req.ExpiredAt),
+		ExpireTime:  usersub.ExpiryFromMilli(req.ExpiredAt),
 		Traffic:     req.Traffic,
 		Download:    0,
 		Upload:      0,

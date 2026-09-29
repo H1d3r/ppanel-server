@@ -40,7 +40,13 @@ func GetSupportedPlatforms() []integration.Info {
 				"pass":     "pass",
 				"from":     "from",
 				"reply_to": "reply_to",
-				"ssl":      "ssl",
+				// ssl requires encryption (implicit TLS on 465, STARTTLS
+				// otherwise); implicit_tls starts with TLS on another port;
+				// insecure_skip_verify accepts a self-signed relay
+				// certificate. See SMTPConfig.
+				"ssl":                  "ssl",
+				"implicit_tls":         "implicit_tls",
+				"insecure_skip_verify": "insecure_skip_verify",
 			},
 		},
 	}

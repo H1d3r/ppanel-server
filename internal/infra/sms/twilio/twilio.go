@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/perfect-panel/server/internal/infra/integration"
 	"github.com/twilio/twilio-go/client"
 	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"
 )
@@ -38,7 +39,9 @@ func (c *Client) SendText(ctx context.Context, area, mobile, text string) error 
 	params.SetBody(text)
 	resp, err := c.api(ctx).CreateMessage(params)
 	if err != nil {
-		return fmt.Errorf("twilio send code error: %w", err)
+		// The SDK returns a failed round trip as is, and its URL names the
+		// account: integration.RequestError drops it.
+		return integration.RequestError("twilio", err)
 	}
 	if resp.ErrorCode != nil {
 		message := ""

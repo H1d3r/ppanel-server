@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"context"
-	"math"
 	"strings"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
@@ -57,14 +56,18 @@ func (s *Service) ReviewWithdrawal(ctx context.Context, req *dto.ReviewWithdrawa
 			if err != nil {
 				return err
 			}
-			if withdrawal.Amount > math.MaxInt64-account.Commission {
+			// The commission may be negative here: a refund claws back
+			// commission the user already withdrew. Only a sum that does not
+			// fit an int64 is refused.
+			refunded, ok := addInt64(account.Commission, withdrawal.Amount)
+			if !ok {
 				return xerr.Errorf(xerr.DatabaseUpdateError, "withdrawal refund would overflow commission balance")
 			}
-			account.Commission += withdrawal.Amount
+			account.Commission = refunded
 			if err := store.Wallet().UpdateCommission(ctx, account); err != nil {
 				return xerr.Wrapf(err, xerr.DatabaseUpdateError, "refund withdrawal commission failed")
 			}
-			entry := log.Commission{Type: log.CommissionTypeWithdraw, Amount: withdrawal.Amount, Timestamp: timeutil.Now().UnixMilli()}
+			entry := log.Commission{Type: log.CommissionTypeWithdraw, Amount: withdrawal.Amount, Balance: account.Commission, Timestamp: timeutil.Now().UnixMilli()}
 			content, err := entry.Marshal()
 			if err != nil {
 				return err
@@ -88,6 +91,16 @@ func (s *Service) ReviewWithdrawal(ctx context.Context, req *dto.ReviewWithdrawa
 		}
 		return nil
 	})
+}
+
+// addInt64 is a + b, reporting false when the sum does not fit an int64,
+// whatever the signs of the operands.
+func addInt64(a, b int64) (int64, bool) {
+	sum := a + b
+	if (b > 0 && sum < a) || (b < 0 && sum > a) {
+		return 0, false
+	}
+	return sum, true
 }
 
 func withdrawalDTO(item *walletEntity.Withdrawal) dto.WithdrawalLog {

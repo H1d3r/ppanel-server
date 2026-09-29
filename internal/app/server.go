@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/app/bootstrap"
+	"github.com/perfect-panel/server/internal/app/lifecycle"
 	"github.com/perfect-panel/server/internal/config"
 	httpserver "github.com/perfect-panel/server/internal/transport/http/server"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -35,6 +36,9 @@ type Dependencies struct {
 	// once the bootstrap migrated the schema; the identity facade provides
 	// it.
 	Identity IdentityStartup
+	// Bootstrapped tells the services that read the runtime settings, the
+	// task worker among them, that the bootstrap published them or failed.
+	Bootstrapped *lifecycle.Readiness
 }
 
 // IdentityStartup is the identity module's part of the server start: the
@@ -88,10 +92,13 @@ func (m *Service) Start() {
 		// Fail fast: serving with a partially loaded configuration would
 		// silently run with defaults such as open registration. Detail keeps
 		// the database failure behind a coded error, such as the first
-		// administrator's, in the line.
+		// administrator's, in the line. The services waiting for the
+		// settings learn of the failure before the process goes down.
 		logger.Errorf("bootstrap error: %s", xerr.Detail(err))
+		m.deps.Bootstrapped.Fail(err)
 		panic(err)
 	}
+	m.deps.Bootstrapped.Ready()
 	if err := m.deps.Identity.ValidateEmailIdentities(ctx); err != nil {
 		logger.Errorf("stored email identities: %s", xerr.Detail(err))
 		panic(err)

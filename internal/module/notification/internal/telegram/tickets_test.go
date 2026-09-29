@@ -93,9 +93,17 @@ func TestExpandShortcut(t *testing.T) {
 		{"rp_12", "text here", "rp", "12 text here"},
 		{"close_7", "", "close", "7"},
 		{"reopen_7", "", "reopen", "7"},
+		{"tickets_2", "", "tickets", "2"},
+		{"reset_5", "", "reset", "5"},
+		{"toggle_5", "", "toggle", "5"},
+		{"ban_9", "", "ban", "9"},
+		{"user_9", "", "user", "9"},
+		{"user_sub_9", "", "user_sub", "9"},
+		{"user_log_9", "", "user_log", "9"},
 		{"tk_x", "", "tk_x", ""},
 		{"tk_", "", "tk_", ""},
 		{"user_sub", "5", "user_sub", "5"},
+		{"user_log", "", "user_log", ""},
 		{"tickets_waiting", "", "tickets_waiting", ""},
 		{"confirm_ab12", "", "confirm_ab12", ""},
 	} {
@@ -104,7 +112,9 @@ func TestExpandShortcut(t *testing.T) {
 			t.Errorf("expandShortcut(%q, %q) = %q, %q; want %q, %q", tc.command, tc.args, gotCommand, gotArgs, tc.wantCommand, tc.wantArgs)
 		}
 	}
-	if !isAdminCommand("tk_12") {
-		t.Error("a ticket shortcut is not treated as an admin command in private chats")
+	for _, shortcut := range []string{"tk_12", "tickets_2", "user_sub_9", "ban_9"} {
+		if !isAdminCommand(shortcut) {
+			t.Errorf("the shortcut %q is not treated as an admin command", shortcut)
+		}
 	}
 }

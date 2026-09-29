@@ -87,6 +87,22 @@ func (s redisTelegramStore) Get(ctx context.Context, key string) (string, error)
 	return s.client.Get(ctx, key).Result()
 }
 
+// getDelScript is GETDEL: the read and the delete run as one script, which
+// keeps them atomic on Redis versions older than 6.2, the oldest the install
+// guide supports. A missing key returns the nil reply, read as redis.Nil.
+var getDelScript = redis.NewScript(`
+local value = redis.call("GET", KEYS[1])
+if not value then
+  return false
+end
+redis.call("DEL", KEYS[1])
+return value
+`)
+
+func (s redisTelegramStore) GetDel(ctx context.Context, key string) (string, error) {
+	return getDelScript.Run(ctx, s.client, []string{key}).Text()
+}
+
 func (s redisTelegramStore) Set(ctx context.Context, key, value string, ttl time.Duration) error {
 	return s.client.Set(ctx, key, value, ttl).Err()
 }

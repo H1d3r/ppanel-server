@@ -16,12 +16,6 @@ import (
 	"github.com/perfect-panel/server/pkg/logger"
 )
 
-// epayUnpaidCloseAge is the order age after which an EPay order the gateway
-// lists as unpaid may close. EPay cannot cancel an issued payment URL, so the
-// payment window is doubled for a payer who opened the gateway page near
-// expiry; a payment arriving after the close is rejected.
-const epayUnpaidCloseAge = 2 * order.PaymentWindow
-
 // epayCurrency is the only currency EPay-compatible gateways collect.
 const epayCurrency = "CNY"
 
@@ -79,7 +73,8 @@ func (g *epayGateway) StartPayment(_ context.Context, c Checkout) (*dto.Checkout
 // no cancellation API, and a late callback on a closed order is rejected
 // rather than reopened or refunded. A paid order is settled; an order the
 // gateway explicitly lists as awaiting payment closes once it is
-// epayUnpaidCloseAge old. Any other answer — a failed, unsupported or
+// order.UnpaidCloseAge old, so a payer who opened the gateway page near
+// expiry still finishes. Any other answer — a failed, unsupported or
 // unavailable query, or a status that is neither paid nor awaiting payment —
 // leaves the payment state unknown, so the order stays pending for retry or
 // manual resolution instead of losing funds. An explicit cancellation is the
@@ -107,8 +102,8 @@ func (g *epayGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconcil
 		if !result.Unpaid {
 			return Reconciliation{}, fmt.Errorf("cannot safely expire EPay order %s: gateway reports it neither paid nor awaiting payment: %w", o.OrderNo, ErrUnconfirmed)
 		}
-		if time.Since(o.CreatedAt) < epayUnpaidCloseAge {
-			return Reconciliation{}, fmt.Errorf("unpaid EPay order %s stays pending until it is %s old: %w", o.OrderNo, epayUnpaidCloseAge, ErrUnconfirmed)
+		if time.Since(o.CreatedAt) < order.UnpaidCloseAge {
+			return Reconciliation{}, fmt.Errorf("unpaid EPay order %s stays pending until it is %s old: %w", o.OrderNo, order.UnpaidCloseAge, ErrUnconfirmed)
 		}
 		return Reconciliation{}, nil // the gateway confirms no payment after the extended window.
 	}

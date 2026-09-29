@@ -62,15 +62,16 @@ func newAdminService(f *subtest.Fixture, singleModel bool) *Service {
 // new term.
 func TestUpdateUserSubscribeKeepsTheOwnersNoteAndCredentials(t *testing.T) {
 	tests := []struct {
-		name       string
-		expiredAt  func() int64
-		wantStatus uint8
+		name        string
+		expiredAt   func() int64
+		wantStatus  uint8
+		wantNoLimit bool
 	}{
-		// ExpiredAt 0 is the no-limit sentinel and stays active; the node
-		// user list would drop an Expired one.
-		{"no-limit sentinel stays active", func() int64 { return 0 }, usersub.SubscribeStatusActive},
-		{"past expiry marks expired", func() int64 { return time.Now().Add(-time.Hour).UnixMilli() }, usersub.SubscribeStatusExpired},
-		{"future expiry is active", func() int64 { return time.Now().Add(time.Hour).UnixMilli() }, usersub.SubscribeStatusActive},
+		// ExpiredAt 0 means no time limit: the stored marker stays active;
+		// the node user list would drop an Expired one.
+		{"no-limit marker stays active", func() int64 { return 0 }, usersub.SubscribeStatusActive, true},
+		{"past expiry marks expired", func() int64 { return time.Now().Add(-time.Hour).UnixMilli() }, usersub.SubscribeStatusExpired, false},
+		{"future expiry is active", func() int64 { return time.Now().Add(time.Hour).UnixMilli() }, usersub.SubscribeStatusActive, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,7 +97,27 @@ func TestUpdateUserSubscribeKeepsTheOwnersNoteAndCredentials(t *testing.T) {
 			if got.SubscribeId != 2 || got.Traffic != 100 || got.Upload != 3 || got.Download != 4 || got.FinishedAt != nil || got.Status != tt.wantStatus {
 				t.Fatalf("edit not applied: %+v, want status %d", got, tt.wantStatus)
 			}
+			if usersub.NoExpiry(got.ExpireTime) != tt.wantNoLimit || (tt.wantNoLimit && !got.ExpireTime.Equal(usersub.NoLimitExpiry())) {
+				t.Fatalf("stored expiry = %v, want no limit %v", got.ExpireTime, tt.wantNoLimit)
+			}
 		})
+	}
+}
+
+// An administrator's subscription without a term end stores the no-limit
+// marker and is active.
+func TestCreateUserSubscribeWithoutTermEndHasNoLimit(t *testing.T) {
+	f := subtest.New(t)
+	f.Plan(t, subscribe.Subscribe{Id: 1, Traffic: 50})
+	if err := newAdminService(f, false).CreateUserSubscribe(context.Background(), &dto.CreateUserSubscribeRequest{UserId: 7, SubscribeId: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var created usersub.Subscribe
+	if err := f.DB.Where("user_id = 7").First(&created).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !usersub.NoExpiry(created.ExpireTime) || !created.ExpireTime.Equal(usersub.NoLimitExpiry()) || created.Status != usersub.SubscribeStatusActive || !created.ServableAt(time.Now()) {
+		t.Fatalf("created %+v, want an active subscription without a time limit", created)
 	}
 }
 
@@ -121,7 +142,7 @@ func TestResetUserSubscribeTrafficReactivatesExhaustedSubscriptions(t *testing.T
 		wantStatus uint8
 	}{
 		{"exhausted in term", usersub.SubscribeStatusFinished, future, usersub.SubscribeStatusActive},
-		{"exhausted without time limit", usersub.SubscribeStatusFinished, usersub.NoLimitExpiry, usersub.SubscribeStatusActive},
+		{"exhausted without time limit", usersub.SubscribeStatusFinished, usersub.NoLimitExpiry(), usersub.SubscribeStatusActive},
 		{"exhausted and expired", usersub.SubscribeStatusFinished, past, usersub.SubscribeStatusFinished},
 		{"expired", usersub.SubscribeStatusExpired, past, usersub.SubscribeStatusExpired},
 		{"stopped", usersub.SubscribeStatusStopped, future, usersub.SubscribeStatusStopped},

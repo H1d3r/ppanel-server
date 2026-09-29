@@ -28,7 +28,7 @@ func TestCheckSubscriptionsFinishesExhaustedAndExpiredSubscriptions(t *testing.T
 	expired := f.Subscription(t, usersub.Subscribe{UserId: 2, SubscribeId: 1, ExpireTime: past, Status: usersub.SubscribeStatusActive})
 	legacyPending := f.Subscription(t, usersub.Subscribe{UserId: 3, SubscribeId: 1, ExpireTime: past, Status: usersub.SubscribeStatusPending})
 	running := f.Subscription(t, usersub.Subscribe{UserId: 4, SubscribeId: 1, ExpireTime: future, Traffic: 100, Upload: 10, Status: usersub.SubscribeStatusActive})
-	unlimited := f.Subscription(t, usersub.Subscribe{UserId: 5, SubscribeId: 1, ExpireTime: usersub.NoLimitExpiry, Traffic: 0, Upload: 1 << 40, Status: usersub.SubscribeStatusActive})
+	unlimited := f.Subscription(t, usersub.Subscribe{UserId: 5, SubscribeId: 1, ExpireTime: usersub.NoLimitExpiry(), Traffic: 0, Upload: 1 << 40, Status: usersub.SubscribeStatusActive})
 	stopped := f.Subscription(t, usersub.Subscribe{UserId: 6, SubscribeId: 1, ExpireTime: past, Status: usersub.SubscribeStatusStopped})
 	if _, err := f.Store.UserSubscription().FindOneSubscribeByToken(ctx, "exhausted-token"); err != nil {
 		t.Fatal(err)

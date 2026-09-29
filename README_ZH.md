@@ -98,6 +98,8 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
        volumes:
          - ./etc:/app/etc
        environment:
+         # 可选，只影响容器内的其他工具：服务本身按 AppLocation（etc/ppanel.yaml）计时，
+         # 且任何 IANA 时区都可用，因为二进制内嵌了时区数据库（time/tzdata）。
          - TZ=Asia/Shanghai
    ```
    运行：

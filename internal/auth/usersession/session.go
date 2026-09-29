@@ -2,7 +2,10 @@
 // a signed token plus a Redis record under its session id. Every token also
 // carries the user's session epoch from when it was issued; revoking replaces
 // the epoch, which invalidates every token issued before. Password changes
-// and resets revoke, so a stolen session does not outlive them.
+// and resets revoke, so a stolen session does not outlive them. A sign-in
+// reads the epoch before it checks the credential and gets its session only
+// if the epoch is still the same, so a revocation racing the sign-in does not
+// leave a valid session behind either.
 package usersession
 
 import (
@@ -51,6 +54,10 @@ var (
 	// ErrRevoked reports a session issued before the user's latest
 	// revocation.
 	ErrRevoked = errors.New("session revoked")
+	// ErrEpochMoved reports a sign-in whose credential check a revocation
+	// overtook: the epoch read before the check is no longer the current
+	// one, so no session is issued.
+	ErrEpochMoved = errors.New("user sessions were revoked during sign-in")
 	// ErrDeviceSession reports device claims that are malformed or missing
 	// from a device session; the client has to sign in again.
 	ErrDeviceSession = errors.New("device session must be renewed")
@@ -106,6 +113,12 @@ type Grant struct {
 	// DeviceID binds the session to a device, so revoking the device ends it;
 	// 0 issues a session bound to no device.
 	DeviceID int64
+	// Epoch is the user's epoch the sign-in read (AcquireEpoch) before it
+	// checked the credential. A revocation that lands between the check and
+	// the session would otherwise be carried by the new token, so Issue
+	// refuses with ErrEpochMoved once the epoch differs. Empty skips the
+	// comparison.
+	Epoch string
 }
 
 // Issue signs a session token for grant that lives for lifetime seconds and
@@ -121,6 +134,9 @@ func Issue(ctx context.Context, client Store, secret string, lifetime int64, gra
 	epoch, err := AcquireEpoch(ctx, client, grant.UserID)
 	if err != nil {
 		return "", fmt.Errorf("acquire session epoch: %w", err)
+	}
+	if grant.Epoch != "" && epoch != grant.Epoch {
+		return "", ErrEpochMoved
 	}
 	options := []token.Option{
 		token.WithOption(UserIDClaim, grant.UserID),
@@ -225,10 +241,68 @@ func AcquireEpoch(ctx context.Context, client Store, userID int64) (string, erro
 
 // Revoke invalidates every session issued to the user so far.
 func Revoke(ctx context.Context, client Store, userID int64) error {
+	_, err := Rotate(ctx, client, userID)
+	return err
+}
+
+// Rotate invalidates every session issued to the user so far and returns
+// the epoch the sessions issued from now on carry. A flow that signs the
+// user in right after revoking, such as a password reset, pins its session
+// to that epoch (Grant.Epoch), so a revocation racing it cannot leave the
+// session valid.
+func Rotate(ctx context.Context, client Store, userID int64) (string, error) {
 	if missing(client) || userID <= 0 {
-		return ErrUnavailable
+		return "", ErrUnavailable
 	}
-	return client.Set(ctx, Key(userID), revokedPrefix+uuid.NewV7().String(), 0).Err()
+	epoch := revokedPrefix + uuid.NewV7().String()
+	if err := client.Set(ctx, Key(userID), epoch, 0).Err(); err != nil {
+		return "", err
+	}
+	return epoch, nil
+}
+
+// RevokedSince reports whether the user's sessions were revoked at or after
+// since. A revocation epoch carries the time it was created (a UUID v7, to
+// the millisecond), so a capability handed out before the revocation, such
+// as a guest order's checkout token, can be refused without a second record.
+// A revocation in the same millisecond as since, or whose time cannot be
+// read, counts as one after since.
+func RevokedSince(ctx context.Context, client Store, userID int64, since time.Time) (bool, error) {
+	if missing(client) || userID <= 0 {
+		return false, ErrUnavailable
+	}
+	epoch, err := client.Get(ctx, Key(userID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	revokedAt, revoked := RevocationTime(epoch)
+	if !revoked {
+		return false, nil
+	}
+	return revokedAt.IsZero() || !revokedAt.Before(since.Truncate(time.Millisecond)), nil
+}
+
+// RevocationTime returns when a revocation epoch was created and whether the
+// epoch came from a revocation at all; the zero time reports a revocation
+// whose time cannot be read.
+func RevocationTime(epoch string) (time.Time, bool) {
+	raw, ok := strings.CutPrefix(epoch, revokedPrefix)
+	if !ok {
+		return time.Time{}, false
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil || id[6]>>4 != 7 {
+		return time.Time{}, true
+	}
+	// The first 48 bits of a UUID v7 are its Unix millisecond timestamp.
+	var millis int64
+	for _, b := range id[:6] {
+		millis = millis<<8 | int64(b)
+	}
+	return time.UnixMilli(millis), true
 }
 
 // Check reports whether a token's claims are still valid against the user's

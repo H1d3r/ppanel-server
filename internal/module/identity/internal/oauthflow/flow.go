@@ -55,9 +55,11 @@ func New(deps Deps) *Flow {
 	return &Flow{deps: deps}
 }
 
-// AuthURL returns the URL starting a sign-in through method that comes back
-// to redirect.
-func (f *Flow) AuthURL(ctx context.Context, method, redirect string) (string, error) {
+// AuthURL returns the URL starting a round trip through method, in scope,
+// that comes back to redirect. The state it issues is redeemed only by a
+// callback of the same scope: a sign-in's state cannot complete a binding,
+// and a binding's state completes only for the account it was issued for.
+func (f *Flow) AuthURL(ctx context.Context, scope oauthstate.Scope, method, redirect string) (string, error) {
 	spec, provider, err := f.provider(ctx, method)
 	if err != nil {
 		return "", err
@@ -69,7 +71,7 @@ func (f *Flow) AuthURL(ctx context.Context, method, redirect string) (string, er
 	}
 	state := ""
 	if spec.State {
-		if state, err = oauthstate.Issue(ctx, f.deps.Redis, method, redirect); err != nil {
+		if state, err = oauthstate.Issue(ctx, f.deps.Redis, method, scope, redirect); err != nil {
 			return "", xerr.Wrapf(err, xerr.ERROR, "store %s state", method)
 		}
 	}
@@ -80,10 +82,11 @@ func (f *Flow) AuthURL(ctx context.Context, method, redirect string) (string, er
 	return uri, nil
 }
 
-// Identify completes the round trip of a callback through method and returns
-// the identity the provider vouches for. A state-based callback redeems its
-// state; a single-use one (Telegram) is redeemed here too.
-func (f *Flow) Identify(ctx context.Context, method string, fields map[string]any) (*oauthprovider.Identity, error) {
+// Identify completes the round trip of a callback through method, in scope,
+// and returns the identity the provider vouches for. A state-based callback
+// redeems its state, which must have been issued in the same scope; a
+// single-use one (Telegram) is redeemed here too.
+func (f *Flow) Identify(ctx context.Context, scope oauthstate.Scope, method string, fields map[string]any) (*oauthprovider.Identity, error) {
 	spec, ok := f.deps.Providers.Lookup(method)
 	if !ok {
 		return nil, notSupported(method)
@@ -95,9 +98,9 @@ func (f *Flow) Identify(ctx context.Context, method string, fields map[string]an
 		if strings.TrimSpace(state) == "" || strings.TrimSpace(code) == "" {
 			return nil, xerr.Errorf(xerr.InvalidParams, "%s callback needs a code and a state", method)
 		}
-		redirect, err := oauthstate.Consume(ctx, f.deps.Redis, method, state)
+		redirect, err := oauthstate.Consume(ctx, f.deps.Redis, method, scope, state)
 		if err != nil {
-			if errors.Is(err, oauthstate.ErrUnknown) {
+			if errors.Is(err, oauthstate.ErrUnknown) || errors.Is(err, oauthstate.ErrScope) {
 				return nil, xerr.Wrapf(err, xerr.OAuthStateInvalid, "redeem %s state", method)
 			}
 			return nil, xerr.Wrapf(err, xerr.ERROR, "redeem %s state", method)

@@ -692,9 +692,19 @@ func (m *UserRepo) InsertUserAuthMethods(ctx context.Context, data *user.AuthMet
 		}
 		// The database write is the source of truth. Cache invalidation is queued
 		// for Store.InTx and best-effort for standalone writes.
-		_ = m.ClearUserCache(ctx, u)
+		_ = m.clearBindingCache(ctx, u, data)
 		return nil
 	})
+}
+
+// clearBindingCache drops the cached rows a binding write changed: the
+// account's, as loaded before the write, and the written identifier's own
+// lookup. The account's keys cover only the identifiers it had before the
+// write, while the new identifier's lookup may hold a remembered miss from
+// the duplicate check that preceded the write.
+func (m *UserRepo) clearBindingCache(ctx context.Context, u *user.User, binding *user.AuthMethods) error {
+	keys := append(m.getCacheKeys(u), binding.GetCacheKeys()...)
+	return m.CachedConn.DelCacheCtx(ctx, keys...)
 }
 
 func (m *UserRepo) UpdateUserAuthMethods(ctx context.Context, data *user.AuthMethods) error {
@@ -718,7 +728,7 @@ func (m *UserRepo) UpdateUserAuthMethods(ctx context.Context, data *user.AuthMet
 		}
 		// See InsertUserAuthMethods: never report a committed database update as
 		// failed solely because Redis is unavailable.
-		_ = m.ClearUserCache(ctx, u)
+		_ = m.clearBindingCache(ctx, u, data)
 		return nil
 	})
 }

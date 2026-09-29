@@ -2,6 +2,7 @@ package profile
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -10,6 +11,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/internal/identitytest"
 	"github.com/perfect-panel/server/internal/module/identity/internal/oauthflow"
 	"github.com/perfect-panel/server/internal/module/identity/internal/oauthprovider"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
 	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
@@ -97,6 +99,31 @@ func TestBindOAuthCallbackBindsTheIdentityOnce(t *testing.T) {
 	}
 }
 
+// An administrator's binding from before bindings were flagged verified is
+// stored unverified, which refuses its sign-in. Its owner proving the
+// identity with the provider verifies it; another account proving it is
+// still refused and verifies nothing.
+func TestBindOAuthCallbackVerifiesTheCallersOwnUnverifiedBinding(t *testing.T) {
+	f := newBindFixture(t)
+	owner, other := f.user(t), f.user(t)
+	if err := f.DB.Create(&user.AuthMethods{UserId: owner.Id, AuthType: "telegram", AuthIdentifier: "42"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	assertCode(t, f.bind(other), xerr.UserExist)
+	if identities := f.Identities(t, owner.Id); identities[0].Verified {
+		t.Fatal("another account's proof verified the binding")
+	}
+
+	if err := f.bind(owner); err != nil {
+		t.Fatalf("BindOAuthCallback() error = %v", err)
+	}
+	identities := f.Identities(t, owner.Id)
+	if len(identities) != 1 || identities[0].AuthIdentifier != "42" || !identities[0].Verified {
+		t.Fatalf("identities = %+v, want the one binding verified", identities)
+	}
+}
+
 // An identity belongs to one account, and an account holds one identity of a
 // method.
 func TestBindOAuthCallbackRefusesTakenIdentitiesAndSecondOnes(t *testing.T) {
@@ -129,8 +156,89 @@ func TestBindOAuthCallbackNeedsASignedInUserAndAnObject(t *testing.T) {
 
 func TestBindOAuthStartsTheProviderRoundTrip(t *testing.T) {
 	f := newBindFixture(t)
-	resp, err := f.svc.BindOAuth(context.Background(), &dto.BindOAuthRequest{Method: "telegram", Redirect: "https://panel.example/bind"})
+	resp, err := f.svc.BindOAuth(user.NewContext(context.Background(), f.user(t)), &dto.BindOAuthRequest{Method: "telegram", Redirect: "https://panel.example/bind"})
 	if err != nil || resp.Redirect == "" {
 		t.Fatalf("BindOAuth() = %+v, %v", resp, err)
+	}
+	_, err = f.svc.BindOAuth(context.Background(), &dto.BindOAuthRequest{Method: "telegram", Redirect: "https://panel.example/bind"})
+	assertCode(t, err, xerr.InvalidAccess)
+}
+
+// stateProvider is a state-based provider vouching for one identity.
+type stateProvider struct{ subject string }
+
+func (p *stateProvider) AuthURL(_, state string) (string, error) {
+	return "https://provider.example/authorize?state=" + state, nil
+}
+
+func (p *stateProvider) Identify(context.Context, oauthprovider.Callback) (*oauthprovider.Identity, error) {
+	return &oauthprovider.Identity{Subject: p.subject}, nil
+}
+
+// A binding's state completes only the binding of the account that started
+// it, and a sign-in's state completes no binding: an attacker's code and
+// state cannot bind the attacker's identity to a victim who is tricked into
+// finishing the callback.
+func TestBindOAuthCallbackRedeemsOnlyTheCallersOwnBindingState(t *testing.T) {
+	logtest.Discard(t)
+	env := identitytest.New(t)
+	env.EnableMethod(t, "github", "{}")
+	flow := oauthflow.New(oauthflow.Deps{
+		Auths: env.Store.Auth(),
+		Redis: env.Redis,
+		Providers: oauthprovider.Registry{
+			"github": {State: true, New: func(string) (oauthprovider.Provider, error) { return &stateProvider{subject: "583231"}, nil }},
+		},
+	})
+	svc := NewService(Deps{
+		UserAuth:  env.Store.UserAuth(),
+		UserCache: env.Store.UserCache(),
+		Redis:     env.Redis,
+		Policy:    registerpolicy.New(registerpolicy.Deps{Auths: env.Store.Auth(), Config: func() registerpolicy.Snapshot { return registerpolicy.Snapshot{} }}),
+		OAuth:     flow,
+	})
+	enabled := true
+	owner, victim := &user.User{Enable: &enabled}, &user.User{Enable: &enabled}
+	for _, u := range []*user.User{owner, victim} {
+		if err := env.DB.Create(u).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	callback := func(started *dto.BindOAuthResponse) map[string]any {
+		parsed, err := url.Parse(started.Redirect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]any{"code": "authorization-code", "state": parsed.Query().Get("state")}
+	}
+	bind := func(u *user.User, fields map[string]any) error {
+		return svc.BindOAuthCallback(user.NewContext(context.Background(), u), &dto.BindOAuthCallbackRequest{Method: "github", Callback: fields})
+	}
+
+	started, err := svc.BindOAuth(user.NewContext(context.Background(), owner), &dto.BindOAuthRequest{Method: "github", Redirect: "https://panel.example/bind"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCode(t, bind(victim, callback(started)), xerr.OAuthStateInvalid)
+	if n := len(env.Identities(t, victim.Id)); n != 0 {
+		t.Fatalf("victim identities = %d, want none", n)
+	}
+
+	loginState, err := oauthstate.Issue(context.Background(), env.Redis, "github", oauthstate.LoginScope(), "https://panel.example/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCode(t, bind(owner, map[string]any{"code": "authorization-code", "state": loginState}), xerr.OAuthStateInvalid)
+
+	started, err = svc.BindOAuth(user.NewContext(context.Background(), owner), &dto.BindOAuthRequest{Method: "github", Redirect: "https://panel.example/bind"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bind(owner, callback(started)); err != nil {
+		t.Fatalf("the issuing account's binding: %v", err)
+	}
+	identities := env.Identities(t, owner.Id)
+	if len(identities) != 1 || identities[0].AuthType != "github" || identities[0].AuthIdentifier != "583231" || !identities[0].Verified {
+		t.Fatalf("owner identities = %+v", identities)
 	}
 }

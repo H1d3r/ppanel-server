@@ -291,13 +291,21 @@ func (dm *DeviceManager) StartHeartbeatCheck() {
 func (dm *DeviceManager) checkHeartbeats() {
 	now := time.Now()
 
-	dm.userDevices.Range(func(userID, val any) bool {
+	dm.userDevices.Range(func(userID, _ any) bool {
 		uid := userID.(int64)
 
 		mu := dm.getUserMutex(uid)
 		mu.Lock()
 		defer mu.Unlock()
 
+		// Range's value predates the lock: a device that connected while
+		// the sweep waited for it is only in the list stored now. The list
+		// is rebuilt from that one, or the device would be dropped from
+		// the map with its socket open and its online count kept.
+		val, ok := dm.userDevices.Load(uid)
+		if !ok {
+			return true
+		}
 		devices := val.([]*Device)
 		var activeDevices []*Device
 		for _, d := range devices {

@@ -57,8 +57,10 @@ func (s *Service) PreCreateOrder(ctx context.Context, req *dto.PurchaseOrderRequ
 	}, nil
 }
 
-// ensureRenewable checks the subscription a renewal preview names: it must
-// be the buyer's, of the previewed plan, and not refunded.
+// ensureRenewable checks the subscription a renewal preview names under the
+// rules Renewal applies: it must be the buyer's, of the previewed plan,
+// managed locally rather than by a payment provider, and neither refunded
+// nor stopped.
 func (s *Service) ensureRenewable(ctx context.Context, userID, userSubscribeID, planID int64) error {
 	userSubscribe, err := s.deps.UserSubs.FindOneSubscribe(ctx, userSubscribeID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -73,8 +75,11 @@ func (s *Service) ensureRenewable(ctx context.Context, userID, userSubscribeID, 
 	if userSubscribe.SubscribeId != planID {
 		return xerr.Errorf(xerr.InvalidParams, "user subscribe does not match subscribe plan")
 	}
-	if userSubscribe.Status == usersub.SubscribeStatusDeducted {
-		return xerr.Errorf(xerr.InvalidParams, "user subscribe status does not allow renewal")
+	if userSubscribe.EntitlementSource != "" {
+		return usersub.ErrProviderManaged
+	}
+	if usersub.OnHold(userSubscribe.Status) {
+		return xerr.Errorf(xerr.SubscribeNotAvailable, "refunded or stopped subscription cannot be renewed")
 	}
 	return nil
 }

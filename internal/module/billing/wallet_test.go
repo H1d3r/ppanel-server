@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	"github.com/perfect-panel/server/internal/module/billing/entity/wallet"
+	"github.com/perfect-panel/server/internal/module/billing/internal/billingtest"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 )
@@ -221,6 +223,73 @@ func TestSettleUnsubscribeRefundWithoutAnOrderOnlyMarks(t *testing.T) {
 	}
 }
 
+// A refund takes the commission back from the referrer credited when the
+// order settled: an administrator who moved the buyer under another referrer
+// in between must not have that referrer, who never received it, charged.
+func TestSettleUnsubscribeRefundChargesTheReferrerCredited(t *testing.T) {
+	f := newFacade(t)
+	credited := f.h.User(func(u *user.User) { u.ReferralPercentage = 20 })
+	buyer := f.h.User(func(u *user.User) { u.RefererId = credited.Id })
+	o := f.h.Order(&order.Order{OrderNo: "A", UserId: buyer.Id, Type: order.TypeSubscribe, Status: order.StatusPaid, Method: "stripe", Amount: 5000, IsNew: true})
+	ctx := context.Background()
+	if err := f.svc.SettleOrderCommission(ctx, "A", buyer.Id); err != nil {
+		t.Fatalf("SettleOrderCommission: %v", err)
+	}
+	if got := f.h.ReloadWallet(credited.Id); got.Commission != 1000 {
+		t.Fatalf("credited referrer commission = %d, want 1000", got.Commission)
+	}
+	successor := f.h.User()
+	if err := f.h.Store.User().UpdateColumns(ctx, buyer.Id, map[string]any{"referer_id": successor.Id}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.svc.SettleUnsubscribeRefund(ctx, buyer.Id, refundSubscription, o.Id, 2500); err != nil {
+		t.Fatalf("SettleUnsubscribeRefund: %v", err)
+	}
+	if got := f.h.ReloadWallet(credited.Id); got.Commission != 500 {
+		t.Fatalf("credited referrer commission = %d, want half of the 1000 taken back", got.Commission)
+	}
+	if logs := f.commissionLogs(t, credited.Id); len(logs) != 2 || logs[1].Type != logEntity.CommissionTypeRefund || logs[1].Amount != -500 || logs[1].OrderNo != "A" {
+		t.Fatalf("credited referrer commission logs = %+v", logs)
+	}
+	if got := f.h.ReloadWallet(successor.Id); got.Commission != 0 || len(f.commissionLogs(t, successor.Id)) != 0 {
+		t.Fatalf("the successor referrer was charged: %+v", got)
+	}
+}
+
+// Rejecting a withdrawal returns its amount to the commission even after a
+// refund clawed the commission below zero: the referrer withdrew everything,
+// then the referee's refund took 500 back.
+func TestReviewWithdrawalRefundsIntoANegativeCommission(t *testing.T) {
+	f := newFacade(t)
+	referrer := f.h.User()
+	buyer := f.h.User(func(u *user.User) { u.RefererId = referrer.Id })
+	f.wallet(t, referrer.Id, 0, 0, 1000)
+	o := f.h.Order(&order.Order{OrderNo: "A", UserId: buyer.Id, Type: order.TypeSubscribe, Status: order.StatusFinished, Method: "stripe", Amount: 2500, Commission: 500})
+	ctx := context.Background()
+	withdrawal, err := f.svc.CommissionWithdraw(billingtest.UserContext(referrer), &dto.CommissionWithdrawRequest{Amount: 1000, Content: "bank"})
+	if err != nil {
+		t.Fatalf("CommissionWithdraw: %v", err)
+	}
+	if err := f.svc.SettleUnsubscribeRefund(ctx, buyer.Id, refundSubscription, o.Id, 2500); err != nil {
+		t.Fatalf("SettleUnsubscribeRefund: %v", err)
+	}
+	if got := f.h.ReloadWallet(referrer.Id); got.Commission != -500 {
+		t.Fatalf("referrer commission = %d, want -500 after the claw-back", got.Commission)
+	}
+
+	if err := f.svc.ReviewWithdrawal(adminContext, &dto.ReviewWithdrawalRequest{Id: withdrawal.Id, Status: wallet.WithdrawalStatusRejected, Reason: "invalid account"}); err != nil {
+		t.Fatalf("ReviewWithdrawal: %v", err)
+	}
+	if got := f.h.ReloadWallet(referrer.Id); got.Commission != 500 {
+		t.Fatalf("referrer commission = %d, want the 1000 back on top of -500", got.Commission)
+	}
+	logs := f.commissionLogs(t, referrer.Id)
+	if len(logs) != 3 || logs[2].Type != logEntity.CommissionTypeWithdraw || logs[2].Amount != 1000 || logs[2].Balance != 500 {
+		t.Fatalf("commission logs = %+v, want the withdrawal, the claw-back and the refund to 500", logs)
+	}
+}
+
 // A quota task's gift is credited to the gift balance once per (task,
 // subscription), with its gift log dated at the task run.
 func TestCreditQuotaGiftCreditsOnce(t *testing.T) {
@@ -293,15 +362,19 @@ func TestCreditQuotaGiftMarksZeroAndRefusesOverflow(t *testing.T) {
 	}
 }
 
+// amount is a wallet amount an adjustment sets.
+func amount(v int64) *int64 { return &v }
+
 // An administrator's wallet edit sets the amounts under the wallet lock and
-// audits each one that changed; an unchanged wallet is left alone.
+// audits each one that changed with the change and the resulting amount, so
+// the amount before it is on record too; an unchanged wallet is left alone.
 func TestAdjustWalletAuditsEachChange(t *testing.T) {
 	f := newFacade(t)
 	owner := f.h.User()
 	f.wallet(t, owner.Id, 100, 50, 10)
 	ctx := context.Background()
 
-	if err := f.svc.AdjustWallet(ctx, wallet.Wallet{UserId: owner.Id, Balance: 100, GiftAmount: 50, Commission: 10}); err != nil {
+	if err := f.svc.AdjustWallet(ctx, wallet.Adjustment{UserId: owner.Id, Balance: amount(100), GiftAmount: amount(50), Commission: amount(10)}); err != nil {
 		t.Fatalf("unchanged AdjustWallet: %v", err)
 	}
 	for _, typ := range []logEntity.Type{logEntity.TypeBalance, logEntity.TypeGift, logEntity.TypeCommission} {
@@ -310,27 +383,63 @@ func TestAdjustWalletAuditsEachChange(t *testing.T) {
 		}
 	}
 
-	if err := f.svc.AdjustWallet(ctx, wallet.Wallet{UserId: owner.Id, Balance: 300, GiftAmount: 20, Commission: 10}); err != nil {
+	if err := f.svc.AdjustWallet(ctx, wallet.Adjustment{UserId: owner.Id, Balance: amount(300), GiftAmount: amount(20), Commission: amount(10)}); err != nil {
 		t.Fatalf("AdjustWallet: %v", err)
 	}
 	if got := f.h.ReloadWallet(owner.Id); got.Balance != 300 || got.GiftAmount != 20 || got.Commission != 10 {
 		t.Fatalf("wallet = %+v", got)
 	}
 	if logs := f.h.BalanceLogs(owner.Id); len(logs) != 1 || logs[0].Type != logEntity.BalanceTypeAdjust || logs[0].Amount != 200 || logs[0].Balance != 300 {
-		t.Fatalf("balance logs = %+v", logs)
+		t.Fatalf("balance logs = %+v, want +200 to 300", logs)
 	}
 	if logs := f.h.GiftLogs(owner.Id); len(logs) != 1 || logs[0].Type != logEntity.GiftTypeReduce || logs[0].Amount != -30 || logs[0].Balance != 20 || logs[0].Remark != "Admin adjustment" {
-		t.Fatalf("gift logs = %+v", logs)
+		t.Fatalf("gift logs = %+v, want -30 to 20", logs)
 	}
 	if logs := f.commissionLogs(t, owner.Id); len(logs) != 0 {
 		t.Fatalf("commission logs = %+v, want none for an unchanged commission", logs)
 	}
 
-	if err := f.svc.AdjustWallet(ctx, wallet.Wallet{UserId: owner.Id, Balance: 300, GiftAmount: 20, Commission: 4}); err != nil {
+	if err := f.svc.AdjustWallet(ctx, wallet.Adjustment{UserId: owner.Id, Balance: amount(300), GiftAmount: amount(20), Commission: amount(4)}); err != nil {
 		t.Fatalf("AdjustWallet: %v", err)
 	}
-	if logs := f.commissionLogs(t, owner.Id); len(logs) != 1 || logs[0].Type != logEntity.CommissionTypeAdjust || logs[0].Amount != -6 {
-		t.Fatalf("commission logs = %+v", logs)
+	if logs := f.commissionLogs(t, owner.Id); len(logs) != 1 || logs[0].Type != logEntity.CommissionTypeAdjust || logs[0].Amount != -6 || logs[0].Balance != 4 {
+		t.Fatalf("commission logs = %+v, want -6 to 4", logs)
+	}
+}
+
+// A wallet edit sets only the amounts it carries: the others keep the
+// purchases, refunds and claw-backs made since the administrator loaded the
+// form. An edit that carries no amount touches nothing, not even a wallet
+// row.
+func TestAdjustWalletLeavesOmittedAmountsAlone(t *testing.T) {
+	f := newFacade(t)
+	owner := f.h.User()
+	f.wallet(t, owner.Id, 100, 50, 10)
+	ctx := context.Background()
+	// Money moved after the form was loaded: a recharge and a claw-back.
+	if err := f.h.DB.Model(&wallet.Wallet{}).Where("user_id = ?", owner.Id).Updates(map[string]any{"balance": 700, "commission": -300}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.svc.AdjustWallet(ctx, wallet.Adjustment{UserId: owner.Id, GiftAmount: amount(80)}); err != nil {
+		t.Fatalf("AdjustWallet: %v", err)
+	}
+	if got := f.h.ReloadWallet(owner.Id); got.Balance != 700 || got.GiftAmount != 80 || got.Commission != -300 {
+		t.Fatalf("wallet = %+v, want only the gift amount set", got)
+	}
+	if logs := f.h.GiftLogs(owner.Id); len(logs) != 1 || logs[0].Type != logEntity.GiftTypeIncrease || logs[0].Amount != 30 || logs[0].Balance != 80 {
+		t.Fatalf("gift logs = %+v, want +30 to 80", logs)
+	}
+	if balances, commissions := f.h.BalanceLogs(owner.Id), f.commissionLogs(t, owner.Id); len(balances) != 0 || len(commissions) != 0 {
+		t.Fatalf("untouched amounts were audited: %+v %+v", balances, commissions)
+	}
+
+	other := f.h.User()
+	if err := f.svc.AdjustWallet(ctx, wallet.Adjustment{UserId: other.Id}); err != nil {
+		t.Fatalf("empty AdjustWallet: %v", err)
+	}
+	if w, err := f.svc.FindWallet(ctx, other.Id); err != nil || w != nil {
+		t.Fatalf("an empty adjustment opened a wallet: %+v, %v", w, err)
 	}
 }
 

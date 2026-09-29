@@ -42,6 +42,27 @@ func TestDeleteBeforeDeletesInBatchesUntilAShortOne(t *testing.T) {
 	}
 }
 
+// A batch size that cannot shrink the backlog must not spin: the caller gets
+// an error and the deleter is never called.
+func TestDeleteBeforeRejectsANonPositiveBatchSize(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		rows := &batchRows{left: 10}
+		done := make(chan error, 1)
+		go func() {
+			_, err := DeleteBefore(context.Background(), rows, time.Now(), size)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil || rows.calls != 0 {
+				t.Fatalf("batch size %d: error = %v after %d calls, want an error before any delete", size, err, rows.calls)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("batch size %d: DeleteBefore did not return", size)
+		}
+	}
+}
+
 func TestDeleteBeforeStopsAtAFailureAndCountsTheBatchesBefore(t *testing.T) {
 	rows := &batchRows{left: 50, failAt: 2}
 	deleted, err := DeleteBefore(context.Background(), rows, time.Now(), 10)

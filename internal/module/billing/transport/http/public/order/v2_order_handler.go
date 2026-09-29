@@ -130,6 +130,10 @@ func V2OrderSessionHandler(service billing.Service) app.HandlerFunc {
 			return
 		}
 		resp, err := service.V2Session(c, ctx.Param("orderNo"), req.CheckoutToken)
+		if err == nil {
+			// The answer carries a session token; no cache may keep it.
+			ctx.Header("Cache-Control", "no-store")
+		}
 		httpx.HttpResult(ctx, resp, err)
 	}
 }

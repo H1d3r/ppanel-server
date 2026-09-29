@@ -143,7 +143,7 @@ func TestRegistryDescribesThePlatforms(t *testing.T) {
 	for platform, want := range map[string]CallbackStyle{
 		"EPay":      {UniqueParams: true, TextReply: true, TextFailure: true},
 		"AlipayF2F": {TextReply: true},
-		"Stripe":    {Body: true},
+		"Stripe":    {Body: true, StatusFailure: true},
 		"Cryptomus": {Body: true, TextReply: true, TextFailure: true},
 	} {
 		style, ok := registry.CallbackStyle(platform)
@@ -207,5 +207,18 @@ func TestCryptomusReconcileWithoutCheckoutRequiresStableCheckout(t *testing.T) {
 	verdict, err := gw.Reconcile(context.Background(), CloseRequest{Order: &order.Order{OrderNo: "o"}})
 	if err != nil || !verdict.RequireStableCheckout || verdict.TradeNo != "" {
 		t.Fatalf("Reconcile = (%+v, %v)", verdict, err)
+	}
+}
+
+// Billing refunds only what it collected itself: the wallet balance and its
+// gateways, never a payment a provider such as an app store settles.
+func TestCollectsNamesBillingsOwnPaymentMethods(t *testing.T) {
+	for method, want := range map[string]bool{
+		"EPay": true, "AlipayF2F": true, "Stripe": true, "Cryptomus": true, "balance": true,
+		"AppleIAP": false, "CryptoSaaS": false, "": false,
+	} {
+		if got := Collects(method); got != want {
+			t.Errorf("Collects(%q) = %t, want %t", method, got, want)
+		}
 	}
 }

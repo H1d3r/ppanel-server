@@ -42,26 +42,46 @@ func TestSMTPSenderHonorsExplicitVerificationOptOut(t *testing.T) {
 	}
 }
 
-func TestSMTPClientImplicitTLSSelection(t *testing.T) {
+func TestSMTPClientTLSModeSelection(t *testing.T) {
 	for _, tt := range []struct {
-		port int
-		ssl  bool
-		want bool
+		port                       int
+		ssl, implicitTLS           bool
+		wantImplicit, wantRequired bool
 	}{
-		// 465 is SMTPS by definition, whatever the flag says.
-		{port: 465, ssl: false, want: true},
-		{port: 465, ssl: true, want: true},
-		// Elsewhere the flag selects implicit TLS...
-		{port: 2465, ssl: true, want: true},
-		{port: 2465, ssl: false, want: false},
-		// ...except on the relay and submission ports, which start plain.
-		{port: 587, ssl: true, want: false},
-		{port: 25, ssl: true, want: false},
+		// 465 is SMTPS by definition, whatever the flags say.
+		{port: 465, wantImplicit: true},
+		{port: 465, ssl: true, wantImplicit: true},
+		// On the relay and submission ports ssl means a mandatory STARTTLS:
+		// the providers document the flag on 587 and 2525.
+		{port: 25, ssl: true, wantRequired: true},
+		{port: 587, ssl: true, wantRequired: true},
+		{port: 2525, ssl: true, wantRequired: true},
+		// Without ssl the upgrade stays opportunistic.
+		{port: 587},
+		{port: 2525},
+		// implicit_tls starts with TLS on any port; ssl adds nothing then.
+		{port: 2465, implicitTLS: true, wantImplicit: true},
+		{port: 2465, implicitTLS: true, ssl: true, wantImplicit: true},
 	} {
-		client := NewSMTPClient(&SMTPConfig{Host: "smtp.example.test", Port: tt.port, SSL: tt.ssl})
-		if client.implicitTLS != tt.want {
-			t.Errorf("port %d ssl=%v: implicit TLS = %v, want %v", tt.port, tt.ssl, client.implicitTLS, tt.want)
+		client := NewSMTPClient(&SMTPConfig{Host: "smtp.example.test", Port: tt.port, SSL: tt.ssl, ImplicitTLS: tt.implicitTLS})
+		if client.implicitTLS != tt.wantImplicit || client.requireTLS != tt.wantRequired {
+			t.Errorf("port %d ssl=%v implicit_tls=%v: implicit TLS = %v, STARTTLS required = %v; want %v and %v",
+				tt.port, tt.ssl, tt.implicitTLS, client.implicitTLS, client.requireTLS, tt.wantImplicit, tt.wantRequired)
 		}
+	}
+}
+
+// implicit_tls starts the session with the TLS handshake, on any port.
+func TestSMTPClientImplicitTLSStartsWithTheHandshake(t *testing.T) {
+	cert := selfSignedCertificate(t)
+	relay := startFakeSMTP(t, relayOptions{cert: &cert, implicit: true})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, ImplicitTLS: true, From: "panel@example.test", InsecureSkipVerify: true})
+
+	if err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body"); err != nil {
+		t.Fatalf("send through an implicit TLS relay: %v", err)
+	}
+	if session := relay.session(); session.data == "" || session.tls {
+		t.Fatalf("session = %+v, want the message delivered without a STARTTLS upgrade", session)
 	}
 }
 
@@ -72,7 +92,7 @@ func TestSMTPClientRejectsUntrustedCertificate(t *testing.T) {
 	for name, implicit := range map[string]bool{"starttls": false, "implicit tls": true} {
 		t.Run(name, func(t *testing.T) {
 			relay := startFakeSMTP(t, relayOptions{cert: &cert, implicit: implicit})
-			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, SSL: implicit, From: "panel@example.test"})
+			client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, ImplicitTLS: implicit, From: "panel@example.test"})
 
 			err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body")
 
@@ -179,6 +199,41 @@ func TestSMTPClientStopsWhenTheContextEnds(t *testing.T) {
 	}
 }
 
+// The ssl flag means "encryption required", not "start with TLS": the relay
+// providers document it on their STARTTLS ports (2525, 587), where a TLS
+// handshake would meet a plaintext greeting. The session upgrades through
+// STARTTLS and the mail goes out.
+func TestSMTPClientSSLMeansSTARTTLSOnSubmissionPorts(t *testing.T) {
+	cert := selfSignedCertificate(t)
+	relay := startFakeSMTP(t, relayOptions{cert: &cert, auth: "PLAIN LOGIN"})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, SSL: true, User: "mailer", Pass: "s3cret", From: "panel@example.test", InsecureSkipVerify: true})
+
+	if err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body"); err != nil {
+		t.Fatalf("send with ssl through a STARTTLS relay: %v", err)
+	}
+	session := relay.session()
+	if !session.tls || session.data == "" || session.credentials != "mailer:s3cret" {
+		t.Fatalf("session = %+v, want STARTTLS, the credentials and the message", session)
+	}
+}
+
+// With ssl set, a relay that offers no STARTTLS (or a downgrade attack that
+// strips the extension) is refused before anything travels in the clear:
+// no credentials, no envelope, no message.
+func TestSMTPClientSSLRefusesARelayWithoutSTARTTLS(t *testing.T) {
+	relay := startFakeSMTP(t, relayOptions{auth: "PLAIN LOGIN"})
+	client := NewSMTPClient(&SMTPConfig{Host: "127.0.0.1", Port: relay.port, SSL: true, User: "mailer", Pass: "s3cret", From: "panel@example.test"})
+
+	err := client.SendContext(context.Background(), []string{"user@example.test"}, "subject", "body")
+
+	if !errors.Is(err, errSTARTTLSRequired) {
+		t.Fatalf("send error = %v, want the STARTTLS refusal", err)
+	}
+	if session := relay.session(); session.credentials != "" || session.from != "" || session.data != "" {
+		t.Fatalf("session = %+v, want nothing sent in the clear", session)
+	}
+}
+
 func selfSignedCertificate(t *testing.T) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -218,6 +273,8 @@ type smtpSession struct {
 	data        string
 	credentials string
 	quit        bool
+	// tls reports that the session was upgraded through STARTTLS.
+	tls bool
 }
 
 type fakeRelay struct {
@@ -316,6 +373,9 @@ func (r *fakeRelay) serve(conn net.Conn, starttls *tls.Config, auth string) {
 				return
 			}
 			conn, reader, starttls = tlsConn, bufio.NewReader(tlsConn), nil
+			r.mu.Lock()
+			r.got.tls = true
+			r.mu.Unlock()
 		case strings.HasPrefix(command, "AUTH PLAIN"):
 			parts := strings.Split(decode(strings.TrimSpace(line[len("AUTH PLAIN"):])), "\x00")
 			if len(parts) == 3 {

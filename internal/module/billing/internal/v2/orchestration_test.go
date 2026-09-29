@@ -8,6 +8,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/perfect-panel/server/internal/auth/token"
+	"github.com/perfect-panel/server/internal/auth/usersession"
 	"github.com/perfect-panel/server/internal/config"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -155,6 +156,23 @@ func TestV2GuestCapabilitySurvivesAccountActivation(t *testing.T) {
 	}
 }
 
+// settledEvents dates one order's payment event; a zero time is an order
+// without one.
+type settledEvents struct {
+	orderNo string
+	at      time.Time
+}
+
+func (e *settledEvents) ListAfter(_ context.Context, orderNo string, _ int64, _ int) ([]*order.Event, error) {
+	if orderNo != e.orderNo || e.at.IsZero() {
+		return nil, nil
+	}
+	return []*order.Event{{OrderNo: orderNo, EventType: order.EventTypePaymentPaid, CreatedAt: e.at}}, nil
+}
+
+// The V2 session endpoint follows the storefront's exchange rule: the
+// account must exist, the settlement must be within the window, and the
+// account's sessions must not have been revoked since.
 func TestV2GuestSessionExchangeRequiresActivatedAccount(t *testing.T) {
 	const guestCapability = "guest-checkout-capability"
 	orderInfo := &order.Order{
@@ -162,6 +180,7 @@ func TestV2GuestSessionExchangeRequiresActivatedAccount(t *testing.T) {
 		GuestCheckoutTokenHash: order.CheckoutTokenHash(guestCapability),
 	}
 	orders := &ticketOrders{order: orderInfo}
+	events := &settledEvents{orderNo: orderInfo.OrderNo, at: time.Now()}
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { _ = redisClient.Close() })
@@ -169,8 +188,9 @@ func TestV2GuestSessionExchangeRequiresActivatedAccount(t *testing.T) {
 		JwtSecret: "session-secret",
 		Orders:    orders,
 		Portal: portal.NewService(portal.Deps{
-			Sessions: redisClient,
-			Config:   portal.Config{JwtSecret: "session-secret", JwtExpire: 3600},
+			Sessions:    redisClient,
+			OrderEvents: events,
+			Config:      portal.Config{JwtSecret: "session-secret", JwtExpire: 3600},
 		}),
 	})
 	ctx := context.Background()
@@ -192,6 +212,22 @@ func TestV2GuestSessionExchangeRequiresActivatedAccount(t *testing.T) {
 		t.Fatalf("session cache = (%q, %v), want user 42", storedUserID, err)
 	}
 	_, err = svc.Session(ctx, orderInfo.OrderNo, "incorrect-capability")
+	assertCode(t, err, xerr.InvalidAccess)
+
+	// The capability is durable; the exchange is not.
+	events.at = time.Now().Add(-portal.GuestSessionExchangeWindow - time.Minute)
+	_, err = svc.Session(ctx, orderInfo.OrderNo, guestCapability)
+	assertCode(t, err, xerr.InvalidAccess)
+	events.at = time.Time{}
+	_, err = svc.Session(ctx, orderInfo.OrderNo, guestCapability)
+	assertCode(t, err, xerr.InvalidAccess)
+
+	// A password change or reset since the settlement ends the exchange too.
+	events.at = time.Now()
+	if err := usersession.Revoke(ctx, redisClient, 42); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Session(ctx, orderInfo.OrderNo, guestCapability)
 	assertCode(t, err, xerr.InvalidAccess)
 }
 
@@ -225,6 +261,30 @@ func TestValidateV2CreateRequestCanonicalizesGuestIdentity(t *testing.T) {
 	}
 	if req.Guest.Identifier != "+8615502505555" {
 		t.Fatalf("guest mobile = %q, want E.164", req.Guest.Identifier)
+	}
+}
+
+// The hash is stored on the order row, so it must not let a reader test
+// password guesses: two guest requests that differ only in the password
+// hash the same, and the password stays in the request for the replay check.
+func TestV2GuestRequestHashCarriesNoPassword(t *testing.T) {
+	ctx := context.Background()
+	first := v2GuestPurchase("email", "guest@example.com")
+	second := v2GuestPurchase("email", "guest@example.com")
+	second.Guest.Password = "another-password"
+	firstHash, err := requestHash(ctx, first)
+	if err != nil {
+		t.Fatalf("hash first request: %v", err)
+	}
+	secondHash, err := requestHash(ctx, second)
+	if err != nil {
+		t.Fatalf("hash second request: %v", err)
+	}
+	if firstHash != secondHash {
+		t.Fatal("the idempotency hash depends on the guest password")
+	}
+	if first.Guest.Password != "guest-password" {
+		t.Fatal("hashing must not strip the password from the request")
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -25,9 +27,11 @@ func TestPaymentNotifyHandler_writesErrorEnvelope_whenPlatformIsMissing(t *testi
 	engine.ServeHTTP(context.Background(), ctx)
 
 	// Then
-	assertPaymentNotifyError(t, ctx, "Internal Server Error")
+	assertPaymentNotifyError(t, ctx, http.StatusOK)
 }
 
+// Stripe reads the HTTP status: a missing payment method is a processing
+// failure it must retry.
 func TestPaymentNotifyHandler_preservesStripeRawPayloadAndSignature_whenPaymentIsMissing(t *testing.T) {
 	// Given
 	engine := server.Default()
@@ -41,9 +45,11 @@ func TestPaymentNotifyHandler_preservesStripeRawPayloadAndSignature_whenPaymentI
 	PaymentNotifyHandler(billing.New(billing.Deps{}))(context.WithValue(context.Background(), requestctx.CtxKeyPlatform, "Stripe"), ctx)
 
 	// Then
-	assertPaymentNotifyError(t, ctx, "Internal Server Error")
+	assertPaymentNotifyError(t, ctx, http.StatusInternalServerError)
 }
 
+// An oversized Stripe payload cannot be authenticated; it is refused for
+// good with 400.
 func TestPaymentNotifyHandler_returnsExistingErrorEnvelope_whenStripePayloadExceedsHistoricalLimit(t *testing.T) {
 	// Given
 	engine := server.Default()
@@ -56,7 +62,75 @@ func TestPaymentNotifyHandler_returnsExistingErrorEnvelope_whenStripePayloadExce
 	PaymentNotifyHandler(billing.New(billing.Deps{}))(context.WithValue(context.Background(), requestctx.CtxKeyPlatform, "Stripe"), ctx)
 
 	// Then
-	assertPaymentNotifyError(t, ctx, "Internal Server Error")
+	assertPaymentNotifyError(t, ctx, http.StatusBadRequest)
+}
+
+// notifyService answers every callback of one style with a fixed outcome.
+type notifyService struct {
+	billing.Service
+	style billing.PaymentCallbackStyle
+	err   error
+}
+
+func (s notifyService) PaymentCallbackStyle(string) (billing.PaymentCallbackStyle, bool) {
+	return s.style, true
+}
+
+func (s notifyService) PaymentNotify(context.Context, billing.PaymentNotification) error {
+	return s.err
+}
+
+// serveNotify posts an EPay-shaped form callback of platform to the handler.
+func serveNotify(t *testing.T, service billing.Service, platform string) *app.RequestContext {
+	t.Helper()
+	engine := server.Default()
+	ctx := engine.NewContext()
+	ctx.Request.SetRequestURI("/payment/notify")
+	ctx.Request.Header.SetMethod(http.MethodPost)
+	ctx.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	ctx.Request.SetBodyString("out_trade_no=order-1&trade_status=TRADE_SUCCESS&sign=test")
+	PaymentNotifyHandler(service)(context.WithValue(context.Background(), requestctx.CtxKeyPlatform, platform), ctx)
+	return ctx
+}
+
+// Stripe only reads the HTTP status of a webhook answer, so a failure must
+// not be HTTP 200: a callback redelivery cannot fix is 400, a processing
+// failure 500, and Stripe redelivers the latter. The other gateways keep the
+// bodies their protocols demand.
+func TestPaymentNotifyHandlerAnswersStripeFailuresWithAStatus(t *testing.T) {
+	stripe := billing.PaymentCallbackStyle{Body: true, StatusFailure: true}
+	invalid := fmt.Errorf("%w: verify signature", billing.ErrInvalidPaymentCallback)
+	processing := errors.New("database unavailable")
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"cannot be authenticated", invalid, http.StatusBadRequest},
+		{"processing failure", processing, http.StatusInternalServerError},
+		{"accepted", nil, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run("Stripe "+tt.name, func(t *testing.T) {
+			ctx := serveNotify(t, notifyService{style: stripe, err: tt.err}, "Stripe")
+			if tt.err == nil {
+				if ctx.Response.StatusCode() != http.StatusOK {
+					t.Fatalf("status = %d, want 200", ctx.Response.StatusCode())
+				}
+				return
+			}
+			assertPaymentNotifyError(t, ctx, tt.status)
+		})
+	}
+	epay := billing.PaymentCallbackStyle{UniqueParams: true, TextReply: true, TextFailure: true}
+	if ctx := serveNotify(t, notifyService{style: epay, err: processing}, "EPay"); ctx.Response.StatusCode() != http.StatusBadRequest || string(ctx.Response.Body()) != "database unavailable" {
+		t.Fatalf("EPay failure = %d %q, want 400 with the error text", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	if ctx := serveNotify(t, notifyService{style: epay}, "EPay"); ctx.Response.StatusCode() != http.StatusOK || string(ctx.Response.Body()) != "success" {
+		t.Fatalf("EPay success = %d %q, want 200 success", ctx.Response.StatusCode(), ctx.Response.Body())
+	}
+	alipay := billing.PaymentCallbackStyle{TextReply: true}
+	assertPaymentNotifyError(t, serveNotify(t, notifyService{style: alipay, err: processing}, "AlipayF2F"), http.StatusOK)
 }
 
 func TestPaymentNotifyHandler_acknowledgesEPayFormFailure_whenPaymentIsMissing(t *testing.T) {
@@ -158,10 +232,13 @@ func TestNotifyPayload_acceptsHistoricalLimitAndRejectsLargerPayload(t *testing.
 	}
 }
 
-func assertPaymentNotifyError(t *testing.T, ctx *app.RequestContext, wantMessage string) {
+// assertPaymentNotifyError checks a rejection answered with the error
+// envelope: wantStatus and the generic message that hides the cause.
+func assertPaymentNotifyError(t *testing.T, ctx *app.RequestContext, wantStatus int) {
 	t.Helper()
-	if got := ctx.Response.StatusCode(); got != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, got)
+	const wantMessage = "Internal Server Error"
+	if got := ctx.Response.StatusCode(); got != wantStatus {
+		t.Fatalf("expected status %d, got %d", wantStatus, got)
 	}
 	var response struct {
 		Msg string `json:"msg"`

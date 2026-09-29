@@ -66,13 +66,25 @@ type platformSpec struct {
 var platforms = map[payment.Platform]platformSpec{
 	payment.EPay:      {open: openEPay, normalize: normalizeEPay, style: CallbackStyle{UniqueParams: true, TextReply: true, TextFailure: true}},
 	payment.AlipayF2F: {open: openAlipay, normalize: normalizeAlipay, style: CallbackStyle{TextReply: true}},
-	payment.Stripe:    {open: openStripe, normalize: normalizeStripe, style: CallbackStyle{Body: true}},
+	payment.Stripe:    {open: openStripe, normalize: normalizeStripe, style: CallbackStyle{Body: true, StatusFailure: true}},
 	payment.Cryptomus: {open: openCryptomus, normalize: normalizeCryptomus, style: CallbackStyle{Body: true, TextReply: true, TextFailure: true}, stableCheckoutClose: true},
 }
 
 // Handles reports whether orders of platform are paid through a gateway.
 func (r *Registry) Handles(platform string) bool {
 	_, ok := platforms[payment.ParsePlatform(platform)]
+	return ok
+}
+
+// Collects reports whether billing itself collected the payments of method:
+// the wallet balance or a gateway of this registry. A method a provider
+// settles on its own, such as an app store, is not billing's to refund.
+func Collects(method string) bool {
+	platform := payment.ParsePlatform(method)
+	if platform == payment.Balance {
+		return true
+	}
+	_, ok := platforms[platform]
 	return ok
 }
 

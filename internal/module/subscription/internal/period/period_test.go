@@ -59,7 +59,7 @@ func TestTermEnd(t *testing.T) {
 		{UnitDay, 30, time.Date(2026, 3, 2, 10, 30, 0, 0, shanghai)},
 		{UnitHour, 25, time.Date(2026, 2, 1, 11, 30, 0, 0, shanghai)},
 		{UnitMinute, 90, time.Date(2026, 1, 31, 12, 0, 0, 0, shanghai)},
-		{UnitNoLimit, 3, usersub.NoLimitExpiry},
+		{UnitNoLimit, 3, usersub.NoLimitExpiry()},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s x%d", tt.unit, tt.quantity), func(t *testing.T) {

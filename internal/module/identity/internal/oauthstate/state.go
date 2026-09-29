@@ -1,11 +1,13 @@
 // Package oauthstate owns the OAuth state round trip: the state issued with
-// an authorization URL, stored with the redirect it belongs to, and redeemed
-// once by the callback. It also pins redirects to the site host and makes
-// signed callbacks without a state single use.
+// an authorization URL, stored with the redirect and the purpose it belongs
+// to, and redeemed once by the callback of that purpose. It also pins
+// redirects to the site host and makes signed callbacks without a state
+// single use.
 package oauthstate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -17,9 +19,48 @@ import (
 // its callback.
 const TTL = 5 * time.Minute
 
-// ErrUnknown reports a state that was never issued, was already redeemed or
-// expired.
-var ErrUnknown = errors.New("oauth state is unknown, used or expired")
+var (
+	// ErrUnknown reports a state that was never issued, was already redeemed
+	// or expired.
+	ErrUnknown = errors.New("oauth state is unknown, used or expired")
+	// ErrScope reports a state redeemed by another flow than the one it was
+	// issued for: a sign-in state on a binding callback, or a binding state
+	// on a sign-in or on another account's binding.
+	ErrScope = errors.New("oauth state was issued for another purpose or account")
+)
+
+// Purpose is what a state was issued for.
+type Purpose string
+
+const (
+	// Login states sign an account in or register one.
+	Login Purpose = "login"
+	// Bind states bind the identity to the signed-in account.
+	Bind Purpose = "bind"
+)
+
+// Scope ties a state to the flow that issued it: its purpose and, for a
+// binding, the account. A callback redeems a state only within the scope it
+// was issued in, so an attacker's code and state cannot be completed on a
+// victim's binding, nor a binding state on a sign-in.
+type Scope struct {
+	Purpose Purpose
+	// UserID is the account a binding is for; 0 for a sign-in.
+	UserID int64
+}
+
+// LoginScope is the scope of a sign-in.
+func LoginScope() Scope { return Scope{Purpose: Login} }
+
+// BindScope is the scope of binding an identity to the account userID.
+func BindScope(userID int64) Scope { return Scope{Purpose: Bind, UserID: userID} }
+
+// record is what a state stores.
+type record struct {
+	Redirect string  `json:"redirect"`
+	Purpose  Purpose `json:"purpose"`
+	UserID   int64   `json:"user_id,omitempty"`
+}
 
 var consumeScript = redis.NewScript(`
 local value = redis.call("GET", KEYS[1])
@@ -30,36 +71,69 @@ redis.call("DEL", KEYS[1])
 return value
 `)
 
-// key is where the state of a sign-in through method is stored.
+// key is where the state of a round trip through method is stored.
 func key(method, state string) string { return method + ":" + state }
 
-// Issue creates the state of a sign-in through method that comes back to
-// redirect, and returns it for the authorization URL.
-func Issue(ctx context.Context, client *redis.Client, method, redirect string) (string, error) {
+// Issue creates the state of a round trip through method, in scope, that
+// comes back to redirect, and returns it for the authorization URL.
+func Issue(ctx context.Context, client *redis.Client, method string, scope Scope, redirect string) (string, error) {
+	value, err := json.Marshal(record{Redirect: redirect, Purpose: scope.Purpose, UserID: scope.UserID})
+	if err != nil {
+		return "", err
+	}
 	state := random.KeyNew(32, 1)
-	if err := client.Set(ctx, key(method, state), redirect, TTL).Err(); err != nil {
+	if err := client.Set(ctx, key(method, state), value, TTL).Err(); err != nil {
 		return "", err
 	}
 	return state, nil
 }
 
-// Consume redeems a state of method once and returns its redirect. The Lua
-// implementation keeps it atomic on Redis versions older than 6.2.
-func Consume(ctx context.Context, client *redis.Client, method, state string) (string, error) {
-	redirect, err := consumeScript.Run(ctx, client, []string{key(method, state)}).Text()
+// Consume redeems a state of method once and returns its redirect. The state
+// is spent whatever the outcome; one issued in another scope than scope is
+// refused with ErrScope. The Lua implementation keeps it atomic on Redis
+// versions older than 6.2.
+func Consume(ctx context.Context, client *redis.Client, method string, scope Scope, state string) (string, error) {
+	value, err := consumeScript.Run(ctx, client, []string{key(method, state)}).Text()
 	if errors.Is(err, redis.Nil) {
 		return "", ErrUnknown
 	}
-	return redirect, err
+	if err != nil {
+		return "", err
+	}
+	stored, err := decode(value)
+	if err != nil {
+		return "", err
+	}
+	if stored.Purpose != scope.Purpose || stored.UserID != scope.UserID {
+		return "", ErrScope
+	}
+	return stored.Redirect, nil
 }
 
 // Peek returns the redirect of a state of method without redeeming it: the
 // Apple form-post callback hands the state on to the sign-in, which redeems
-// it.
+// it within its scope.
 func Peek(ctx context.Context, client *redis.Client, method, state string) (string, error) {
-	redirect, err := client.Get(ctx, key(method, state)).Result()
+	value, err := client.Get(ctx, key(method, state)).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", ErrUnknown
 	}
-	return redirect, err
+	if err != nil {
+		return "", err
+	}
+	stored, err := decode(value)
+	if err != nil {
+		return "", err
+	}
+	return stored.Redirect, nil
+}
+
+// decode reads a stored state. A value that is not a record was stored by
+// an earlier version without a scope; it is unknown rather than trusted.
+func decode(value string) (record, error) {
+	var stored record
+	if err := json.Unmarshal([]byte(value), &stored); err != nil || stored.Purpose == "" {
+		return record{}, ErrUnknown
+	}
+	return stored, nil
 }

@@ -28,8 +28,8 @@ type Deps struct {
 	Auths repository.AuthRepo
 	// Config snapshots the runtime-mutable sender settings per request.
 	Config func() Snapshot
-	// Reinitialize re-runs a sender subsystem's initialization after its
-	// configuration changed ("email", "mobile" or "device").
+	// Reinitialize re-runs a runtime subsystem's initialization after its
+	// configuration changed ("email", "mobile", "device" or "telegram").
 	Reinitialize func(subsystem string) error
 }
 

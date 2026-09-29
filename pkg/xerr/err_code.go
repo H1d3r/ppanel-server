@@ -201,3 +201,11 @@ const (
 	// subscription can be stopped or resumed.
 	SubscriptionStatusNotToggleable uint32 = 130002
 )
+
+// Platform band (BandPlatform): system settings, tasks and logs.
+const (
+	// SettingsSavedNotApplied: the settings are stored, but the subsystem
+	// that uses them could not be reloaded; they take effect after a
+	// successful reload or a restart.
+	SettingsSavedNotApplied uint32 = 160001
+)

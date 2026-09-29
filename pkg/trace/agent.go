@@ -8,12 +8,14 @@ package trace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/perfect-panel/server/pkg/logger"
 	"go.opentelemetry.io/otel"
@@ -52,6 +54,11 @@ var (
 	tp     *sdktrace.TracerProvider
 )
 
+// shutdownTimeout bounds the final export at process exit. Docker stops a
+// container with SIGTERM and kills it 10 s later by default; the spans still
+// queued are worth less than closing the logs before that.
+var shutdownTimeout = 5 * time.Second
+
 // StartAgent starts an opentelemetry agent.
 func StartAgent(c Config) {
 	if c.Disabled {
@@ -74,16 +81,25 @@ func StartAgent(c Config) {
 	agents[c.Endpoint] = struct{}{}
 }
 
-// StopAgent shuts down the span processors in the order they were registered.
+// StopAgent shuts down the span processors in the order they were
+// registered, giving up on a collector that does not answer within
+// shutdownTimeout.
 func StopAgent() {
 	lock.Lock()
 	defer lock.Unlock()
 
 	if tp != nil {
 		// StopAgent runs at process exit, after the servers have stopped, so
-		// there is no caller context to inherit; the batch processor still
-		// bounds each final export with its export timeout.
-		_ = tp.Shutdown(context.Background())
+		// there is no caller context to inherit.
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := tp.Shutdown(ctx); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				logger.Errorf("[trace] shutting down the exporter timed out after %s; the spans still queued are lost", shutdownTimeout)
+			} else {
+				logger.Errorf("[trace] shutdown: %v", err)
+			}
+		}
 		tp = nil
 	}
 	clear(agents)

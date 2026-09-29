@@ -131,6 +131,77 @@ func TestValidateRejectsUnboundDeviceSession(t *testing.T) {
 	}
 }
 
+// A sign-in reads the epoch before it checks the credential. When a
+// revocation lands before the session is issued, the session is refused
+// rather than carrying the new epoch and surviving the revocation.
+func TestIssueRefusesASessionWhoseEpochMovedSinceTheCredentialCheck(t *testing.T) {
+	_, client := newTestClient(t)
+	ctx := context.Background()
+	before, err := AcquireEpoch(ctx, client, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Revoke(ctx, client, 7); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Issue(ctx, client, testSecret, 3600, Grant{UserID: 7, Epoch: before}); !errors.Is(err, ErrEpochMoved) {
+		t.Fatalf("Issue() with the epoch from before the revocation: error = %v, want ErrEpochMoved", err)
+	}
+
+	current, err := AcquireEpoch(ctx, client, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := Issue(ctx, client, testSecret, 3600, Grant{UserID: 7, Epoch: current})
+	if err != nil {
+		t.Fatalf("Issue() with the current epoch: error = %v", err)
+	}
+	if _, err := Validate(ctx, client, testSecret, signed); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	// Without a pre-read epoch the session is issued as before.
+	if _, err := Issue(ctx, client, testSecret, 3600, Grant{UserID: 7}); err != nil {
+		t.Fatalf("Issue() without an epoch: error = %v", err)
+	}
+}
+
+// A reset revokes and signs in at once: the session it issues carries the
+// epoch the revocation set, and another revocation in between refuses it.
+func TestRotateReturnsTheEpochNewSessionsCarry(t *testing.T) {
+	_, client := newTestClient(t)
+	ctx := context.Background()
+	earlier, err := Issue(ctx, client, testSecret, 3600, Grant{UserID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	epoch, err := Rotate(ctx, client, 7)
+	if err != nil || epoch == "" {
+		t.Fatalf("Rotate() = %q, %v", epoch, err)
+	}
+	if stored, _ := client.Get(ctx, Key(7)).Result(); stored != epoch {
+		t.Fatalf("stored epoch = %q, want the rotated %q", stored, epoch)
+	}
+	if _, err := Validate(ctx, client, testSecret, earlier); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("session from before the rotation: error = %v, want ErrRevoked", err)
+	}
+	signed, err := Issue(ctx, client, testSecret, 3600, Grant{UserID: 7, Epoch: epoch})
+	if err != nil {
+		t.Fatalf("Issue() with the rotated epoch: error = %v", err)
+	}
+	if _, err := Validate(ctx, client, testSecret, signed); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	if _, err := Rotate(ctx, client, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Issue(ctx, client, testSecret, 3600, Grant{UserID: 7, Epoch: epoch}); !errors.Is(err, ErrEpochMoved) {
+		t.Fatalf("Issue() after another rotation: error = %v, want ErrEpochMoved", err)
+	}
+}
+
 func TestIssueAndValidateFailClosedWithoutStore(t *testing.T) {
 	var client *redis.Client
 	if _, err := Issue(context.Background(), client, testSecret, 3600, Grant{UserID: 7}); !errors.Is(err, ErrUnavailable) {

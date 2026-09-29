@@ -2,14 +2,18 @@ package activation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
+	"github.com/perfect-panel/server/internal/module/billing/internal/portal"
 	"github.com/perfect-panel/server/internal/module/identity"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/notification"
 	"github.com/perfect-panel/server/internal/module/subscription"
+	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/redis/go-redis/v9"
@@ -36,9 +40,13 @@ type WorkflowOrders interface {
 }
 
 type WorkflowDeps struct {
-	Orders               WorkflowOrders
-	Profiles             ProfileReader
-	GuestAccounts        identity.GuestAccounts
+	Orders        WorkflowOrders
+	Profiles      ProfileReader
+	GuestAccounts identity.GuestAccounts
+	// GuestIdentities is the identity port the guest account stage checks
+	// the guest's mailbox against before an account is created, the same
+	// port the guest purchase checks; nil skips the check.
+	GuestIdentities      portal.GuestAccountReader
 	Subscriptions        SubscriptionFulfiller
 	LegacyGuestCache     LegacyGuestCache
 	Notifications        Notifier
@@ -48,7 +56,9 @@ type WorkflowDeps struct {
 // Workflow activates a paid order: it has identity create a guest buyer's
 // account, credits a recharge or has subscription fulfil the order, settles
 // the referral commission, finalizes the order and sends the notices. Every
-// stage is idempotent, so a failed activation is retried from the start.
+// stage is idempotent, so a failed activation is retried from the start. A
+// fulfillment the subscription domain refuses for good ends the order with
+// a refund instead (see RefundUnfulfillable).
 type Workflow struct {
 	deps   WorkflowDeps
 	stages *Service
@@ -71,6 +81,14 @@ func (w *Workflow) ensureGuestAccount(ctx context.Context, orderInfo *order.Orde
 		if err != nil {
 			return err
 		}
+		// A mailbox that gained an account under another spelling since the
+		// purchase must not get a second one; the stage fails for an
+		// operator instead, as it does for the exact identifier.
+		if w.deps.GuestIdentities != nil {
+			if err := portal.EnsureNoMailboxAlias(ctx, w.deps.GuestIdentities, guest.AuthType, guest.Identifier); err != nil {
+				return err
+			}
+		}
 		userID, err = w.deps.GuestAccounts.EnsureGuestAccount(ctx, identity.GuestAccountCommand{
 			OrderNo: orderInfo.OrderNo, AuthType: guest.AuthType, Identifier: guest.Identifier,
 			PasswordHash: guest.PasswordHash, LegacyPassword: guest.Password, InviteCode: guest.InviteCode,
@@ -92,6 +110,16 @@ func (w *Workflow) Activate(ctx context.Context, orderNo string) error {
 		return nil
 	}
 	if orderInfo.Status != order.StatusPaid {
+		// A redelivery for an order the refund stage closed is complete.
+		if orderInfo.Status == order.StatusClosed {
+			refunded, err := w.stages.UnfulfillableRefunded(ctx, orderInfo.OrderNo)
+			if err != nil {
+				return err
+			}
+			if refunded {
+				return nil
+			}
+		}
 		return ErrInvalidOrderStatus
 	}
 
@@ -126,6 +154,9 @@ func (w *Workflow) Activate(ctx context.Context, orderNo string) error {
 
 	outcome, err := w.deps.Subscriptions.FulfillPaidOrder(ctx, orderInfo.OrderNo)
 	if err != nil {
+		if unfulfillable(orderInfo, err) {
+			return w.refundUnfulfillable(ctx, orderInfo, err)
+		}
 		logger.WithContext(ctx).Error("[ActivateOrderLogic] Fulfillment stage failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
 		return err
 	}
@@ -151,6 +182,33 @@ func (w *Workflow) Activate(ctx context.Context, orderNo string) error {
 	}
 
 	w.notifyFulfillment(ctx, orderInfo, userInfo, outcome)
+	return nil
+}
+
+// unfulfillable reports a fulfillment refusal no retry can change: the
+// order's subscription was refunded or stopped, or is managed by a payment
+// provider now, while the payment was collected by billing itself. An order
+// a provider collected, such as an app store purchase that reports
+// ErrProviderManaged, is the provider's to settle and is never refunded here.
+func unfulfillable(orderInfo *order.Order, err error) bool {
+	if !errors.Is(err, usersub.ErrSubscriptionOnHold) && !errors.Is(err, usersub.ErrProviderManaged) {
+		return false
+	}
+	return orderInfo.UserId != 0 && gateway.Collects(orderInfo.Method)
+}
+
+// refundUnfulfillable ends a paid order the subscription domain cannot
+// fulfil: the buyer gets the payment back and the order closes, which
+// completes the activation instead of failing it forever.
+func (w *Workflow) refundUnfulfillable(ctx context.Context, orderInfo *order.Order, cause error) error {
+	if err := w.stages.RefundUnfulfillable(ctx, orderInfo.OrderNo); err != nil {
+		logger.WithContext(ctx).Error("[ActivateOrderLogic] Refund of unfulfillable order failed", logger.Field("error", err.Error()), logger.Field("order_no", orderInfo.OrderNo))
+		return err
+	}
+	logger.WithContext(ctx).Infow("[ActivateOrderLogic] Paid order could not be fulfilled and was refunded to the buyer's wallet",
+		logger.Field("order_no", orderInfo.OrderNo), logger.Field("user_id", orderInfo.UserId),
+		logger.Field("amount", orderInfo.Amount), logger.Field("gift_amount", orderInfo.GiftAmount),
+		logger.Field("reason", cause.Error()))
 	return nil
 }
 

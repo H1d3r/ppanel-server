@@ -53,10 +53,10 @@ func (s *Service) UpdateAuthMethodConfig(ctx context.Context, req *dto.UpdateAut
 	if err != nil {
 		return nil, err
 	}
-	// The email, mobile and device settings are also held by the runtime
-	// configuration, which reloads them.
+	// The email, mobile, device and telegram settings are also held by the
+	// runtime configuration, which reloads them.
 	switch method.Method {
-	case "email", "mobile", "device":
+	case "email", "mobile", "device", "telegram":
 		if err := s.deps.Reinitialize(method.Method); err != nil {
 			return nil, xerr.Wrapf(err, xerr.ERROR, "the %s settings are saved but could not be applied", method.Method)
 		}
@@ -96,6 +96,14 @@ func decodeMethodConfig(method string, config any) (any, error) {
 			return nil, xerr.Errorf(xerr.InvalidParams, "device security secret is required")
 		}
 		return deviceConfig, nil
+	case "telegram":
+		// Startup decodes the stored settings into the same type, so what
+		// does not decode here would keep the next start from completing.
+		telegramConfig := new(auth.TelegramAuthConfig)
+		if err := telegramConfig.Unmarshal(string(raw)); err != nil {
+			return nil, xerr.Wrapf(err, xerr.InvalidParams, "invalid telegram config")
+		}
+		return telegramConfig, nil
 	default:
 		return config, nil
 	}

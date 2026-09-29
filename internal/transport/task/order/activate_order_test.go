@@ -200,9 +200,10 @@ func (r *activationOrderRepo) FindOneByOrderNoForUpdate(ctx context.Context, ord
 	return r.FindOneByOrderNo(ctx, orderNo)
 }
 
-func (r *activationOrderRepo) SetCommission(_ context.Context, orderNo string, amount int64) error {
+func (r *activationOrderRepo) SetCommission(_ context.Context, orderNo string, amount, refererID int64) error {
 	if r.order.OrderNo == orderNo {
 		r.order.Commission = amount
+		r.order.CommissionRefererId = refererID
 	}
 	return nil
 }
@@ -646,7 +647,7 @@ func TestFulfillResetTrafficClearsFinishedAt(t *testing.T) {
 func (*activationOrderRepo) CountPendingByPaymentID(context.Context, int64) (int64, error) {
 	return 0, errNotInScenario
 }
-func (*activationOrderRepo) CountPendingGuestOrders(context.Context, string, string) (int64, error) {
+func (*activationOrderRepo) CountPendingGuestOrders(context.Context, string, string, time.Time) (int64, error) {
 	return 0, errNotInScenario
 }
 func (*activationOrderRepo) CountUserCouponUsage(context.Context, int64, string) (int64, error) {

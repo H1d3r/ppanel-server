@@ -51,7 +51,7 @@ func newResetFixture(t *testing.T) *resetFixture {
 	f.firstOfMonth = used(1, time.Date(2026, 3, 17, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusFinished, term)
 	f.monthlyDue = used(2, time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusActive, term)
 	f.monthlyNotDue = used(2, time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusActive, term)
-	f.yearlyDue = used(3, time.Date(2025, 6, 1, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusActive, usersub.NoLimitExpiry)
+	f.yearlyDue = used(3, time.Date(2025, 6, 1, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusActive, usersub.NoLimitExpiry())
 	f.noCycle = used(4, time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusActive, term)
 	f.expired = used(1, time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusFinished, f.now.Add(-time.Hour))
 	f.stopped = used(1, time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), usersub.SubscribeStatusStopped, term)

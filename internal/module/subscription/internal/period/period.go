@@ -118,7 +118,7 @@ func (c Calendar) TermEnd(unit Unit, quantity int64, start time.Time) (time.Time
 	case UnitMinute:
 		return start.Add(time.Minute * time.Duration(quantity)), nil
 	case UnitNoLimit:
-		return usersub.NoLimitExpiry, nil
+		return usersub.NoLimitExpiry(), nil
 	}
 	return time.Time{}, fmt.Errorf("%w: %q", ErrUnknownUnit, unit)
 }

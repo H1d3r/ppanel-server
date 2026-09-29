@@ -238,6 +238,17 @@ func (c *Client) VerifyPaymentIntent(ctx context.Context, order *Order, tradeNo 
 	return intent.Status == stripe.PaymentIntentStatusSucceeded, nil
 }
 
+// PaymentIntentStatus returns the status of the order's intent after
+// checking, like VerifyPaymentIntent, that the intent still belongs to the
+// order.
+func (c *Client) PaymentIntentStatus(ctx context.Context, order *Order, tradeNo string) (stripe.PaymentIntentStatus, error) {
+	intent, err := c.matchingIntent(ctx, order, tradeNo)
+	if err != nil {
+		return "", err
+	}
+	return intent.Status, nil
+}
+
 // CancelPaymentIntent prevents a still-pending client secret from being paid
 // after the local order has expired.
 func (c *Client) CancelPaymentIntent(ctx context.Context, tradeNo string) error {

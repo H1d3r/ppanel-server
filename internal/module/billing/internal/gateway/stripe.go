@@ -13,6 +13,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment/stripe"
 	"github.com/perfect-panel/server/pkg/xerr"
+	stripeSDK "github.com/stripe/stripe-go/v81"
 )
 
 const stripePaymentSucceeded = "payment_intent.succeeded"
@@ -124,6 +125,9 @@ func (g *stripeGateway) intentOrder(orderNo, subscribe string, charge Charge) *s
 // Reconcile settles an intent that succeeded and cancels one that did not,
 // so a still-pending client secret cannot be paid after the local close. The
 // intent is verified against the payment expectation recorded at checkout.
+// An intent that is already canceled is terminal at Stripe and can never be
+// paid, so the order closes without asking Stripe to cancel it again, which
+// Stripe refuses.
 func (g *stripeGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconciliation, error) {
 	o := req.Order
 	if o.TradeNo == "" {
@@ -136,26 +140,41 @@ func (g *stripeGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconc
 		charge = Charge{Amount: o.Amount, Currency: req.SystemCurrency}
 	}
 	intent := g.intentOrder(o.OrderNo, "", charge)
-	paid, err := g.client.VerifyPaymentIntent(ctx, intent, o.TradeNo)
+	status, err := g.client.PaymentIntentStatus(ctx, intent, o.TradeNo)
 	if err != nil {
 		return Reconciliation{}, err
 	}
-	if paid {
-		return Reconciliation{TradeNo: o.TradeNo}, nil
+	if verdict, final := stripeVerdict(o.TradeNo, status); final {
+		return verdict, nil
 	}
 	if err := g.client.CancelPaymentIntent(ctx, o.TradeNo); err == nil {
 		return Reconciliation{}, nil
 	}
-	// A payment can finish between the status query and the cancellation.
-	// Recheck once so that case is settled rather than closed locally.
-	paid, err = g.client.VerifyPaymentIntent(ctx, intent, o.TradeNo)
+	// A payment can finish, or the intent be canceled elsewhere, between the
+	// status query and the cancellation. Recheck once so a paid intent is
+	// settled rather than closed locally and a canceled one closes.
+	status, err = g.client.PaymentIntentStatus(ctx, intent, o.TradeNo)
 	if err != nil {
 		return Reconciliation{}, err
 	}
-	if !paid {
-		return Reconciliation{}, fmt.Errorf("cancel Stripe payment intent %s failed", o.TradeNo)
+	if verdict, final := stripeVerdict(o.TradeNo, status); final {
+		return verdict, nil
 	}
-	return Reconciliation{TradeNo: o.TradeNo}, nil
+	return Reconciliation{}, fmt.Errorf("cancel Stripe payment intent %s failed", o.TradeNo)
+}
+
+// stripeVerdict maps a terminal intent status to the close verdict: a
+// succeeded intent settles the order, a canceled one lets it close. Any
+// other status is not final.
+func stripeVerdict(tradeNo string, status stripeSDK.PaymentIntentStatus) (Reconciliation, bool) {
+	switch status {
+	case stripeSDK.PaymentIntentStatusSucceeded:
+		return Reconciliation{TradeNo: tradeNo}, true
+	case stripeSDK.PaymentIntentStatusCanceled:
+		return Reconciliation{}, true
+	default:
+		return Reconciliation{}, false
+	}
 }
 
 type stripeNotice struct {

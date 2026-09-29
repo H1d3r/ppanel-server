@@ -179,7 +179,7 @@ func TestTrafficResetMarksEachSubscriptionOncePerDay(t *testing.T) {
 	started := now.Add(-48 * time.Hour)
 	f.insert(t, usersub.Subscribe{Id: 1, SubscribeId: 1, StartTime: started, ExpireTime: future, Status: usersub.SubscribeStatusActive, Upload: 5})
 	f.insert(t, usersub.Subscribe{Id: 2, SubscribeId: 1, StartTime: started, ExpireTime: future, Status: usersub.SubscribeStatusFinished, Traffic: 10, Upload: 10, FinishedAt: &past})
-	f.insert(t, usersub.Subscribe{Id: 3, SubscribeId: 1, StartTime: started, ExpireTime: usersub.NoLimitExpiry, Status: usersub.SubscribeStatusActive, Upload: 5, TrafficResetAt: &yesterday})
+	f.insert(t, usersub.Subscribe{Id: 3, SubscribeId: 1, StartTime: started, ExpireTime: usersub.NoLimitExpiry(), Status: usersub.SubscribeStatusActive, Upload: 5, TrafficResetAt: &yesterday})
 	f.insert(t, usersub.Subscribe{Id: 4, SubscribeId: 1, StartTime: started, ExpireTime: past, Status: usersub.SubscribeStatusActive, Upload: 5})
 	f.insert(t, usersub.Subscribe{Id: 5, SubscribeId: 1, StartTime: started, ExpireTime: future, Status: usersub.SubscribeStatusStopped, Upload: 5})
 	f.insert(t, usersub.Subscribe{Id: 6, SubscribeId: 1, StartTime: future, ExpireTime: future.Add(time.Hour), Status: usersub.SubscribeStatusActive, Upload: 5})

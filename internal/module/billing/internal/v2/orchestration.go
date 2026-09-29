@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/perfect-panel/server/internal/auth/password"
 	"github.com/perfect-panel/server/internal/auth/token"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -112,7 +113,11 @@ func (s *Service) CreateAndCheckout(ctx context.Context, req *dto.V2CreateOrderR
 			if !sameIdempotencyHash(existing.IdempotencyHash, hash) {
 				return nil, ErrIdempotencyKeyReused
 			}
-			return s.checkoutResponse(ctx, existing, s.guestCheckoutToken(idempotencyKey, existing), req.ReturnURL)
+			checkoutToken := s.guestCheckoutToken(idempotencyKey, existing)
+			if err := s.authorizeExistingCreate(ctx, existing, req, checkoutToken); err != nil {
+				return nil, err
+			}
+			return s.checkoutResponse(ctx, existing, checkoutToken, req.ReturnURL)
 		}
 		return nil, err
 	}
@@ -180,7 +185,8 @@ func (s *Service) EventTicket(ctx context.Context, orderNo, checkoutToken string
 }
 
 // Session exchanges the durable guest checkout capability for an ordinary
-// session after activation has created the account.  It is intentionally a
+// session after activation has created the account, within the window and
+// under the revocation rule the storefront applies.  It is intentionally a
 // separate JSON endpoint: a long-lived access token must never appear in a
 // browser-visible EventSource URL or SSE event payload.
 func (s *Service) Session(ctx context.Context, orderNo, checkoutToken string) (*dto.V2OrderSessionResponse, error) {
@@ -194,10 +200,9 @@ func (s *Service) Session(ctx context.Context, orderNo, checkoutToken string) (*
 	if orderInfo.GuestCheckoutTokenHash == "" {
 		return nil, xerr.Errorf(xerr.InvalidAccess, "order does not have a guest checkout capability")
 	}
-	if orderInfo.UserId == 0 || !order.IsSettled(orderInfo.Status) {
-		return nil, xerr.Errorf(xerr.OrderStatusError, "guest account is not ready")
-	}
-	accessToken, err := s.deps.Portal.IssueSession(ctx, orderInfo.UserId)
+	// The storefront owns the exchange rule (settlement window, revocation
+	// since settlement), shared with V1's status endpoint.
+	accessToken, err := s.deps.Portal.ExchangeGuestSession(ctx, orderInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -337,12 +342,22 @@ func eventResponse(orderNo, ticket string, expiresAt int64) dto.V2OrderEvents {
 	}
 }
 
+// authorizeExistingCreate binds a replayed create request to the order its
+// idempotency key already produced. The guest password is kept out of the
+// request hash (see requestHash), so a guest replay proves it against the
+// stored hash instead; a different password is a different request and gets
+// the same refusal as a changed body.
 func (s *Service) authorizeExistingCreate(ctx context.Context, orderInfo *order.Order, req *dto.V2CreateOrderRequest, checkoutToken string) error {
 	if currentUser(ctx) != nil {
 		return s.authorizeOrder(ctx, orderInfo, "")
 	}
 	if req.Guest == nil || orderInfo.GuestAuthType != req.Guest.AuthType || orderInfo.GuestIdentifier != req.Guest.Identifier {
 		return xerr.Errorf(xerr.InvalidAccess, "order does not belong to this checkout")
+	}
+	if req.Guest.Password != "" || orderInfo.GuestPasswordHash != "" {
+		if !password.VerifyPassWord(req.Guest.Password, orderInfo.GuestPasswordHash) {
+			return ErrIdempotencyKeyReused
+		}
 	}
 	return s.authorizeOrder(ctx, orderInfo, checkoutToken)
 }
@@ -416,6 +431,11 @@ func currentUser(ctx context.Context) *user.User {
 	return u
 }
 
+// requestHash is the stable identity of a create request under its
+// idempotency key. It is stored on the order row, so it carries nothing
+// secret: the guest password stays out (a stored unsalted digest of it would
+// let anyone reading the row test guesses at hash speed) and is proved
+// against the order's password hash on a replay instead.
 func requestHash(ctx context.Context, req *dto.V2CreateOrderRequest) (string, error) {
 	canonical := struct {
 		Type            string
@@ -436,9 +456,10 @@ func requestHash(ctx context.Context, req *dto.V2CreateOrderRequest) (string, er
 		canonical.UserID = u.Id
 	} else if req.Guest != nil {
 		// A Turnstile token is single-use, so a retry carries a fresh one; it
-		// must not change the request identity.
+		// must not change the request identity either.
 		guest := *req.Guest
 		guest.TurnstileToken = ""
+		guest.Password = ""
 		canonical.Guest = &guest
 	}
 	data, err := json.Marshal(canonical)

@@ -2,6 +2,8 @@ package adminuser
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
@@ -27,7 +29,13 @@ func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) er
 	}
 	plain := req.Password
 	if plain == "" {
-		plain = req.Email
+		// Without a password the account signs in only after a password
+		// reset or through another method. Its identifiers are known to
+		// anyone who knows the account, so none of them can be the password.
+		var err error
+		if plain, err = unknownPassword(); err != nil {
+			return err
+		}
 	}
 	newUser := &user.User{
 		Password:           password.EncodePassWord(plain),
@@ -86,6 +94,16 @@ func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) er
 		GiftAmount: req.GiftAmount,
 		Commission: req.Commission,
 	})
+}
+
+// unknownPassword returns a password nobody knows, 256 random bits, for an
+// account that must not sign in with a password until one is set.
+func unknownPassword() (string, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", xerr.Wrapf(err, xerr.ERROR, "generate the account's password")
+	}
+	return base64.RawURLEncoding.EncodeToString(secret), nil
 }
 
 // ensureIdentityFree refuses an identifier another account holds with the

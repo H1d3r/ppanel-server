@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/internal/auth/identifier"
-	"github.com/perfect-panel/server/internal/auth/password"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/internal/account"
@@ -45,15 +44,16 @@ func (s *Service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginReq
 	if req.Password == "" && req.TelephoneCode == "" {
 		return nil, xerr.NewErrCodeMsg(xerr.InvalidParams, "password and telephone code is empty")
 	}
+	// The epoch is read before the credential check, so a reset that lands
+	// while the credential is checked ends this sign-in too.
+	epoch, err := account.ReadEpoch(ctx, s.deps.Redis, userInfo.Id)
+	if err != nil {
+		return nil, err
+	}
 	if req.TelephoneCode == "" {
-		if err := ensureLoginAllowed(ctx, s.deps.Redis, userInfo.Id); err != nil {
+		if err := s.checkPassword(ctx, userInfo, req.Password); err != nil {
 			return nil, err
 		}
-		if !password.MultiPasswordVerify(userInfo.Algo, userInfo.Salt, req.Password, userInfo.Password) {
-			recordLoginFailure(ctx, s.deps.Redis, userInfo.Id)
-			return nil, xerr.Errorf(xerr.UserPasswordError, "wrong password")
-		}
-		clearLoginFailures(ctx, s.deps.Redis, userInfo.Id)
 		upgradePasswordAfterLogin(ctx, s.deps.Store.User(), userInfo, req.Password)
 	} else {
 		key := verification.MobileCodeKey(auth.Security, phoneNumber)
@@ -62,5 +62,5 @@ func (s *Service) TelephoneLogin(ctx context.Context, req *dto.TelephoneLoginReq
 		}
 	}
 
-	return s.signIn(ctx, userInfo.Id, req.Identifier)
+	return s.signIn(ctx, userInfo.Id, epoch, req.Identifier)
 }

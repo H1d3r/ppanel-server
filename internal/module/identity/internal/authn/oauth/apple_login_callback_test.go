@@ -3,11 +3,13 @@ package oauth
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
+	"github.com/perfect-panel/server/pkg/logger/logtest"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -71,7 +73,7 @@ func newAppleCallback(t *testing.T, fallback string) (*Service, *redis.Client) {
 // redeeming the state: the sign-in that follows redeems it.
 func TestAppleLoginCallbackFollowsStoredRedirectOnTheSiteHost(t *testing.T) {
 	svc, client := newAppleCallback(t, "https://panel.example")
-	state, err := oauthstate.Issue(context.Background(), client, "apple", "https://panel.example/callback")
+	state, err := oauthstate.Issue(context.Background(), client, "apple", oauthstate.LoginScope(), "https://panel.example/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,14 +88,36 @@ func TestAppleLoginCallbackFollowsStoredRedirectOnTheSiteHost(t *testing.T) {
 	if want := "https://panel.example/callback?code=code-1&method=apple&state=" + state; redirect.Location != want {
 		t.Fatalf("location = %q, want %q", redirect.Location, want)
 	}
-	if _, err := oauthstate.Consume(context.Background(), client, "apple", state); err != nil {
+	if _, err := oauthstate.Consume(context.Background(), client, "apple", oauthstate.LoginScope(), state); err != nil {
 		t.Fatalf("the callback redeemed the state the sign-in needs: %v", err)
+	}
+}
+
+// The redirect carries the authorization code and state, a credential; the
+// log names where the browser is sent, not what it carries.
+func TestAppleLoginCallbackLogsTheRedirectWithoutTheCredential(t *testing.T) {
+	svc, client := newAppleCallback(t, "https://panel.example")
+	state, err := oauthstate.Issue(context.Background(), client, "apple", oauthstate.LoginScope(), "https://panel.example/callback?from=apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := logtest.NewCollector(t)
+
+	if _, err := svc.AppleLoginCallback(context.Background(), &dto.AppleLoginCallbackRequest{State: state, Code: "c0de-secret"}); err != nil {
+		t.Fatalf("AppleLoginCallback error = %v", err)
+	}
+	entries := logs.String()
+	if strings.Contains(entries, "c0de-secret") || strings.Contains(entries, state) || strings.Contains(entries, "from=apple") {
+		t.Fatalf("logs = %q, want the code, state and query kept out", entries)
+	}
+	if !strings.Contains(entries, `"host":"panel.example"`) || !strings.Contains(entries, `"path":"/callback"`) {
+		t.Fatalf("logs = %q, want the redirect's host and path", entries)
 	}
 }
 
 func TestAppleLoginCallbackRejectsStoredRedirectOffTheSiteHost(t *testing.T) {
 	svc, client := newAppleCallback(t, "https://panel.example")
-	state, err := oauthstate.Issue(context.Background(), client, "apple", "https://evil.example/phish")
+	state, err := oauthstate.Issue(context.Background(), client, "apple", oauthstate.LoginScope(), "https://evil.example/phish")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,65 +38,74 @@ func NewService(orders settle.Orders, queue settle.Queue, gateways *gateway.Regi
 }
 
 // Notify authenticates and settles a callback delivered to the notify URL of
-// the payment method the notify middleware put in ctx.
+// the payment method the notify middleware put in ctx. A rejection wraps
+// gateway.ErrInvalidCallback when redelivery cannot succeed (see there); the
+// log names the order and trade of an authenticated callback, so a payment
+// refused after its order closed can be found at the gateway.
 func (s *Service) Notify(ctx context.Context, n gateway.Notification) error {
 	method, ok := ctx.Value(requestctx.CtxKeyPayment).(*payment.Payment)
 	if !ok {
 		return xerr.Errorf(xerr.ERROR, "payment config not found")
 	}
-	if err := s.notify(ctx, method, n); err != nil {
-		logger.WithContext(ctx).Errorw("[PaymentNotify] Callback rejected",
-			logger.Field("platform", method.Platform), logger.Field("payment", method.Id), logger.Field("error", err.Error()))
+	notice, err := s.notify(ctx, method, n)
+	if err != nil {
+		fields := []logger.LogField{logger.Field("platform", method.Platform), logger.Field("payment", method.Id), logger.Field("error", err.Error())}
+		if notice != nil {
+			fields = append(fields, logger.Field("orderNo", notice.OrderNo), logger.Field("tradeNo", notice.TradeNo))
+		}
+		logger.WithContext(ctx).Errorw("[PaymentNotify] Callback rejected", fields...)
 		return err
 	}
 	return nil
 }
 
-func (s *Service) notify(ctx context.Context, method *payment.Payment, n gateway.Notification) error {
+// notify returns the authenticated notice with a failure that happened after
+// authentication, for the rejection log.
+func (s *Service) notify(ctx context.Context, method *payment.Payment, n gateway.Notification) (*gateway.Notice, error) {
 	gw, err := s.gateways.Open(method)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	notice, err := gw.ParseCallback(ctx, n)
 	if err != nil {
-		return err
+		return nil, gateway.InvalidCallback(err)
 	}
 	if notice.Ignore {
-		return nil
+		return notice, nil
 	}
 	orderInfo, err := s.orders.FindOneByOrderNo(ctx, notice.OrderNo)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return xerr.Errorf(xerr.OrderNotExist, "order not exist: %v", notice.OrderNo)
+		return notice, gateway.InvalidCallback(xerr.Errorf(xerr.OrderNotExist, "order not exist: %v", notice.OrderNo))
 	}
 	if err != nil {
-		return xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", notice.OrderNo)
+		return notice, xerr.Wrapf(err, xerr.DatabaseQueryError, "find order %s", notice.OrderNo)
 	}
 	if err := validateOrderPayment(orderInfo, method); err != nil {
-		return err
+		return notice, gateway.InvalidCallback(err)
 	}
 	if err := gw.CheckOrder(orderInfo, notice); err != nil {
-		return err
+		return notice, gateway.InvalidCallback(err)
 	}
 	if !notice.Paid {
-		return acknowledgeLifecycle(ctx, orderInfo, notice)
+		return notice, acknowledgeLifecycle(ctx, orderInfo, notice)
 	}
 	if finished, err := finishedOrderDuplicate(ctx, orderInfo, notice.TradeNo); err != nil || finished {
-		return err
+		return notice, gateway.InvalidCallback(err)
 	}
 	if err := validateOrderCanSettle(orderInfo); err != nil {
-		return err
+		return notice, err
 	}
 	if err := validatePaymentExpectation(orderInfo, notice.Amount, notice.Currency); err != nil {
-		return err
+		return notice, gateway.InvalidCallback(err)
 	}
 	if err := gw.ConfirmPayment(ctx, orderInfo, notice); err != nil {
-		return err
+		return notice, err
 	}
 	if err := settle.VerifiedPayment(ctx, s.orders, s.queue, orderInfo, notice.TradeNo); err != nil {
-		return err
+		return notice, err
 	}
 	logger.WithContext(ctx).Infow("[PaymentNotify] Notify processed", logger.Field("platform", method.Platform), logger.Field("orderNo", orderInfo.OrderNo))
-	return nil
+	return notice, nil
 }
 
 // acknowledgeLifecycle accepts a valid lifecycle event that does not
@@ -105,7 +114,7 @@ func (s *Service) notify(ctx context.Context, method *payment.Payment, n gateway
 // delivery is out of order or a cancelled order is already closed.
 func acknowledgeLifecycle(ctx context.Context, orderInfo *order.Order, notice *gateway.Notice) error {
 	if err := validatePaymentExpectation(orderInfo, notice.Amount, notice.Currency); err != nil {
-		return err
+		return gateway.InvalidCallback(err)
 	}
 	fields := append([]logger.LogField{
 		logger.Field("orderNo", orderInfo.OrderNo),

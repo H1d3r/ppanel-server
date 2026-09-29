@@ -136,53 +136,103 @@ func (s *Service) refund(ctx context.Context, store repository.BillingStore, use
 
 // reverseCommission takes back the referral commission the refunded orders
 // earned, in proportion to the refund, so recycled balance cannot farm
-// commission through buy-and-refund loops. A referrer who already withdrew it
-// goes negative, which blocks withdrawals until it is earned back.
+// commission through buy-and-refund loops. Each order is charged to the
+// referrer credited when it settled: an administrator may have pointed the
+// buyer at another referrer since, who never received it. A referrer who
+// already withdrew it goes negative, which blocks withdrawals until it is
+// earned back.
 func (s *Service) reverseCommission(ctx context.Context, store repository.BillingStore, buyerID int64, details *order.Details, refund int64) error {
-	commission := details.Commission
-	for _, subOrder := range details.SubOrders {
-		if subOrder.IsPaidRenewal() {
-			commission += subOrder.Commission
+	basis := details.RefundBasis()
+	if refund <= 0 || basis <= 0 {
+		return nil
+	}
+	earned, err := s.commissionByReferrer(ctx, buyerID, details)
+	if err != nil {
+		return err
+	}
+	now := timeutil.Now()
+	for _, credited := range earned {
+		reversed := credited.amount
+		if refund < basis {
+			reversed = int64(float64(credited.amount) * float64(refund) / float64(basis))
+		}
+		if reversed <= 0 {
+			continue
+		}
+		referer, err := store.Wallet().FindOneForUpdate(ctx, credited.refererID)
+		if err != nil {
+			return err
+		}
+		referer.Commission -= reversed
+		if err := store.Wallet().UpdateCommission(ctx, referer); err != nil {
+			return err
+		}
+		// Negative like withdrawals, so summed commission logs stay net.
+		content, err := (&log.Commission{
+			Type:      log.CommissionTypeRefund,
+			Amount:    -reversed,
+			OrderNo:   details.OrderNo,
+			Balance:   referer.Commission,
+			Timestamp: now.UnixMilli(),
+		}).Marshal()
+		if err != nil {
+			return xerr.Wrapf(err, xerr.ERROR, "encode commission refund log for order %s", details.OrderNo)
+		}
+		if err := insertLog(ctx, store, log.TypeCommission, referer.UserId, now, content); err != nil {
+			return err
 		}
 	}
-	basis := details.RefundBasis()
-	if commission <= 0 || refund <= 0 || basis <= 0 {
-		return nil
+	return nil
+}
+
+// creditedCommission is the commission one referrer earned from an order and
+// its paid renewals.
+type creditedCommission struct {
+	refererID int64
+	amount    int64
+}
+
+// commissionByReferrer sums the commission of the order and its paid renewals
+// per referrer credited, in the order they were first credited. Orders
+// settled before the credited referrer was recorded on them
+// (CommissionRefererId 0) are charged to the buyer's current referrer, the
+// only referrer known for them; a buyer without one leaves them uncharged.
+func (s *Service) commissionByReferrer(ctx context.Context, buyerID int64, details *order.Details) ([]creditedCommission, error) {
+	earnings := []creditedCommission{{refererID: details.CommissionRefererId, amount: details.Commission}}
+	for _, subOrder := range details.SubOrders {
+		if subOrder.IsPaidRenewal() {
+			earnings = append(earnings, creditedCommission{refererID: subOrder.CommissionRefererId, amount: subOrder.Commission})
+		}
 	}
-	reversed := commission
-	if refund < basis {
-		reversed = int64(float64(commission) * float64(refund) / float64(basis))
+	var credited []creditedCommission
+	position := map[int64]int{}
+	var currentReferer *int64
+	for _, earning := range earnings {
+		if earning.amount <= 0 {
+			continue
+		}
+		refererID := earning.refererID
+		if refererID == 0 {
+			if currentReferer == nil {
+				buyer, err := s.deps.Profiles.FindOne(ctx, buyerID)
+				if err != nil {
+					return nil, err
+				}
+				currentReferer = &buyer.RefererId
+			}
+			refererID = *currentReferer
+		}
+		if refererID == 0 {
+			continue
+		}
+		if i, ok := position[refererID]; ok {
+			credited[i].amount += earning.amount
+			continue
+		}
+		position[refererID] = len(credited)
+		credited = append(credited, creditedCommission{refererID: refererID, amount: earning.amount})
 	}
-	if reversed <= 0 {
-		return nil
-	}
-	buyer, err := s.deps.Profiles.FindOne(ctx, buyerID)
-	if err != nil {
-		return err
-	}
-	if buyer.RefererId == 0 {
-		return nil
-	}
-	referer, err := store.Wallet().FindOneForUpdate(ctx, buyer.RefererId)
-	if err != nil {
-		return err
-	}
-	referer.Commission -= reversed
-	if err := store.Wallet().UpdateCommission(ctx, referer); err != nil {
-		return err
-	}
-	// Negative like withdrawals, so summed commission logs stay net.
-	now := timeutil.Now()
-	content, err := (&log.Commission{
-		Type:      log.CommissionTypeRefund,
-		Amount:    -reversed,
-		OrderNo:   details.OrderNo,
-		Timestamp: now.UnixMilli(),
-	}).Marshal()
-	if err != nil {
-		return xerr.Wrapf(err, xerr.ERROR, "encode commission refund log for order %s", details.OrderNo)
-	}
-	return insertLog(ctx, store, log.TypeCommission, referer.UserId, now, content)
+	return credited, nil
 }
 
 // insertLog records one wallet movement in the system log, dated in the

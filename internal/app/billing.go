@@ -72,6 +72,19 @@ func newBillingModule(c config.Config, store repository.Store, queue *taskqueue.
 				current := srv.Runtime.Config().Verify
 				return billing.GuestVerification{Enabled: current.RegisterVerify, Secret: current.TurnstileSecret}
 			},
+			// A guest purchase creates an account, so it follows the
+			// registration gates too: closed registration, disabled
+			// methods and the email domain allowlist.
+			Registration: func() billing.RegistrationPolicy {
+				current := srv.Runtime.Config()
+				return billing.RegistrationPolicy{
+					StopRegister:            current.Register.StopRegister,
+					EmailEnabled:            current.Email.Enable,
+					MobileEnabled:           current.Mobile.Enable,
+					EmailDomainSuffixList:   current.Email.DomainSuffixList,
+					EmailEnableDomainSuffix: current.Email.EnableDomainSuffix,
+				}
+			},
 			JwtSecret: c.JwtAuth.AccessSecret,
 			JwtExpire: c.JwtAuth.AccessExpire,
 		},
@@ -134,6 +147,10 @@ func (s billingSubscriptions) FindOneSubscribe(ctx context.Context, id int64) (*
 // the guest checkout's identifier check) from the identity facade.
 type billingAccounts struct{ srv *Application }
 
+// The alias check is optional for a reader; the production reader must have
+// it, or guest purchases would silently skip registration's mailbox rule.
+var _ billing.EmailAliasReader = billingAccounts{}
+
 func (a billingAccounts) FindOne(ctx context.Context, id int64) (*user.User, error) {
 	return a.srv.Identity.FindUser(ctx, id)
 }
@@ -152,6 +169,12 @@ func (a billingAccounts) FindUserAuthMethods(ctx context.Context, userID int64) 
 
 func (a billingAccounts) FindUserAuthMethodByOpenID(ctx context.Context, method, openID string) (*user.AuthMethods, error) {
 	return a.srv.Identity.FindAuthMethodByIdentifier(ctx, method, openID)
+}
+
+// FindEmailAlias lets guest purchases apply registration's mailbox-alias
+// rule (portal.EmailAliasReader).
+func (a billingAccounts) FindEmailAlias(ctx context.Context, email string) (*user.AuthMethods, error) {
+	return a.srv.Identity.FindEmailAlias(ctx, email)
 }
 
 // identityUserCache drops users' cached projections through the identity

@@ -134,7 +134,7 @@ func TestOAuthLoginRefusesAMethodThatIsNotEnabled(t *testing.T) {
 // of the callback.
 func TestAppleCallbackFallsBackToTheSiteHost(t *testing.T) {
 	facade, env := newFacade(t)
-	planted, err := oauthstate.Issue(context.Background(), env.Redis, "apple", "https://evil.example/phish")
+	planted, err := oauthstate.Issue(context.Background(), env.Redis, "apple", oauthstate.LoginScope(), "https://evil.example/phish")
 	if err != nil {
 		t.Fatal(err)
 	}

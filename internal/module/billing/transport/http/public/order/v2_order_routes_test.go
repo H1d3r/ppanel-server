@@ -431,11 +431,17 @@ func TestV2OrderSessionHandlerExchangesTheGuestCapabilityOnceTheAccountExists(t 
 	assertFailure(t, sessionEndpoint.call(t, f, owner, userOrder, ""), xerr.InvalidAccess, "Invalid access")
 	assertFailure(t, sessionEndpoint.call(t, f, guest, guestOrder, capability), xerr.OrderStatusError, "Order status error")
 
-	// Activation creates the guest's account and finishes the order.
+	// The payment callback settles the order, which dates the exchange
+	// window; activation then creates the guest's account and finishes it.
 	accountID, _ := f.buyer()
-	if err := f.h.DB.Model(&order.Order{}).Where("order_no = ?", guestOrder).
-		Updates(map[string]any{"user_id": accountID, "status": order.StatusFinished}).Error; err != nil {
+	if paid, err := f.h.Store.Order().MarkOrderPaid(context.Background(), guestOrder, "trade-guest"); err != nil || !paid {
+		t.Fatalf("MarkOrderPaid = (%t, %v)", paid, err)
+	}
+	if err := f.h.DB.Model(&order.Order{}).Where("order_no = ?", guestOrder).Update("user_id", accountID).Error; err != nil {
 		t.Fatal(err)
+	}
+	if finished, err := f.h.Store.Order().UpdateOrderStatusFrom(context.Background(), guestOrder, order.StatusPaid, order.StatusFinished); err != nil || !finished {
+		t.Fatalf("finish order = (%t, %v)", finished, err)
 	}
 	var resp dto.V2OrderSessionResponse
 	success(t, sessionEndpoint.call(t, f, guest, guestOrder, capability), &resp)

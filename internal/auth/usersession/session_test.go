@@ -2,7 +2,9 @@ package usersession
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -56,5 +58,58 @@ func TestRevokeInvalidatesEarlierSessionsOnly(t *testing.T) {
 	rdb.Del(Key(1))
 	if Check(map[string]any{EpochClaim: next}, "") == nil {
 		t.Fatal("token accepted after its epoch was evicted")
+	}
+}
+
+// A revocation is dated, so a capability issued before it can be told apart
+// from one issued after; an unreadable revocation and a missing store both
+// fail closed.
+func TestRevokedSinceDatesTheRevocation(t *testing.T) {
+	_, client := newTestClient(t)
+	ctx := context.Background()
+	longAgo := time.Now().Add(-time.Hour)
+
+	if revoked, err := RevokedSince(ctx, client, 7, longAgo); err != nil || revoked {
+		t.Fatalf("user without an epoch: RevokedSince() = %t, %v", revoked, err)
+	}
+	if _, err := AcquireEpoch(ctx, client, 7); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := RevokedSince(ctx, client, 7, longAgo); err != nil || revoked {
+		t.Fatalf("issued epoch: RevokedSince() = %t, %v, want no revocation", revoked, err)
+	}
+
+	justBefore := time.Now()
+	if err := Revoke(ctx, client, 7); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := RevokedSince(ctx, client, 7, longAgo); err != nil || !revoked {
+		t.Fatalf("revocation after since: RevokedSince() = %t, %v, want revoked", revoked, err)
+	}
+	// The revocation is dated to the millisecond; one in the same
+	// millisecond as since counts.
+	if revoked, err := RevokedSince(ctx, client, 7, justBefore); err != nil || !revoked {
+		t.Fatalf("revocation right after since: RevokedSince() = %t, %v, want revoked", revoked, err)
+	}
+	if revoked, err := RevokedSince(ctx, client, 7, time.Now().Add(time.Minute)); err != nil || revoked {
+		t.Fatalf("revocation before since: RevokedSince() = %t, %v, want not revoked", revoked, err)
+	}
+	epoch, _ := client.Get(ctx, Key(7)).Result()
+	if at, ok := RevocationTime(epoch); !ok || time.Since(at) > time.Second || at.After(time.Now().Add(time.Millisecond)) {
+		t.Fatalf("RevocationTime(%q) = %v, %t; want about now", epoch, at, ok)
+	}
+	if _, ok := RevocationTime("i:" + epoch[2:]); ok {
+		t.Fatal("an issued epoch reads as a revocation")
+	}
+
+	if err := client.Set(ctx, Key(7), "r:not-a-uuid", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := RevokedSince(ctx, client, 7, time.Now().Add(time.Hour)); err != nil || !revoked {
+		t.Fatalf("unreadable revocation: RevokedSince() = %t, %v, want revoked", revoked, err)
+	}
+	var none *redis.Client
+	if _, err := RevokedSince(ctx, none, 7, longAgo); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("RevokedSince() without a store: error = %v, want ErrUnavailable", err)
 	}
 }

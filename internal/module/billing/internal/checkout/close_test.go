@@ -626,3 +626,18 @@ func TestCloseStripeOrderWithoutRecordedChargeUsesTheSiteCurrency(t *testing.T) 
 		t.Fatalf("status = %d, want the legacy intent settled", f.status(o.OrderNo))
 	}
 }
+
+// An intent Stripe already canceled can never be paid. The expiry close
+// takes it as canceled instead of asking Stripe to cancel it again, which
+// Stripe refuses; that refusal used to keep the order pending forever.
+func TestCloseStripeOrderClosesAnAlreadyCanceledIntent(t *testing.T) {
+	f, fake := stripeFixture(t)
+	o := f.stripeOrder(fake, 150, "usd", "canceled")
+
+	if err := closeAs(system, f.svc, o.OrderNo); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.status(o.OrderNo) != order.StatusClosed || len(fake.Canceled()) != 0 || len(f.queue.Activations) != 0 {
+		t.Fatalf("status = %d canceled = %v activations = %v, want the order closed without another cancellation", f.status(o.OrderNo), fake.Canceled(), f.queue.Activations)
+	}
+}

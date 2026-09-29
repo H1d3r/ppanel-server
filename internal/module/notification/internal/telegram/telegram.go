@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -179,35 +180,50 @@ func (m telegramBotMessenger) SetGroupAdminCommands(ctx context.Context, chatID 
 	return err
 }
 
-// traffic answers /traffic with the traffic of the bound account's active
-// subscriptions.
+// traffic answers /traffic with the traffic of the bound account's servable
+// subscriptions. The binding alone says nothing about the account: a
+// disabled or deleted one is refused, as the panel refuses it everywhere.
 func (b *Bot) traffic(ctx context.Context, chatID int64) {
+	log := logger.WithContext(ctx)
 	auth, err := b.deps.Accounts.FindBinding(ctx, "telegram", strconv.FormatInt(chatID, 10))
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			b.send(ctx, chatID, "请先绑定账号：登录面板 → 个人设置 → 绑定 Telegram。")
 			return
 		}
-		logger.WithContext(ctx).Errorw("[Telegram] traffic: query binding failed", logger.Field("error", err.Error()))
+		log.Errorw("[Telegram] traffic: query binding failed", logger.Field("error", err.Error()))
 		b.send(ctx, chatID, "查询失败，请稍后再试。")
+		return
+	}
+	u, err := b.deps.Accounts.FindUser(ctx, auth.UserId)
+	if err != nil {
+		log.Errorw("[Telegram] traffic: query user failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))
+		b.send(ctx, chatID, "查询失败，请稍后再试。")
+		return
+	}
+	if refusal := accountRefusal(u); refusal != "" {
+		log.Infow("[Telegram] traffic: account refused", logger.Field("user_id", u.Id), logger.Field("reason", refusal))
+		b.send(ctx, chatID, "您的账号已停用，无法查询订阅流量。")
 		return
 	}
 	subs, err := b.deps.Subscriptions.ListByUser(ctx, auth.UserId)
 	if err != nil {
-		logger.WithContext(ctx).Errorw("[Telegram] traffic: list subscriptions failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))
+		log.Errorw("[Telegram] traffic: list subscriptions failed", logger.Field("error", err.Error()), logger.Field("user_id", auth.UserId))
 		b.send(ctx, chatID, "查询失败，请稍后再试。")
 		return
 	}
-	b.send(ctx, chatID, trafficReport(subs))
+	b.send(ctx, chatID, trafficReport(subs, timeutil.Now()))
 }
 
-// trafficReport renders the active subscriptions' usage. A zero quota is
-// unlimited traffic and a zero (Unix epoch) expiry is no expiry, as
+// trafficReport renders the usage of the subscriptions that can be served at
+// now, by the rule the node user list applies (usersub.AvailabilityAt): a
+// live status, a term still running and traffic left. A zero quota is
+// unlimited traffic, and no expiry (usersub.NoExpiry) is no time limit, as
 // everywhere else in the panel.
-func trafficReport(subs []*usersub.SubscribeDetails) string {
+func trafficReport(subs []*usersub.SubscribeDetails, now time.Time) string {
 	var sb strings.Builder
 	for _, s := range subs {
-		if s.Status != usersub.SubscribeStatusActive {
+		if availabilityAt(s, now) != usersub.Available {
 			continue
 		}
 		if sb.Len() == 0 {
@@ -218,10 +234,10 @@ func trafficReport(subs []*usersub.SubscribeDetails) string {
 		remaining := "无限制"
 		if s.Traffic > 0 {
 			quota = trafficGB(s.Traffic)
-			remaining = trafficGB(max(s.Traffic-used, 0))
+			remaining = trafficGB(s.Traffic - used)
 		}
-		expiry := "长期有效"
-		if s.ExpireTime.Unix() != 0 {
+		expiry := "无限期"
+		if !usersub.NoExpiry(s.ExpireTime) {
 			expiry = s.ExpireTime.In(timeutil.Location()).Format("2006-01-02 15:04")
 		}
 		fmt.Fprintf(&sb, "📦 %s\n   已用：%s / %s\n   剩余：%s\n   到期：%s\n", planName(s), trafficGB(used), quota, remaining, expiry)
@@ -230,6 +246,16 @@ func trafficReport(subs []*usersub.SubscribeDetails) string {
 		return "您当前没有生效中的订阅。"
 	}
 	return sb.String()
+}
+
+// availabilityAt classifies a listed subscription by the entity's rule; the
+// details row carries the subscription's own columns.
+func availabilityAt(s *usersub.SubscribeDetails, now time.Time) usersub.Availability {
+	sub := usersub.Subscribe{
+		Status: s.Status, StartTime: s.StartTime, ExpireTime: s.ExpireTime, FinishedAt: s.FinishedAt,
+		Traffic: s.Traffic, Download: s.Download, Upload: s.Upload,
+	}
+	return sub.AvailabilityAt(now)
 }
 
 // bindTokenKey addresses a single-use account-binding token. Binding tokens

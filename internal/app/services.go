@@ -27,20 +27,27 @@ func NewServices(c config.Config) *lifecycle.Group {
 }
 
 func (srv *Application) services(c config.Config) *lifecycle.Group {
+	// The group starts the services together. The task handlers read the
+	// runtime settings the HTTP service's bootstrap loads, so the worker
+	// consumes only once the bootstrap signals them; the scheduler only
+	// enqueues, and its tasks wait in the queue until then.
+	bootstrapped := lifecycle.NewReadiness()
 	services := lifecycle.NewServiceGroup()
-	services.Add(NewService(srv.serviceDependencies()))
-	services.Add(task.NewService(QueueRedisOpt(c), srv.taskDependencies()))
+	services.Add(NewService(srv.serviceDependencies(bootstrapped)))
+	services.Add(task.NewService(QueueRedisOpt(c), srv.taskDependencies(bootstrapped)))
 	services.Add(scheduler.NewService(QueueRedisOpt(c), c.AppLocation))
 	return services
 }
 
 // serviceDependencies are the HTTP service's: the runtime bootstrap it runs
-// before listening, the routes it serves and the runtime hooks it installs.
-func (srv *Application) serviceDependencies() Dependencies {
+// before listening and reports on bootstrapped, the routes it serves and the
+// runtime hooks it installs.
+func (srv *Application) serviceDependencies(bootstrapped *lifecycle.Readiness) Dependencies {
 	return Dependencies{
-		Config:    srv.Runtime.Config,
-		Identity:  srv.Identity,
-		Bootstrap: srv.bootstrapDependencies(),
+		Config:       srv.Runtime.Config,
+		Identity:     srv.Identity,
+		Bootstrap:    srv.bootstrapDependencies(),
+		Bootstrapped: bootstrapped,
 		HTTP: func() httpserver.Dependencies {
 			return httpserver.Dependencies{
 				Routes:           srv.routeDependencies(),
@@ -82,12 +89,14 @@ func (srv *Application) routeDependencies() routes.Dependencies {
 	}
 }
 
-// taskDependencies are the task worker's. The traffic tasks only flush the
+// taskDependencies are the task worker's, with the signal that the runtime
+// settings it reads are loaded. The traffic tasks only flush the
 // aggregator's buckets: reports enter through the node API, which checks the
 // served subscriptions.
-func (srv *Application) taskDependencies() task.Dependencies {
+func (srv *Application) taskDependencies(bootstrapped *lifecycle.Readiness) task.Dependencies {
 	runtimeConfig := srv.Runtime.Config
 	return task.Dependencies{
+		Bootstrapped: bootstrapped,
 		Email: email.Dependencies{
 			Tasks:    srv.Store.Task(),
 			Logs:     srv.Store.Log(),

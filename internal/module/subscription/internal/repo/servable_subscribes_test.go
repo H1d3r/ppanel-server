@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 
 // TestServableSubscribesSQL pins the node user-list predicate on both
 // production dialects: the status set plus the sweep's expiry and traffic
-// conditions, with the epoch sentinel and "now" bound as parameters.
+// conditions, with the no-limit bound and "now" bound as parameters.
 func TestServableSubscribesSQL(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -35,7 +36,7 @@ func TestServableSubscribesSQL(t *testing.T) {
 			want: []string{
 				"FROM `user_subscribe`",
 				"subscribe_id IN (?,?) AND (status IN (?,?) AND",
-				"(expire_time IS NULL OR expire_time = ? OR expire_time > ?)",
+				"(expire_time IS NULL OR expire_time < ? OR expire_time > ?)",
 				"(traffic > 0 AND upload + download >= traffic) IS NOT TRUE",
 				"ORDER BY subscribe_id ASC, id ASC",
 			},
@@ -49,7 +50,7 @@ func TestServableSubscribesSQL(t *testing.T) {
 			want: []string{
 				`FROM "user_subscribe"`,
 				"subscribe_id IN ($1,$2) AND (status IN ($3,$4) AND",
-				"(expire_time IS NULL OR expire_time = $5 OR expire_time > $6)",
+				"(expire_time IS NULL OR expire_time < $5 OR expire_time > $6)",
 				"(traffic > 0 AND upload + download >= traffic) IS NOT TRUE",
 				"ORDER BY subscribe_id ASC, id ASC",
 			},
@@ -78,8 +79,8 @@ func TestServableSubscribesSQL(t *testing.T) {
 			if len(stmt.Vars) != 6 {
 				t.Fatalf("SQL has %d parameters, want 6: %s", len(stmt.Vars), sql)
 			}
-			if got, ok := stmt.Vars[4].(time.Time); !ok || !got.Equal(time.UnixMilli(0)) {
-				t.Fatalf("sentinel parameter = %#v, want the epoch", stmt.Vars[4])
+			if got, ok := stmt.Vars[4].(time.Time); !ok || !got.Equal(usersub.NoLimitBound()) {
+				t.Fatalf("bound parameter = %#v, want the no-limit bound %v", stmt.Vars[4], usersub.NoLimitBound())
 			}
 			if got, ok := stmt.Vars[5].(time.Time); !ok || !got.Equal(now) {
 				t.Fatalf("now parameter = %#v, want %v", stmt.Vars[5], now)
@@ -90,13 +91,19 @@ func TestServableSubscribesSQL(t *testing.T) {
 
 // TestFindUsersSubscribeBySubscribeIdsDropsExpiredAndExhausted runs the
 // query: rows the lifecycle sweep is due to finish lose node access before
-// the sweep flips their status, while the no-limit sentinel, a NULL expiry
-// and unlimited or remaining traffic keep it.
+// the sweep flips their status, while the no-limit marker (in whichever wall
+// clock it was stored), a NULL expiry and unlimited or remaining traffic
+// keep it.
 func TestFindUsersSubscribeBySubscribeIdsDropsExpiredAndExhausted(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "servable.db")), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	// The model carries MySQL-specific type/default tags; use the portable
 	// equivalent of the production table.
 	if err := db.Exec(`CREATE TABLE user_subscribe (
@@ -119,6 +126,9 @@ func TestFindUsersSubscribeBySubscribeIdsDropsExpiredAndExhausted(t *testing.T) 
 		{Id: 7, SubscribeId: 7, Status: usersub.SubscribeStatusActive, ExpireTime: future, Traffic: 100, Upload: 99},
 		{Id: 8, SubscribeId: 7, Status: usersub.SubscribeStatusActive, ExpireTime: past},
 		{Id: 9, SubscribeId: 7, Status: usersub.SubscribeStatusPending, ExpireTime: time.UnixMilli(0), Traffic: 100, Upload: 100},
+		// The marker as a zone-less column returns it when it was written
+		// in UTC+8 and is read in UTC.
+		{Id: 10, SubscribeId: 7, Status: usersub.SubscribeStatusActive, ExpireTime: time.Date(1970, 1, 1, 8, 0, 0, 0, time.UTC)},
 	}
 	for i := range rows {
 		rows[i].Token = fmt.Sprintf("token-%d", rows[i].Id)
@@ -140,7 +150,7 @@ func TestFindUsersSubscribeBySubscribeIdsDropsExpiredAndExhausted(t *testing.T) 
 	for _, sub := range got {
 		ids = append(ids, sub.Id)
 	}
-	if fmt.Sprint(ids) != "[1 3 7 8]" {
-		t.Fatalf("served subscriptions = %v, want [1 3 7 8]", ids)
+	if fmt.Sprint(ids) != "[1 3 7 8 10]" {
+		t.Fatalf("served subscriptions = %v, want [1 3 7 8 10]", ids)
 	}
 }

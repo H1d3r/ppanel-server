@@ -123,6 +123,9 @@ func init() {
 		// Subscription band
 		SubscriptionStatusChanged:       "SUBSCRIPTION_STATUS_CHANGED",
 		SubscriptionStatusNotToggleable: "SUBSCRIPTION_STATUS_NOT_TOGGLEABLE",
+
+		// Platform band
+		SettingsSavedNotApplied: "Settings saved but could not be applied; reload or restart the service",
 	}
 
 }

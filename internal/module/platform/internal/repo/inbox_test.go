@@ -6,20 +6,11 @@ import (
 
 	"github.com/perfect-panel/server/internal/module/platform/entity/inbox"
 	"github.com/perfect-panel/server/internal/repository"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 func newInboxTestRepo(t *testing.T, name string) repository.InboxRepo {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(&inbox.Record{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return NewInboxRepo(db)
+	return NewInboxRepo(openTestDB(t, name, &inbox.Record{}))
 }
 
 func TestInboxFindReturnsNilWhenUnprocessed(t *testing.T) {

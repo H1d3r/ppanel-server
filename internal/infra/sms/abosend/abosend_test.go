@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -75,6 +76,36 @@ func TestSendTextReportsProviderFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A transport failure is logged by the sending task, so its error must not
+// carry the organisation code, the key, the number or the code.
+func TestSendTextTransportFailureKeepsSecretsOutOfTheError(t *testing.T) {
+	client := NewClient(Config{ApiDomain: "http://" + closedAddr(t), Access: "ORG01", Secret: "md5-key"}, http.DefaultClient)
+
+	err := client.SendText(context.Background(), "86", "13800000000", "Your code is 123456")
+
+	if err == nil {
+		t.Fatal("a refused connection reported success")
+	}
+	for _, secret := range []string{"ORG01", "md5-key", "13800000000", "123456", "?"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q carries %q", err, secret)
+		}
+	}
+}
+
+// closedAddr returns an address nothing listens on, so connecting to it is
+// refused.
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+	return addr
 }
 
 func TestSendTextHonoursContext(t *testing.T) {

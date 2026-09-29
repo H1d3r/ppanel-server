@@ -27,7 +27,7 @@ func TestRenewalResetsTrafficFollowsTheResetCycle(t *testing.T) {
 		want   bool
 	}{
 		{"the plan resets on every renewal", subscribe.Subscribe{RenewalReset: &yes, ResetCycle: int64(period.CycleMonthly)}, at(1, 15), at(9, 15), at(3, 1), true},
-		{"a term without end buys a new allowance", subscribe.Subscribe{}, at(1, 15), usersub.NoLimitExpiry, at(3, 1), true},
+		{"a term without end buys a new allowance", subscribe.Subscribe{}, at(1, 15), usersub.NoLimitExpiry(), at(3, 1), true},
 		{"running on the expiry's day of the month", subscribe.Subscribe{}, at(1, 15), at(9, 15), at(3, 15), false},
 		{"running monthly plan on its reset day", subscribe.Subscribe{ResetCycle: int64(period.CycleMonthly)}, at(1, 15), at(9, 15), at(3, 15), false},
 		{"lapsed plan without calendar reset", subscribe.Subscribe{}, at(1, 15), at(3, 10), at(3, 12), true},

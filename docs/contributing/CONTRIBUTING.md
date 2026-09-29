@@ -27,8 +27,10 @@ To ensure the quality of the codebase and maintainability of the project, please
 ### Local checks
 
 The Makefile runs the same checks as CI. The Go tools it needs (goimports,
-golangci-lint, govulncheck) are installed on first use, at the versions the
-Makefile pins, into `bin/tools` (ignored by git); nothing is installed globally.
+golangci-lint) are installed on first use, at the versions the Makefile pins,
+into `bin/tools` (ignored by git); govulncheck runs through `go run` at its
+pinned version, so it only lives in the Go module cache. Nothing is installed
+globally.
 
 | Command | What it does |
 |---|---|

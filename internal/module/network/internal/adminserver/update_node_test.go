@@ -35,6 +35,13 @@ func newNodeRepoStore(t *testing.T) (*gorm.DB, nodeRepoStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Closing the pool discards the shared-cache database, so a repeated
+	// run (-count) starts from an empty one.
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&node.Server{}, &node.Node{}); err != nil {
 		t.Fatal(err)
 	}

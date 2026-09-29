@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -177,8 +178,8 @@ func (c competingClaim) FindOneByOrderNo(ctx context.Context, orderNo string) (*
 	return c.orders.FindOneByOrderNo(ctx, orderNo)
 }
 
-func (c competingClaim) CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error) {
-	return c.orders.CountPendingGuestOrders(ctx, authType, identifier)
+func (c competingClaim) CountPendingGuestOrders(ctx context.Context, authType, identifier string, since time.Time) (int64, error) {
+	return c.orders.CountPendingGuestOrders(ctx, authType, identifier, since)
 }
 
 func (c competingClaim) UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string) (bool, error) {
@@ -313,5 +314,36 @@ func TestCallbackCloseAndActivationRaceToOneConsistentOutcome(t *testing.T) {
 	}
 	if len(f.h.Orders(u.Id)) != 12 {
 		t.Fatal("unexpected orders")
+	}
+}
+
+// Design: a guest replay under its key proves the password against the
+// order's password hash, since the stored request hash carries none; a
+// different password is refused like a changed body, and the stored hash
+// reveals nothing about the password.
+func TestGuestReplayProvesThePasswordAgainstTheOrder(t *testing.T) {
+	f := newV2Fixture(t, v2Options{})
+	ctx := context.Background()
+	plan, method := f.plan(5), f.epay()
+
+	first, err := f.svc.CreateAndCheckout(ctx, guestPurchase(plan, method), "key-0000000007")
+	if err != nil {
+		t.Fatalf("CreateAndCheckout: %v", err)
+	}
+	retry, err := f.svc.CreateAndCheckout(ctx, guestPurchase(plan, method), "key-0000000007")
+	if err != nil || retry.Order.OrderNo != first.Order.OrderNo {
+		t.Fatalf("retry = (%+v, %v), want the first order", retry, err)
+	}
+	wrong := guestPurchase(plan, method)
+	wrong.Guest.Password = "another-password"
+	if _, err := f.svc.CreateAndCheckout(ctx, wrong, "key-0000000007"); !errors.Is(err, ErrIdempotencyKeyReused) {
+		t.Fatalf("replay with another password: %v, want ErrIdempotencyKeyReused", err)
+	}
+	stored := f.h.ReloadOrder(first.Order.OrderNo)
+	if other, _ := requestHash(ctx, wrong); stored.IdempotencyHash != other {
+		t.Fatal("the stored request hash distinguishes passwords")
+	}
+	if guests := f.h.Orders(0); len(guests) != 1 {
+		t.Fatalf("guest orders = %d, want one", len(guests))
 	}
 }

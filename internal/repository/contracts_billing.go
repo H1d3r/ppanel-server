@@ -23,18 +23,20 @@ type OrderRepo interface {
 	UpdatePaymentExpectation(ctx context.Context, orderNo string, amount int64, currency string) (bool, error)
 	SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, tradeNo string) (bool, error)
 	MarkOrderPaid(ctx context.Context, orderNo, tradeNo string) (bool, error)
-	// SetCommission records the referral commission paid for the order; a
-	// refund reverses it in proportion.
-	SetCommission(ctx context.Context, orderNo string, amount int64) error
+	// SetCommission records the referral commission paid for the order and
+	// the referrer credited with it; a refund reverses it in proportion
+	// against that referrer, whoever refers the buyer by then.
+	SetCommission(ctx context.Context, orderNo string, amount, refererID int64) error
 	// HasCommissionedOrder reports whether another order of the user has
 	// already earned a referral commission.
 	HasCommissionedOrder(ctx context.Context, userID int64, exceptOrderNo string) (bool, error)
 	CountPendingByPaymentID(ctx context.Context, paymentID int64) (int64, error)
 	QueryOrdersByStatusAfterID(ctx context.Context, status uint8, afterID int64, limit int) ([]*order.Order, error)
 	CountUserCouponUsage(ctx context.Context, userID int64, coupon string) (int64, error)
-	// CountPendingGuestOrders counts the unpaid guest orders held by one
-	// canonical guest identity before its account exists.
-	CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error)
+	// CountPendingGuestOrders counts the unpaid orders a canonical guest
+	// identity created at or after since and still holds before its account
+	// exists.
+	CountPendingGuestOrders(ctx context.Context, authType, identifier string, since time.Time) (int64, error)
 	QueryOrderListByPage(ctx context.Context, page, size int, status uint8, user, subscribe int64, search string) (int64, []*order.Details, error)
 	FindOneDetails(ctx context.Context, id int64) (*order.Details, error)
 	FindOneDetailsByOrderNo(ctx context.Context, orderNo string) (*order.Details, error)

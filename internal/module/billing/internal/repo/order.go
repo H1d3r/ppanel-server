@@ -194,13 +194,15 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 	return count, err
 }
 
-// CountPendingGuestOrders counts the unpaid orders a guest identity holds
-// before its account exists; guest orders carry no user until activation.
-func (m *orderRepo) CountPendingGuestOrders(ctx context.Context, authType, identifier string) (int64, error) {
+// CountPendingGuestOrders counts the unpaid orders a guest identity created
+// at or after since and still holds before its account exists; guest orders
+// carry no user until activation.
+func (m *orderRepo) CountPendingGuestOrders(ctx context.Context, authType, identifier string, since time.Time) (int64, error) {
 	var count int64
 	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v any) error {
 		return conn.Model(&order.Order{}).
-			Where("user_id = ? AND status = ? AND guest_auth_type = ? AND guest_identifier = ?", 0, order.StatusPending, authType, identifier).
+			Where("user_id = ? AND status = ? AND guest_auth_type = ? AND guest_identifier = ? AND created_at >= ?",
+				0, order.StatusPending, authType, identifier, since).
 			Count(&count).Error
 	})
 	return count, err
@@ -349,13 +351,14 @@ func (m *orderRepo) SetPaymentTradeNoIfEmpty(ctx context.Context, orderNo, trade
 	return updated, err
 }
 
-func (m *orderRepo) SetCommission(ctx context.Context, orderNo string, amount int64) error {
+func (m *orderRepo) SetCommission(ctx context.Context, orderNo string, amount, refererID int64) error {
 	orderInfo, err := m.FindOneByOrderNo(ctx, orderNo)
 	if err != nil {
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).Update("commission", amount).Error
+		return conn.Model(&order.Order{}).Where("order_no = ?", orderNo).
+			Updates(map[string]any{"commission": amount, "commission_referer_id": refererID}).Error
 	}, m.getCacheKeys(orderInfo)...)
 }
 

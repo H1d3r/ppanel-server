@@ -55,6 +55,10 @@ func PaymentNotifyHandler(service billing.Service) app.HandlerFunc {
 		if style.Body {
 			payload, err := notifyPayload(ctx.Request.Body())
 			if err != nil {
+				if style.StatusFailure {
+					failWithStatus(ctx, fmt.Errorf("%w: %w", billing.ErrInvalidPaymentCallback, err))
+					return
+				}
 				httpx.HttpResult(ctx, nil, err)
 				return
 			}
@@ -73,11 +77,14 @@ func PaymentNotifyHandler(service billing.Service) app.HandlerFunc {
 			}
 		}
 		if err := service.PaymentNotify(c, notification); err != nil {
-			if style.TextFailure {
+			switch {
+			case style.TextFailure:
 				ctx.String(consts.StatusBadRequest, err.Error())
-				return
+			case style.StatusFailure:
+				failWithStatus(ctx, err)
+			default:
+				httpx.HttpResult(ctx, nil, err)
 			}
-			httpx.HttpResult(ctx, nil, err)
 			return
 		}
 		if style.TextReply {
@@ -86,6 +93,20 @@ func PaymentNotifyHandler(service billing.Service) app.HandlerFunc {
 		}
 		httpx.HttpResult(ctx, nil, nil)
 	}
+}
+
+// failWithStatus answers a rejected callback of a gateway that reads the
+// HTTP status: 400 when the callback cannot be authenticated or does not
+// describe its order, so the gateway stops redelivering it, and 500 for a
+// processing failure, so the gateway redelivers it. Every other route
+// answers HTTP 200 with the outcome in the body, which such a gateway would
+// take as success and never retry. The body keeps the error envelope.
+func failWithStatus(ctx *app.RequestContext, err error) {
+	status := consts.StatusInternalServerError
+	if errors.Is(err, billing.ErrInvalidPaymentCallback) {
+		status = consts.StatusBadRequest
+	}
+	ctx.JSON(status, httpx.BuildHTTPResult(nil, err).Body)
 }
 
 func nativeFormValues(ctx *app.RequestContext) url.Values {

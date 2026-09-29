@@ -13,6 +13,7 @@ import (
 // UpdateBindMobileHandler documents Update Bind Mobile.
 //
 // @Summary Update Bind Mobile
+// @Description Binds the phone number proven by the code sent to it. Replacing the one the account already has also requires the current password (password), or, for an account without a password, the security code sent to the current phone number (current_code), and ends every session of the account.
 // @Tags user
 // @Accept json
 // @Produce json

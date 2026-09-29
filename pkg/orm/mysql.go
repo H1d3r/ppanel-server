@@ -60,9 +60,10 @@ func locationOrDefault(location string) string {
 
 // SessionLocation reports the time zone the connection stores and reads
 // timestamps in: the loc parameter for MySQL (the driver's UTC when custom
-// parameters name none), the TimeZone parameter for PostgreSQL ("" when
-// custom parameters leave it to the server), and the default parameters'
-// zone otherwise. Stored times and per-day statistics are in this zone.
+// parameters name none, the process zone's name for "Local"), the TimeZone
+// parameter for PostgreSQL ("" when custom parameters leave it to the
+// server), and the default parameters' zone otherwise. Stored times and
+// per-day statistics are in this zone.
 func (m Mysql) SessionLocation() string {
 	params := m.Config.Config
 	if m.Driver() == DriverPostgres {
@@ -87,10 +88,17 @@ func (m Mysql) SessionLocation() string {
 	if err != nil {
 		return ""
 	}
-	if zone := values.Get("loc"); zone != "" {
+	switch zone := values.Get("loc"); zone {
+	case "":
+		return "UTC"
+	case "Local":
+		// The driver reads "Local" as time.Local, which the server sets to
+		// AppLocation at startup; the zone's own name is what the startup
+		// comparison with AppLocation expects.
+		return time.Local.String()
+	default:
 		return zone
 	}
-	return "UTC"
 }
 
 // DefaultMySQLQuery returns the default MySQL connection parameters, reading

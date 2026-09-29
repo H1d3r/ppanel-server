@@ -10,6 +10,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/internal/account"
 	"github.com/perfect-panel/server/internal/module/identity/internal/authn/registerpolicy"
 	"github.com/perfect-panel/server/internal/module/identity/internal/oauthprovider"
+	"github.com/perfect-panel/server/internal/module/identity/internal/oauthstate"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"gorm.io/gorm"
@@ -33,7 +34,7 @@ func (s *Service) OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGet
 		}
 	}()
 
-	identity, err := s.deps.Flow.Identify(ctx, req.Method, fields)
+	identity, err := s.deps.Flow.Identify(ctx, oauthstate.LoginScope(), req.Method, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +46,7 @@ func (s *Service) OAuthLoginGetToken(ctx context.Context, req *dto.OAuthLoginGet
 	if err := account.EnsureActive(userInfo); err != nil {
 		return nil, err
 	}
-	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().Sessions, userInfo.Id, "", nil)
+	token, err := account.IssueSession(ctx, s.deps.Redis, s.deps.Config().Sessions, account.Login{UserID: userInfo.Id})
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-telegram/bot/models"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/subscribe"
@@ -47,8 +48,8 @@ func newAdminHarness() *adminHarness {
 	return h
 }
 
-func (h *adminHarness) run(text string) string {
-	h.admin = NewAdmin(AdminDependencies{
+func (h *adminHarness) newAdmin() *Admin {
+	return NewAdmin(AdminDependencies{
 		Messenger:     h.messenger,
 		Actions:       h.actions,
 		Accounts:      h.accounts,
@@ -57,6 +58,10 @@ func (h *adminHarness) run(text string) string {
 		Billing:       h.billing,
 		AuditLogs:     h.logs,
 	})
+}
+
+func (h *adminHarness) run(text string) string {
+	h.admin = h.newAdmin()
 	before := len(h.messenger.sent)
 	h.admin.Handle(context.Background(), telegramCommand(adminChat, text))
 	if len(h.messenger.sent) != before+1 {
@@ -131,8 +136,70 @@ func TestAdminBanDisablesTargetAfterConfirmation(t *testing.T) {
 	if *h.accounts.users[9].Enable {
 		t.Fatal("the account is still enabled")
 	}
-	if len(h.actions.deleted) != 1 || h.actions.deleted[0] != tgActionPrefix+actionID {
-		t.Fatalf("deleted actions = %v, want the confirmation consumed", h.actions.deleted)
+	if got := h.run("/confirm_" + actionID); got != "操作已过期或无效。" {
+		t.Fatalf("second confirmation = %q, want the confirmation consumed", got)
+	}
+	if *h.accounts.users[9].Enable {
+		t.Fatal("the second confirmation re-enabled the account")
+	}
+}
+
+// The confirmation applies the change its prompt announced: if the account
+// was switched elsewhere meanwhile, it refuses instead of switching it back.
+func TestAdminBanConfirmationRefusesAfterStateChange(t *testing.T) {
+	for name, tt := range map[string]struct {
+		before, meanwhile bool
+		prompt, refusal   string
+	}{
+		"disable": {before: true, meanwhile: false, prompt: "确认禁用用户", refusal: "已处于禁用状态"},
+		"enable":  {before: false, meanwhile: true, prompt: "确认启用用户", refusal: "已处于启用状态"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newAdminHarness()
+			before := tt.before
+			h.accounts.users[9] = &user.User{Id: 9, Enable: &before}
+			prompt := h.run("/ban 9")
+			if !strings.Contains(prompt, tt.prompt) {
+				t.Fatalf("prompt = %q, want %q", prompt, tt.prompt)
+			}
+			meanwhile := tt.meanwhile
+			h.accounts.users[9].Enable = &meanwhile // switched in the panel meanwhile
+
+			actionID := confirmation(t, prompt)
+			if got := h.run("/confirm_" + actionID); !strings.Contains(got, tt.refusal) {
+				t.Fatalf("reply = %q, want the stale confirmation refused with %q", got, tt.refusal)
+			}
+			if *h.accounts.users[9].Enable != tt.meanwhile {
+				t.Fatal("the stale confirmation switched the account back")
+			}
+			if _, ok := h.actions.values[tgActionPrefix+actionID]; ok {
+				t.Fatal("the refused confirmation is still redeemable")
+			}
+		})
+	}
+}
+
+// Two confirmations of one /ban racing each other: the second reads the
+// account after the first switched it. It must find the confirmation gone
+// instead of switching the account back.
+func TestAdminBanConfirmationIsConsumedBeforeItIsApplied(t *testing.T) {
+	h := newAdminHarness()
+	enabled := true
+	h.accounts.users[9] = &user.User{Id: 9, Enable: &enabled}
+	actionID := confirmation(t, h.run("/ban 9"))
+
+	second := "<not run>"
+	h.accounts.afterSetEnabled = func() { second = h.run("/confirm_" + actionID) }
+	h.admin.Handle(context.Background(), telegramCommand(adminChat, "/confirm_"+actionID))
+
+	if second != "操作已过期或无效。" {
+		t.Fatalf("second confirmation = %q, want it refused", second)
+	}
+	if first := h.messenger.last().message; !strings.Contains(first, "已禁用") {
+		t.Fatalf("first confirmation = %q, want the account disabled", first)
+	}
+	if *h.accounts.users[9].Enable {
+		t.Fatal("the racing confirmation re-enabled the account")
 	}
 }
 
@@ -146,7 +213,8 @@ func TestAdminCannotBanOwnAccount(t *testing.T) {
 	}
 }
 
-// A confirmation belongs to the administrator who asked for it.
+// A confirmation belongs to the administrator who asked for it, and stays
+// redeemable for them after somebody else tried it.
 func TestAdminConfirmationIsBoundToItsIssuer(t *testing.T) {
 	h := newAdminHarness()
 	action, _ := json.Marshal(tgAction{Cmd: "ban", AdminID: 77, Target: "9"})
@@ -154,6 +222,9 @@ func TestAdminConfirmationIsBoundToItsIssuer(t *testing.T) {
 
 	if got := h.run("/confirm_foreign"); got != "操作已过期或无效。" {
 		t.Fatalf("reply = %q, want another administrator's confirmation refused", got)
+	}
+	if got := h.actions.values[tgActionPrefix+"foreign"]; got != string(action) {
+		t.Fatalf("stored action = %q, want the other administrator's confirmation kept", got)
 	}
 }
 
@@ -277,15 +348,17 @@ func TestAdminResetZeroesTrafficAfterConfirmation(t *testing.T) {
 // A confirmation whose change failed stays redeemable for a retry.
 func TestAdminFailedConfirmationStaysRedeemable(t *testing.T) {
 	h := newAdminHarness()
-	h.subs = newFakeSubscriptions(&usersub.Subscribe{Id: 5, Status: usersub.SubscribeStatusActive})
-	prompt := h.run("/reset 5")
+	h.subs = newFakeSubscriptions(&usersub.Subscribe{Id: 5, Status: usersub.SubscribeStatusActive, Download: 1 << 30})
+	actionID := confirmation(t, h.run("/reset 5"))
+	missing := h.subs.subs[5]
 	delete(h.subs.subs, 5)
 
-	if got := h.run("/confirm_" + confirmation(t, prompt)); got != "订阅不存在。" {
+	if got := h.run("/confirm_" + actionID); got != "订阅不存在。" {
 		t.Fatalf("reply = %q", got)
 	}
-	if len(h.actions.deleted) != 0 {
-		t.Fatalf("deleted actions = %v, want the confirmation kept", h.actions.deleted)
+	h.subs.subs[5] = missing
+	if got := h.run("/confirm_" + actionID); !strings.Contains(got, "流量已重置") {
+		t.Fatalf("retry = %q, want the confirmation still redeemable", got)
 	}
 }
 
@@ -388,6 +461,43 @@ func TestAdminUserDetailShowsAccountAndSubscriptions(t *testing.T) {
 	}
 	if got := h.run("/user nobody@example.com"); got != "找不到用户。" {
 		t.Fatalf("unknown user = %q", got)
+	}
+}
+
+// Every "/<command>_<n>" link the bot prints must run its command when it
+// is tapped in the admin group, where the update router decides what reaches
+// the administrator commands; in the private chat it is redirected like any
+// administrator command.
+func TestPrintedShortcutLinksRunTheirCommand(t *testing.T) {
+	h := newAdminHarness()
+	for id := int64(1); id <= 12; id++ {
+		h.tickets.tickets[id] = &ticket.Ticket{Id: id, Title: "t", Status: ticket.Pending}
+	}
+	enabled := true
+	h.accounts.users[9] = &user.User{Id: 9, Enable: &enabled}
+	h.subs = newFakeSubscriptions(&usersub.Subscribe{Id: 5, Status: usersub.SubscribeStatusActive})
+	bot := NewBot(BotDependencies{
+		Messenger: h.messenger, Accounts: h.accounts, Admin: h.newAdmin(),
+		GroupChatID: func() int64 { return testGroupID },
+	})
+
+	for link, want := range map[string]string{
+		"/tickets_2":  "第2/2页",
+		"/reset_5":    "确认重置 订阅(ID:5)",
+		"/toggle_5":   "确认暂停订阅 (ID:5)",
+		"/user_sub_9": "用户无订阅。",
+		"/user_log_9": "无登录日志",
+		"/ban_9":      "确认禁用用户",
+	} {
+		before := len(h.messenger.sent)
+		bot.HandleUpdate(context.Background(), &models.Update{Message: withCommand(groupMessage(adminChat, 0, link))})
+		if len(h.messenger.sent) != before+1 || !strings.Contains(h.messenger.last().message, want) {
+			t.Fatalf("%s in the group: sent = %+v, want one reply containing %q", link, h.messenger.sent[before:], want)
+		}
+	}
+	bot.HandleUpdate(context.Background(), privateUpdate(adminChat, "/tickets_2"))
+	if got := h.messenger.last().message; !strings.Contains(got, "管理群") {
+		t.Fatalf("/tickets_2 in private = %q, want the admin-group redirect", got)
 	}
 }
 
