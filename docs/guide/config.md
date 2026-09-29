@@ -93,7 +93,7 @@ Administrator: # First administrator, created on the first start
 - **`Host`**: Address the server listens on.
   - Default: `0.0.0.0` (all network interfaces).
   - It is only a bind address. Public links, such as payment callback URLs, are built from the site host
-    (site settings) or a payment method's own domain.
+    (site settings, see 3.10) or a payment method's own domain, and OAuth redirects are pinned to the site host.
 - **`Port`**: Port the server listens on.
   - Default: `8080`.
   - The container image runs as an unprivileged user, which cannot bind a port below 1024: publish a low port with
@@ -103,14 +103,19 @@ Administrator: # First administrator, created on the first start
 - **`TrustedProxies`**: Reverse proxies whose `X-Forwarded-For` and `X-Real-IP` headers name the real client, as IP
   addresses or CIDR ranges, for example `["127.0.0.1", "10.0.0.0/8"]`.
   - Default: empty. No header is trusted: the client address is the connection's remote address.
-  - The client address feeds the rate limits, the login and audit logs, and the registration limit per IP. When the
-    server runs behind nginx, Caddy, a load balancer or a Cloudflare tunnel, list that proxy's address here, otherwise
-    every client appears as the proxy. List the proxies only, never the clients: an entry such as `0.0.0.0/0` lets
-    anyone choose the address the server records.
+  - The client address feeds the login and audit logs and every per-IP limit (verification codes, device login,
+    availability checks, subscription fetches, registrations). When the server runs behind nginx, Caddy, a load
+    balancer or a Cloudflare tunnel, list that proxy's address here, otherwise every client appears as the proxy and
+    the limits apply to all clients together; [install.md, NGINX reverse proxy](install.md#nginx-reverse-proxy)
+    shows the matching nginx configuration. List the proxies only, never the clients: an entry such as `0.0.0.0/0`
+    lets anyone choose the address the server records.
 - **`AllowedOrigins`**: Browser origins admitted by CORS, as `scheme://host[:port]`, for example
   `["https://user.example.com", "https://admin.example.com"]`.
   - Default: empty, which keeps the permissive behaviour of reflecting the request's `Origin`: any website's scripts
     may call the API from a browser.
+  - When set, a listed origin is matched exactly (case-insensitively) and receives the CORS headers, with
+    credentials allowed; an unlisted origin receives no CORS headers at all, so the browser blocks the call. The
+    device WebSocket (`/v1/app/ws/...`) applies the same list to browser clients.
   - Set it to the origins of the user and admin frontends in production. Requests without an `Origin` header
     (clients, nodes, subscriptions) are not affected.
 - **`HTTP`**: Limits of the API listener. The defaults are the values the server ran with before they were
@@ -312,6 +317,15 @@ and the settings are stored in the database. The fields are:
 | `implicit_tls` | Start the connection with a TLS handshake on a port other than 465. Only for relays that serve SMTPS on a non-standard port; never for a STARTTLS port, where the handshake would meet a plaintext greeting and no mail would go out. |
 | `insecure_skip_verify` | Accept any relay certificate. Only for relays with a self-signed certificate; certificates are verified by default. |
 
+### 3.10 Site Host (system settings)
+
+`Site.Host` is not part of this file either: administrators set it in the panel (system settings, site) as the
+public URL of the panel, for example `https://panel.example.com`. Payment callbacks are built from it, and the
+OAuth redirects of the Apple and Telegram sign-in methods are pinned to it. It must be set when either of those
+methods is enabled: with it empty, a redirect is only accepted when it stays on the API's own host (the same host,
+a subdomain or a parent domain), otherwise the sign-in is refused, and the server logs an error at start-up naming
+the affected methods.
+
 ## 4. Environment Variables
 
 Two environment variables complete an empty configuration file on the first start, for containers and unattended
@@ -352,6 +366,7 @@ within the timeout. The container image's `HEALTHCHECK` runs it, and a systemd o
   startup while any administrator still uses the old default password `password`.
 - **Reverse proxy**: Behind nginx, Caddy or a load balancer set `TrustedProxies` to the proxy's address, otherwise the
   logs and the rate limits see the proxy instead of the clients; set `AllowedOrigins` to the frontends' origins.
+- **Site host**: Set the site host in the system settings before enabling Apple or Telegram sign-in (3.10).
 - **Logging**: Use `file` or `volume` mode for production to persist logs. Set `Level` to `error` to reduce log
   volume; `severe` writes nothing at all.
 - **Database**: Ensure `Database` and `Redis` credentials are secure and not exposed in version control, and keep
