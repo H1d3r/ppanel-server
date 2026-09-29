@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/perfect-panel/server/internal/auth/ratelimit"
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
 	paymentEntity "github.com/perfect-panel/server/internal/module/billing/entity/payment"
@@ -409,7 +410,8 @@ func New(deps Deps) Service {
 	return &service{
 		statistics: statistics{orders: deps.Orders},
 		orders: adminorder.NewService(adminorder.Deps{
-			Orders: deps.Orders, Payments: deps.Payments, Tx: deps.Tx, Queue: deps.Queue, Plans: deps.Plans, Closer: checkoutSvc,
+			Orders: deps.Orders, Payments: deps.Payments, Coupons: deps.Coupons, UserSubs: deps.UserSubs, Inventory: deps.Inventory,
+			Tx: deps.Tx, Queue: deps.Queue, Plans: deps.Plans, Closer: checkoutSvc,
 		}),
 		payments: adminpayment.NewService(adminpayment.Deps{
 			Payments: deps.Payments, Orders: deps.Orders, Gateways: gateways,
@@ -417,7 +419,7 @@ func New(deps Deps) Service {
 		}),
 		coupons:    coupon.NewService(deps.Coupons),
 		userOrders: userorder.NewService(deps.Orders, deps.Plans),
-		callbacks:  callbacks.NewService(deps.Orders, deps.Queue, gateways),
+		callbacks:  callbacks.NewService(deps.Orders, deps.Queue, gateways, callbacks.WithUnmatchedPaymentLog(unmatchedPaymentLog(deps.Logs))),
 		gateways:   gateways,
 		portal:     portalSvc,
 		checkout:   checkoutSvc,
@@ -441,6 +443,7 @@ func New(deps Deps) Service {
 			Portal:       portalSvc,
 			JwtSecret:    deps.Portal.JwtSecret,
 			CurrencyUnit: deps.CurrencyUnit,
+			GuestReplays: guestReplayLimits(deps.Redis),
 			Stream: v2orch.StreamDeps{
 				Events:  deps.OrderEvents,
 				Broker:  v2orch.RedisBroker{Client: deps.Redis},
@@ -744,6 +747,42 @@ func portalOrderEvents(events OrderEventStore) portal.OrderEvents {
 		return nil
 	}
 	return events
+}
+
+// unmatchedPaymentLog passes the system log to the callback flow, which
+// records the gateway payments it cannot settle in it; a facade built
+// without the log (some flows' tests) only reports them in the process log.
+func unmatchedPaymentLog(logs repository.LogRepo) callbacks.UnmatchedPaymentLog {
+	if logs == nil {
+		return nil
+	}
+	return logs
+}
+
+// Guest replays of a V2 create request are bounded per idempotency key and
+// per client IP over the order's payment window: a replay proves the guest
+// password against the order, so the bound is what keeps a leaked key from
+// becoming a password oracle. A legitimate guest replays a handful of times
+// while the page reloads; an office behind one address a few dozen.
+const (
+	guestReplayPeriod   = order.PaymentWindow
+	guestReplaysPerKey  = 20
+	guestReplaysPerIP   = 60
+	guestReplayKeySpace = "billing:v2:guest-replay:key:"
+	guestReplayIPSpace  = "billing:v2:guest-replay:ip:"
+)
+
+// guestReplayLimits builds the replay limits over Redis; without Redis (some
+// flows' tests) replays are not limited.
+func guestReplayLimits(rds *redis.Client) v2orch.GuestReplayLimits {
+	if rds == nil {
+		return v2orch.GuestReplayLimits{}
+	}
+	period := int(guestReplayPeriod.Seconds())
+	return v2orch.GuestReplayLimits{
+		PerKey: ratelimit.NewPeriodLimit(period, guestReplaysPerKey, rds, guestReplayKeySpace),
+		PerIP:  ratelimit.NewPeriodLimit(period, guestReplaysPerIP, rds, guestReplayIPSpace),
+	}
 }
 
 // storeWallets reads wallets through the store, which may be absent in a

@@ -53,6 +53,7 @@ type v2Options struct {
 	gateways *gateway.Registry
 	orders   func(portal.Orders) portal.Orders
 	stream   func(*StreamDeps)
+	replays  GuestReplayLimits
 }
 
 func newV2Fixture(t *testing.T, opts v2Options) *v2Fixture {
@@ -91,7 +92,7 @@ func newV2Fixture(t *testing.T, opts v2Options) *v2Fixture {
 	}
 	f.svc = NewService(Deps{
 		Orders: h.Store.Order(), Checkout: f.checkout, Portal: f.portal,
-		JwtSecret: "v2-secret", CurrencyUnit: currency, Stream: stream,
+		JwtSecret: "v2-secret", CurrencyUnit: currency, GuestReplays: opts.replays, Stream: stream,
 	})
 	return f
 }
