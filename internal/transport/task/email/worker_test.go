@@ -54,15 +54,18 @@ func (s *workerTaskStore) FindOneByType(_ context.Context, _ int64, typ task.Typ
 	return &data, nil
 }
 
+// UpdateActive writes data as the repository does: only while the stored
+// task is pending or in progress.
 func (s *workerTaskStore) UpdateActive(_ context.Context, data *task.Task) (bool, error) {
 	if s.updateErr != nil {
 		return false, s.updateErr
 	}
-	if s.rejectActive {
+	if s.rejectActive || (s.task != nil && s.task.Status != task.StatusPending && s.task.Status != task.StatusInProgress) {
 		return false, nil
 	}
 	s.updates++
-	s.task = data
+	stored := *data
+	s.task = &stored
 	return true, nil
 }
 

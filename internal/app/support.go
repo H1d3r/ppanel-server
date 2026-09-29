@@ -92,7 +92,10 @@ type marketingQueue struct {
 func (q marketingQueue) EnqueueBatchEmail(ctx context.Context, taskID int64, processAt time.Time) (string, error) {
 	queueTaskID := fmt.Sprintf("marketing-email-%d-initial", taskID)
 	t := asynq.NewTask(taskqueue.ScheduledBatchSendEmail, []byte(strconv.FormatInt(taskID, 10)))
-	if err := q.enqueueIdempotent(ctx, t, queueTaskID, asynq.ProcessAt(processAt)); err != nil {
+	// A campaign run is paced over hours; the explicit timeout replaces
+	// asynq's 30-minute default, and the worker continues from a follow-up
+	// task before it runs out.
+	if err := q.enqueueIdempotent(ctx, t, queueTaskID, asynq.ProcessAt(processAt), asynq.Timeout(taskqueue.BatchEmailTaskTimeout)); err != nil {
 		return "", err
 	}
 	return queueTaskID, nil

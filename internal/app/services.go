@@ -103,6 +103,9 @@ func (srv *Application) taskDependencies(bootstrapped *lifecycle.Readiness) task
 			Queue:    srv.Queue,
 			Email:    func() config.EmailConfig { return runtimeConfig().Email },
 			SiteName: func() string { return runtimeConfig().Site.SiteName },
+			// A campaign's audience is re-resolved when a run starts, so
+			// accounts deleted since it was created get no email.
+			Recipients: supportAccounts{srv: srv},
 		},
 		SMS: sms.Dependencies{
 			Logs:   srv.Store.Log(),
