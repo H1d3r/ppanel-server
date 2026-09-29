@@ -90,44 +90,80 @@ func (s *Service) CheckSubscriptions(ctx context.Context) error {
 }
 
 // markSubscribes finishes the subscriptions find selects with status and
-// fires the side effects. A failure is returned, named after its sweep, for
-// the task runner's one log line.
+// fires the side effects for the ones it finished. A failure is returned,
+// named after its sweep, for the task runner's one log line.
 func (s *Service) markSubscribes(ctx context.Context, status uint8, tag string, notify func(context.Context, []*usersub.Subscribe), find func(repository.SubscriptionStore) ([]*usersub.Subscribe, error)) error {
 	log := logger.WithContext(ctx)
-	var list []*usersub.Subscribe
+	var selected, finished []*usersub.Subscribe
 	err := s.deps.Store.InSubscriptionTx(ctx, func(store repository.SubscriptionStore) error {
 		var err error
-		list, err = find(store)
+		selected, finished = nil, nil
+		selected, err = find(store)
 		if err != nil {
 			return xerr.Wrapf(err, xerr.DatabaseQueryError, "query subscriptions to finish")
 		}
-		if len(list) == 0 {
+		if len(selected) == 0 {
 			return nil
 		}
-		ids := make([]int64, 0, len(list))
-		for _, item := range list {
-			ids = append(ids, item.Id)
+		ids := subscriptionIDs(selected)
+		if err := store.UserSubscription().MarkSubscribesFinished(ctx, ids, status, timeutil.Now()); err != nil {
+			return xerr.Wrapf(err, xerr.DatabaseUpdateError, "mark subscriptions finished")
 		}
-		return xerr.Wrapf(store.UserSubscription().MarkSubscribesFinished(ctx, ids, status, timeutil.Now()), xerr.DatabaseUpdateError, "mark subscriptions finished")
+		finished, err = finishedSubscriptions(ctx, store, ids, status)
+		return err
 	})
 	if err != nil {
 		return xerr.Wrapf(err, xerr.ERROR, "%s sweep", tag)
 	}
-	if len(list) == 0 {
+	if len(selected) == 0 {
 		log.Debug(tag + " No subscribe need to update")
 		return nil
 	}
-	ids := make([]int64, 0, len(list))
-	for _, item := range list {
-		ids = append(ids, item.Id)
+	if len(finished) == 0 {
+		log.Infow(tag+" Every selected subscription was renewed or reset meanwhile", logger.Field("user_subscribe_ids", subscriptionIDs(selected)))
+		return nil
 	}
-	notify(ctx, list)
-	if err := s.deps.Cache.ClearSubscribeCache(ctx, list...); err != nil {
+	notify(ctx, finished)
+	if err := s.deps.Cache.ClearSubscribeCache(ctx, finished...); err != nil {
 		log.Errorw(tag+" Clear subscribe cache failed", logger.Field("error", err.Error()))
 	}
-	s.clearServerCache(ctx, list...)
-	log.Infow(tag+" Update subscribe status", logger.Field("user_subscribe_ids", ids), logger.Field("count", int64(len(ids))))
+	s.clearServerCache(ctx, finished...)
+	log.Infow(tag+" Update subscribe status",
+		logger.Field("user_subscribe_ids", subscriptionIDs(finished)),
+		logger.Field("count", int64(len(finished))),
+		logger.Field("selected", int64(len(selected))))
 	return nil
+}
+
+// finishedSubscriptions returns, among the selected ids, the subscriptions
+// the finishing statement flipped: the ones now in status, read back in the
+// same transaction. The statement checks the expiry or the traffic again, so
+// a subscription renewed or reset between the selection and the statement
+// stays live and gets no notice of an end it did not reach. The sweep
+// selects live rows only and the task lock keeps two sweeps from
+// overlapping, so a row in status was finished by this statement.
+func finishedSubscriptions(ctx context.Context, store repository.SubscriptionStore, ids []int64, status uint8) ([]*usersub.Subscribe, error) {
+	rows, err := store.UserSubscription().FindSubscribesByIds(ctx, ids)
+	if err != nil {
+		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "read back the finished subscriptions")
+	}
+	finished := make([]*usersub.Subscribe, 0, len(rows))
+	for _, row := range rows {
+		if row != nil && row.Status == status && row.FinishedAt != nil {
+			finished = append(finished, row)
+		}
+	}
+	return finished, nil
+}
+
+func subscriptionIDs(subs []*usersub.Subscribe) []int64 {
+	ids := make([]int64, 0, len(subs))
+	for _, sub := range subs {
+		if sub != nil {
+			ids = append(ids, sub.Id)
+		}
+	}
+	return ids
 }
 
 func (s *Service) ownerEmails(ctx context.Context, subs []*usersub.Subscribe) map[int64]string {
