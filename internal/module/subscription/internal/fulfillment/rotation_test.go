@@ -21,6 +21,59 @@ func (f *periodFixture) rotateToken(t *testing.T, id int64, token string) {
 	}
 }
 
+// checkoutSubscription is the running subscription a renewal or reset order
+// is created for; it returns the subscription and the end of its term.
+func (f *periodFixture) checkoutSubscription(t *testing.T) (*usersub.Subscribe, time.Time) {
+	t.Helper()
+	now := time.Now()
+	expire := now.Add(10 * 24 * time.Hour).Truncate(time.Millisecond)
+	sub := &usersub.Subscribe{
+		UserId: 7, SubscribeId: 1, StartTime: now.Add(-20 * 24 * time.Hour), ExpireTime: expire,
+		Traffic: 100, Upload: 30, Download: 20, Token: "checkout-token", UUID: "checkout-uuid",
+		Status: usersub.SubscribeStatusActive,
+	}
+	if err := f.store.db.Create(sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	return sub, expire
+}
+
+// assertOrderApplied checks the subscription after an order of orderType was
+// fulfilled on a term ending at expire.
+func assertOrderApplied(t *testing.T, orderType uint8, got *usersub.Subscribe, expire time.Time) {
+	t.Helper()
+	switch orderType {
+	case order.TypeRenewal:
+		want, err := period.App().TermEnd(period.UnitMonth, 1, expire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.ExpireTime.Equal(want) || got.Upload != 30 {
+			t.Fatalf("renewal did not extend the subscription: %+v", got)
+		}
+	case order.TypeResetTraffic:
+		if got.Upload != 0 || got.Download != 0 || !got.ExpireTime.Equal(expire) {
+			t.Fatalf("reset did not clear the subscription: %+v", got)
+		}
+	}
+}
+
+// assertReplayRebuildsTheOutcome replays the delivery of a fulfilled order:
+// the notice is rebuilt and nothing is applied again.
+func assertReplayRebuildsTheOutcome(t *testing.T, f *periodFixture, orderNo, notify string, fulfilled *usersub.Subscribe) {
+	t.Helper()
+	replay, err := f.service.FulfillPaidOrder(context.Background(), orderNo)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replay.NotifyKind != notify || replay.UserID != fulfilled.UserId || !replay.ExpireAt.Equal(fulfilled.ExpireTime) {
+		t.Fatalf("replayed outcome = %+v, want the committed fulfillment's", replay)
+	}
+	if again := f.sub(t, fulfilled.Id); !again.ExpireTime.Equal(fulfilled.ExpireTime) || again.Upload != fulfilled.Upload {
+		t.Fatalf("the replay applied the order again: %+v", again)
+	}
+}
+
 // A renewal or reset order names its subscription by id, so a token rotated
 // between checkout and payment does not orphan the paid order: the order is
 // fulfilled and its replay rebuilds the notice.
@@ -35,24 +88,14 @@ func TestFulfillmentSurvivesATokenRotatedBetweenCheckoutAndPayment(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPeriodFixture(t)
-			ctx := context.Background()
-			now := time.Now()
-			expire := now.Add(10 * 24 * time.Hour).Truncate(time.Millisecond)
-			sub := &usersub.Subscribe{
-				UserId: 7, SubscribeId: 1, StartTime: now.Add(-20 * 24 * time.Hour), ExpireTime: expire,
-				Traffic: 100, Upload: 30, Download: 20, Token: "checkout-token", UUID: "checkout-uuid",
-				Status: usersub.SubscribeStatusActive,
-			}
-			if err := f.store.db.Create(sub).Error; err != nil {
-				t.Fatal(err)
-			}
+			sub, expire := f.checkoutSubscription(t)
 			f.orders.rows[9] = &order.Order{
 				Id: 9, OrderNo: "rotated-9", UserId: 7, SubscribeId: 1, Type: tc.orderType, Status: order.StatusPaid, Quantity: 1,
 				SubscribeToken: "checkout-token", UserSubscribeId: sub.Id,
 			}
 			f.rotateToken(t, sub.Id, "rotated-token")
 
-			outcome, err := f.service.FulfillPaidOrder(ctx, "rotated-9")
+			outcome, err := f.service.FulfillPaidOrder(context.Background(), "rotated-9")
 			if err != nil {
 				t.Fatalf("FulfillPaidOrder after the rotation: %v", err)
 			}
@@ -63,34 +106,8 @@ func TestFulfillmentSurvivesATokenRotatedBetweenCheckoutAndPayment(t *testing.T)
 			if got.Token != "rotated-token" {
 				t.Fatalf("the fulfillment touched the credentials: %+v", got)
 			}
-			switch tc.orderType {
-			case order.TypeRenewal:
-				want, err := period.App().TermEnd(period.UnitMonth, 1, expire)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !got.ExpireTime.Equal(want) || got.Upload != 30 {
-					t.Fatalf("renewal did not extend the rotated subscription: %+v", got)
-				}
-			case order.TypeResetTraffic:
-				if got.Upload != 0 || got.Download != 0 || !got.ExpireTime.Equal(expire) {
-					t.Fatalf("reset did not clear the rotated subscription: %+v", got)
-				}
-			}
-
-			// The delivery is replayed once the fulfillment committed: the
-			// notice is rebuilt through the same id and nothing is applied
-			// again.
-			replay, err := f.service.FulfillPaidOrder(ctx, "rotated-9")
-			if err != nil {
-				t.Fatalf("replay after the rotation: %v", err)
-			}
-			if replay.NotifyKind != tc.notify || replay.UserID != 7 || !replay.ExpireAt.Equal(got.ExpireTime) {
-				t.Fatalf("replayed outcome = %+v, want the committed fulfillment's", replay)
-			}
-			if again := f.sub(t, sub.Id); !again.ExpireTime.Equal(got.ExpireTime) || again.Upload != got.Upload {
-				t.Fatalf("the replay applied the order again: %+v", again)
-			}
+			assertOrderApplied(t, tc.orderType, got, expire)
+			assertReplayRebuildsTheOutcome(t, f, "rotated-9", tc.notify, got)
 		})
 	}
 }
