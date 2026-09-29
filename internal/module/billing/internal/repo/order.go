@@ -194,6 +194,21 @@ func (m *orderRepo) CountUserCouponUsage(ctx context.Context, userID int64, coup
 	return count, err
 }
 
+// CountGuestCouponUsage counts the orders a guest identity created with the
+// coupon that hold a reservation or consumed a use. Guest orders carry no
+// user until activation and keep the identity they were created under
+// afterwards, so the identity, not the user id, counts them.
+func (m *orderRepo) CountGuestCouponUsage(ctx context.Context, authType, identifier, coupon string) (int64, error) {
+	var count int64
+	err := m.QueryNoCacheCtx(ctx, &count, func(conn *gorm.DB, v any) error {
+		return conn.Model(&order.Order{}).
+			Where("guest_auth_type = ? AND guest_identifier = ? AND coupon = ? AND status IN ?",
+				authType, identifier, coupon, statusList(order.CouponUseStatuses())).
+			Count(&count).Error
+	})
+	return count, err
+}
+
 // CountPendingGuestOrders counts the unpaid orders a guest identity created
 // at or after since and still holds before its account exists; guest orders
 // carry no user until activation.

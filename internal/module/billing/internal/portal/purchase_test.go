@@ -278,6 +278,69 @@ func TestPortalPurchaseReservesTheOrder(t *testing.T) {
 	}
 }
 
+// A coupon's per-user limit binds a guest by the identity the order names:
+// its pending orders hold a reservation each and its settled orders consumed
+// a use, before and after the account exists. Without it one identity could
+// reserve a once-per-user coupon on each of its pending orders.
+func TestPortalPurchaseAppliesTheCouponUserLimitToTheGuestIdentity(t *testing.T) {
+	s := newGuestShop(t)
+	s.h.Coupon("ONCE", func(c *coupon.Coupon) { c.Count = 5; c.UserLimit = 1 })
+	withCoupon := func(identifier string) *dto.PortalPurchaseRequest {
+		req := s.request("email", identifier)
+		req.Coupon = "ONCE"
+		return req
+	}
+
+	first, err := s.svc.Purchase(context.Background(), withCoupon("guest@example.com"))
+	if err != nil {
+		t.Fatalf("first Purchase: %v", err)
+	}
+	_, err = s.svc.Purchase(context.Background(), withCoupon("guest@example.com"))
+	assertCode(t, err, xerr.CouponInsufficientUsage)
+	if used := s.h.ReloadCoupon("ONCE").UsedCount; used != 1 {
+		t.Fatalf("coupon uses = %d, want the one reservation", used)
+	}
+	if _, err := s.svc.Purchase(context.Background(), withCoupon("other@example.com")); err != nil {
+		t.Fatalf("another identity: %v", err)
+	}
+	// The activated order is bound to its account and keeps its identity.
+	if err := s.h.DB.Model(&order.Order{}).Where("order_no = ?", first.OrderNo).Updates(map[string]any{"user_id": 42, "status": order.StatusFinished}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.svc.Purchase(context.Background(), withCoupon("guest@example.com"))
+	assertCode(t, err, xerr.CouponInsufficientUsage)
+	// A closed order returned its reservation and no longer counts.
+	if err := s.h.DB.Model(&order.Order{}).Where("order_no = ?", first.OrderNo).Update("status", order.StatusClosed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.svc.Purchase(context.Background(), withCoupon("guest@example.com")); err != nil {
+		t.Fatalf("after the first order closed: %v", err)
+	}
+}
+
+// uncountingOrders is an order store without the guest coupon counter.
+type uncountingOrders struct{ Orders }
+
+// Without a counter the per-user limit cannot be checked for a guest; a
+// limited coupon is refused rather than granted without limit, while an
+// unlimited one is unaffected.
+func TestPortalPurchaseRefusesALimitedCouponItCannotCount(t *testing.T) {
+	s := newGuestShop(t, func(d *Deps) { d.Orders = uncountingOrders{Orders: d.Orders} })
+	s.h.Coupon("ONCE", func(c *coupon.Coupon) { c.Count = 5; c.UserLimit = 1 })
+	s.h.Coupon("FREE", func(c *coupon.Coupon) { c.Count = 5 })
+	req := s.request("email", "guest@example.com")
+	req.Coupon = "ONCE"
+	_, err := s.svc.Purchase(context.Background(), req)
+	assertCode(t, err, xerr.CouponNotApplicable)
+	if s.h.ReloadCoupon("ONCE").UsedCount != 0 || len(s.guestOrders()) != 0 {
+		t.Fatal("an uncountable limited coupon was reserved")
+	}
+	req.Coupon = "FREE"
+	if _, err := s.svc.Purchase(context.Background(), req); err != nil {
+		t.Fatalf("unlimited coupon: %v", err)
+	}
+}
+
 // Guests have no wallet.
 func TestPortalPurchaseRejectsBalancePayment(t *testing.T) {
 	s := newGuestShop(t)
