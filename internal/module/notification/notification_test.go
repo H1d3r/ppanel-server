@@ -200,10 +200,12 @@ func (noBilling) Revenue(context.Context, time.Time) (int64, error) { return 0, 
 
 func (noBilling) Balance(context.Context, int64) (int64, error) { return 0, nil }
 
-// noLogs has no login recorded.
+// noLogs has no login recorded and drops the rows written to it.
 type noLogs struct{}
 
 func (noLogs) RecentLogins(context.Context, int64, int) ([]*log.SystemLog, error) { return nil, nil }
+
+func (noLogs) Insert(context.Context, *log.SystemLog) error { return nil }
 
 const groupID int64 = -1001234
 

@@ -59,13 +59,18 @@ func (m *announcementRepo) FindOne(ctx context.Context, id int64) (*announcement
 	return &resp, nil
 }
 
+// Update rewrites the announcement's mutable columns from data; the
+// creation time stays, and a missing row is not inserted, which a whole-row
+// save would do.
 func (m *announcementRepo) Update(ctx context.Context, data *announcement.Announcement) error {
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		return conn.Save(data).Error
+		return conn.Model(&announcement.Announcement{}).Where("id = ?", data.Id).
+			Select("title", "content", "show", "pinned", "popup").
+			Updates(data).Error
 	}, m.getCacheKeys(old)...)
 }
 

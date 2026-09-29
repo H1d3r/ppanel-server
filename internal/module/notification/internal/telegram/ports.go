@@ -76,4 +76,7 @@ type AuditLogs interface {
 	// RecentLogins returns up to limit of the user's login log entries,
 	// newest first.
 	RecentLogins(ctx context.Context, userID int64, limit int) ([]*log.SystemLog, error)
+	// Insert records a log row: the administrators' mutations made through
+	// the bot.
+	Insert(ctx context.Context, row *log.SystemLog) error
 }
