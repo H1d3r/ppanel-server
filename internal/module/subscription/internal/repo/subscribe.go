@@ -26,8 +26,9 @@ var _ repository.SubscribeRepo = (*subscribeRepo)(nil)
 type subscribeRepo struct {
 	cache.CachedConn
 	table string
-	// nodes resolves node-derived cache keys from the network bundle; plan
-	// cache invalidation must not query the node table from this domain.
+	// nodes is the network bundle's fenced invalidation of the node-facing
+	// server caches; this domain must neither query the node table nor
+	// delete the `server:user:*` keys itself, which bypassed the fence.
 	nodes repository.NodeCacheKeyBridge
 }
 
@@ -45,13 +46,30 @@ func subscribeInSet(field string, values []string) func(db *gorm.DB) *gorm.DB {
 	return orm.CommaSeparatedContains(field, values)
 }
 
-// cacheKeys returns every cache entry derived from the plans: their own rows
-// and the user lists of the servers carrying their nodes and node tags. The
-// node-derived keys of all plans resolve in one lookup. The lookup is best
-// effort, as before batching: a failure degrades to the plans' own keys
-// rather than failing the plan write.
-func (m *subscribeRepo) cacheKeys(ctx context.Context, plans ...*subscribe.Subscribe) []string {
-	var keys []string
+// cacheKeys returns the plans' own cache entries. The node-facing user
+// lists of the servers carrying their nodes are not keys to delete along
+// with them: clearNodeCaches invalidates those after the write through the
+// network bundle, whose cache generation fence rejects a list a concurrent
+// rebuild read before the write; a plain DEL let such a list be cached over
+// the invalidation for its whole TTL.
+func (m *subscribeRepo) cacheKeys(plans ...*subscribe.Subscribe) []string {
+	keys := make([]string, 0, len(plans))
+	for _, plan := range plans {
+		if plan != nil {
+			keys = append(keys, planCacheKey(plan.Id))
+		}
+	}
+	return keys
+}
+
+// clearNodeCaches drops, through the network bundle, the node-facing caches
+// of every server carrying a node the plans select. It runs once the plans'
+// write is committed. A damaged node list narrows the scope, as it narrowed
+// the key list before, rather than failing the call.
+func (m *subscribeRepo) clearNodeCaches(ctx context.Context, plans ...*subscribe.Subscribe) error {
+	if m.nodes == nil {
+		return nil
+	}
 	var nodeIDs []int64
 	var tags []string
 	for _, plan := range plans {
@@ -59,8 +77,6 @@ func (m *subscribeRepo) cacheKeys(ctx context.Context, plans ...*subscribe.Subsc
 			continue
 		}
 		if plan.Nodes != "" {
-			// A damaged node list degrades, like a failed lookup below, to
-			// fewer invalidation keys rather than a failed plan write.
 			ids, err := slicesx.ParseInt64CSV(plan.Nodes)
 			if err != nil {
 				logger.WithContext(ctx).Errorw("[SubscribeRepo] plan node list is damaged; its node caches are not cleared",
@@ -71,17 +87,21 @@ func (m *subscribeRepo) cacheKeys(ctx context.Context, plans ...*subscribe.Subsc
 		if plan.NodeTags != "" {
 			tags = append(tags, strings.Split(plan.NodeTags, ",")...)
 		}
-		keys = append(keys, planCacheKey(plan.Id))
 	}
-	if (len(nodeIDs) > 0 || len(tags) > 0) && m.nodes != nil {
-		nodeKeys, err := m.nodes.NodeUserListCacheKeys(ctx, slicesx.RemoveDuplicateElements(nodeIDs...), slicesx.RemoveDuplicateElements(tags...))
-		if err != nil {
-			logger.WithContext(ctx).Errorw("[SubscribeRepo] resolve node cache keys failed", logger.Field("error", err.Error()))
-		} else {
-			keys = append(nodeKeys, keys...)
-		}
+	if len(nodeIDs) == 0 && len(tags) == 0 {
+		return nil
 	}
-	return keys
+	return m.nodes.ClearNodeUserListCaches(ctx, slicesx.RemoveDuplicateElements(nodeIDs...), slicesx.RemoveDuplicateElements(tags...))
+}
+
+// clearNodeCachesAfterWrite runs clearNodeCaches for a committed plan write.
+// A failure is only logged: the write stays committed, and the node lists
+// expire on their own.
+func (m *subscribeRepo) clearNodeCachesAfterWrite(ctx context.Context, operation string, plans ...*subscribe.Subscribe) {
+	if err := m.clearNodeCaches(ctx, plans...); err != nil {
+		logger.WithContext(ctx).Errorw("[SubscribeRepo] clear the node caches of the plans failed",
+			logger.Field("operation", operation), logger.Field("error", err.Error()))
+	}
 }
 
 func planCacheKey(id int64) string {
@@ -110,7 +130,7 @@ func (m *subscribeRepo) getUserSubscribeCacheKeys(ctx context.Context, subscribe
 func (m *subscribeRepo) Insert(ctx context.Context, data *subscribe.Subscribe) error {
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		return conn.Create(&data).Error
-	}, m.cacheKeys(ctx, data)...)
+	}, m.cacheKeys(data)...)
 }
 
 func (m *subscribeRepo) FindOne(ctx context.Context, id int64) (*subscribe.Subscribe, error) {
@@ -130,15 +150,21 @@ func (m *subscribeRepo) Update(ctx context.Context, data *subscribe.Subscribe) e
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	cacheKeys := m.cacheKeys(ctx, old)
+	cacheKeys := m.cacheKeys(old)
 	userSubscribeCacheKeys, err := m.getUserSubscribeCacheKeys(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	cacheKeys = append(cacheKeys, userSubscribeCacheKeys...)
-	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+	if err := m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		return conn.Save(data).Error
-	}, cacheKeys...)
+	}, cacheKeys...); err != nil {
+		return err
+	}
+	// The servers of the previous and of the new node scope re-read their
+	// user lists.
+	m.clearNodeCachesAfterWrite(ctx, "update plan", old, data)
+	return nil
 }
 
 // ReserveInventory consumes one finite inventory unit with a conditional update.
@@ -161,7 +187,7 @@ func (m *subscribeRepo) ReserveInventory(ctx context.Context, id int64) (bool, e
 			UpdateColumn("inventory", gorm.Expr("inventory - 1"))
 		reserved = result.RowsAffected == 1
 		return result.Error
-	}, m.cacheKeys(ctx, data)...)
+	}, m.cacheKeys(data)...)
 	return reserved, err
 }
 
@@ -179,7 +205,7 @@ func (m *subscribeRepo) RestoreInventory(ctx context.Context, id int64) error {
 		return conn.Model(&subscribe.Subscribe{}).
 			Where("id = ? AND inventory >= 0", id).
 			UpdateColumn("inventory", gorm.Expr("inventory + 1")).Error
-	}, m.cacheKeys(ctx, data)...)
+	}, m.cacheKeys(data)...)
 }
 
 func (m *subscribeRepo) Delete(ctx context.Context, id int64) error {
@@ -190,15 +216,19 @@ func (m *subscribeRepo) Delete(ctx context.Context, id int64) error {
 		}
 		return err
 	}
-	cacheKeys := m.cacheKeys(ctx, data)
+	cacheKeys := m.cacheKeys(data)
 	userSubscribeCacheKeys, err := m.getUserSubscribeCacheKeys(ctx, id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	cacheKeys = append(cacheKeys, userSubscribeCacheKeys...)
-	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
+	if err := m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		return conn.Delete(&subscribe.Subscribe{}, id).Error
-	}, cacheKeys...)
+	}, cacheKeys...); err != nil {
+		return err
+	}
+	m.clearNodeCachesAfterWrite(ctx, "delete plan", data)
+	return nil
 }
 
 func (m *subscribeRepo) QuerySubscribeMinSortByIds(ctx context.Context, ids []int64) (int64, error) {
@@ -218,7 +248,10 @@ func (m *subscribeRepo) QueryResetCycleSubscribeIds(ctx context.Context, resetCy
 }
 
 // ClearCache invalidates the plans' cache entries, reading every plan in one
-// query. A plan that no longer exists still loses its own entry.
+// query, and then the node-facing user lists of the servers carrying their
+// nodes, through the network bundle's fenced invalidation. Callers run it
+// once the change to what the servers serve has committed. A plan that no
+// longer exists still loses its own entry.
 func (m *subscribeRepo) ClearCache(ctx context.Context, ids ...int64) error {
 	ids = slicesx.RemoveDuplicateElements(ids...)
 	if len(ids) == 0 {
@@ -231,11 +264,14 @@ func (m *subscribeRepo) ClearCache(ctx context.Context, ids ...int64) error {
 	if err != nil {
 		return err
 	}
-	keys := m.cacheKeys(ctx, plans...)
+	keys := m.cacheKeys(plans...)
 	for _, id := range ids {
 		keys = append(keys, planCacheKey(id))
 	}
-	return m.DelCacheCtx(ctx, keys...)
+	if err := m.DelCacheCtx(ctx, keys...); err != nil {
+		return err
+	}
+	return m.clearNodeCaches(ctx, plans...)
 }
 
 func (m *subscribeRepo) UpdateSort(ctx context.Context, data []*subscribe.Subscribe) error {
@@ -244,7 +280,7 @@ func (m *subscribeRepo) UpdateSort(ctx context.Context, data []*subscribe.Subscr
 	}
 	return m.ExecCtx(ctx, func(conn *gorm.DB) error {
 		return conn.Save(data).Error
-	}, m.cacheKeys(ctx, data...)...)
+	}, m.cacheKeys(data...)...)
 }
 
 func (m *subscribeRepo) QueryGroupList(ctx context.Context) (int64, []*subscribe.Group, error) {

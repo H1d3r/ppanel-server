@@ -340,24 +340,49 @@ func (m *UserSubscriptionRepo) BatchUpdateUserSubscribeWithTraffic(ctx context.C
 	for _, delta := range deltas {
 		ids = append(ids, delta.SubscribeId)
 	}
-	subs, err := m.FindSubscribesByIds(ctx, ids)
+	subs, err := m.findSubscribesByIDsInChunks(ctx, ids)
 	if err != nil {
 		return err
 	}
 
+	// One statement binds about five parameters per subscription (the id
+	// list and two CASE branches), so a minute of some 13k subscriptions
+	// would exceed the 65535 placeholders MySQL and PostgreSQL allow. The
+	// chunks run on the caller's connection, inside its transaction, so the
+	// minute still commits as a whole.
 	err = m.ExecNoCacheCtx(ctx, func(conn *gorm.DB) error {
-		downloadExpr, downloadArgs := userSubscribeTrafficIncrementExpr(conn, "download", deltas)
-		uploadExpr, uploadArgs := userSubscribeTrafficIncrementExpr(conn, "upload", deltas)
-		return conn.Model(&usersub.Subscribe{}).Where("id IN ?", ids).Updates(map[string]any{
-			"download": gorm.Expr(downloadExpr, downloadArgs...),
-			"upload":   gorm.Expr(uploadExpr, uploadArgs...),
-		}).Error
+		for start := 0; start < len(deltas); start += batchUpdateSize {
+			chunk := deltas[start:min(start+batchUpdateSize, len(deltas))]
+			downloadExpr, downloadArgs := userSubscribeTrafficIncrementExpr(conn, "download", chunk)
+			uploadExpr, uploadArgs := userSubscribeTrafficIncrementExpr(conn, "upload", chunk)
+			if err := conn.Model(&usersub.Subscribe{}).Where("id IN ?", ids[start:start+len(chunk)]).Updates(map[string]any{
+				"download": gorm.Expr(downloadExpr, downloadArgs...),
+				"upload":   gorm.Expr(uploadExpr, uploadArgs...),
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return err
 	}
 	m.clearCacheAfterWrite(ctx, "add traffic", subs...)
 	return nil
+}
+
+// findSubscribesByIDsInChunks reads the rows of the ids batchUpdateSize at a
+// time, keeping each id list inside the drivers' placeholder limits.
+func (m *UserSubscriptionRepo) findSubscribesByIDsInChunks(ctx context.Context, ids []int64) ([]*usersub.Subscribe, error) {
+	subs := make([]*usersub.Subscribe, 0, len(ids))
+	for start := 0; start < len(ids); start += batchUpdateSize {
+		chunk, err := m.FindSubscribesByIds(ctx, ids[start:min(start+batchUpdateSize, len(ids))])
+		if err != nil {
+			return nil, err
+		}
+		subs = append(subs, chunk...)
+	}
+	return subs, nil
 }
 
 func mergeSubscribeTrafficDeltas(deltas []trafficEntity.SubscribeTrafficDelta) []trafficEntity.SubscribeTrafficDelta {

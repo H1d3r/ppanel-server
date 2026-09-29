@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,32 +70,37 @@ func nodeInSet(field string, values []string) func(db *gorm.DB) *gorm.DB {
 	return orm.CommaSeparatedContains(field, values)
 }
 
-// NodeUserListCacheKeys resolves the server user-list cache keys for the
-// given node ids and node tags; the subscription bundle invalidates them
-// when a plan's node set changes (repository.NodeCacheKeyBridge).
-func (m *nodeRepo) NodeUserListCacheKeys(ctx context.Context, nodeIDs []int64, tags []string) ([]string, error) {
-	keys := make([]string, 0)
-	appendKeys := func(nodes []*node.Node) {
-		for _, n := range nodes {
-			keys = append(keys, fmt.Sprintf("%s%d", node.ServerUserListCacheKey, n.ServerId))
-			keys = append(keys, fmt.Sprintf("%s%d:%s", node.ServerUserListCacheKey, n.ServerId, n.Protocol))
+// ClearNodeUserListCaches drops the node-facing caches of every server
+// carrying a node the scope selects, an explicit node id or any of the tags,
+// enabled or not (repository.NodeCacheKeyBridge): the subscription bundle
+// calls it once a plan write that changes which subscriptions the servers
+// serve has committed. Each server goes through ClearServerCache, whose
+// generation fence rejects a user list a concurrent rebuild read before the
+// write; a plain DEL of the list keys let such a list be cached over the
+// invalidation. An empty scope clears nothing.
+func (m *nodeRepo) ClearNodeUserListCaches(ctx context.Context, nodeIDs []int64, tags []string) error {
+	tags = slices.DeleteFunc(slices.Clone(tags), func(tag string) bool { return tag == "" })
+	if len(nodeIDs) == 0 && len(tags) == 0 {
+		return nil
+	}
+	nodes, err := m.ListNodesByScope(ctx, nodeIDs, tags, nil, false)
+	if err != nil {
+		return err
+	}
+	serverIDs := make([]int64, 0, len(nodes))
+	for _, item := range nodes {
+		if item != nil && item.ServerId > 0 && !slices.Contains(serverIDs, item.ServerId) {
+			serverIDs = append(serverIDs, item.ServerId)
 		}
 	}
-	if len(nodeIDs) > 0 {
-		var nodes []*node.Node
-		if err := m.DB.WithContext(ctx).Model(&node.Node{}).Where("id IN (?)", nodeIDs).Find(&nodes).Error; err != nil {
-			return nil, err
+	slices.Sort(serverIDs)
+	var errs []error
+	for _, serverID := range serverIDs {
+		if err := m.ClearServerCache(ctx, serverID); err != nil {
+			errs = append(errs, fmt.Errorf("clear the caches of server %d: %w", serverID, err))
 		}
-		appendKeys(nodes)
 	}
-	if len(tags) > 0 {
-		var nodes []*node.Node
-		if err := m.DB.WithContext(ctx).Model(&node.Node{}).Scopes(nodeInSet("tags", tags)).Find(&nodes).Error; err != nil {
-			return nil, err
-		}
-		appendKeys(nodes)
-	}
-	return keys, nil
+	return errors.Join(errs...)
 }
 
 func (m *nodeRepo) InsertServer(ctx context.Context, data *node.Server) error {
