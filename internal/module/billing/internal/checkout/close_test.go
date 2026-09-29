@@ -13,6 +13,7 @@ import (
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/coupon"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
+	"github.com/perfect-panel/server/internal/module/billing/entity/payment"
 	"github.com/perfect-panel/server/internal/module/billing/internal/billingtest"
 	"github.com/perfect-panel/server/internal/module/billing/internal/gateway"
 	"github.com/perfect-panel/server/internal/module/billing/internal/ledger"
@@ -418,15 +419,23 @@ var (
 
 // alipayOrder seeds buyer's pending ¥10.00 face-to-face order whose QR code
 // was issued, against the gateway at gatewayURL.
-func (f *checkoutFixture) alipayOrder(gatewayURL string) (*user.User, *order.Order) {
+func (f *checkoutFixture) alipayOrder(gatewayURL string, adjust ...func(*order.Order)) (*user.User, *order.Order) {
 	f.t.Helper()
 	u, _ := f.buyer(0)
 	method := f.h.Payment("AlipayF2F", billingtest.AlipayConfig(f.t, "2021000000000000", gatewayURL))
-	o := f.h.Order(&order.Order{
+	o := &order.Order{
 		OrderNo: "alipay-order", UserId: u.Id, Status: order.StatusPending, Amount: 1000,
 		Method: method.Platform, PaymentId: method.Id, PaymentCurrency: "CNY", PaymentAmount: 1000,
-	})
-	return u, o
+	}
+	for _, fn := range adjust {
+		fn(o)
+	}
+	return u, f.h.Order(o)
+}
+
+// aged dates an order age ago.
+func aged(age time.Duration) func(*order.Order) {
+	return func(o *order.Order) { o.CreatedAt = time.Now().Add(-age) }
 }
 
 // A paid trade whose notification never arrived was once silently
@@ -470,17 +479,106 @@ func TestCloseAlipayOrderRejectsMismatchedPaidTrade(t *testing.T) {
 }
 
 // A face-to-face trade exists only once the buyer scans the QR code, so a
-// missing trade proves no money was collected.
+// missing trade proves no money was collected so far. The QR code stays
+// scannable until the trade expiry set at checkout, the end of the order's
+// payment window, so the expiry close waits until the order is
+// order.UnpaidCloseAge old before it releases what the order holds; the
+// owner may give it up at once.
 func TestCloseAlipayOrderClosesWhenQRWasNeverScanned(t *testing.T) {
-	f := newCheckoutFixture(t)
-	gw := billingtest.NewFakeAlipay(t, func(string, int, map[string]any) billingtest.AlipayAnswer { return alipayNotExist })
-	_, o := f.alipayOrder(gw.URL)
+	t.Run("expiry close inside the extended window keeps the order", func(t *testing.T) {
+		f := newCheckoutFixture(t)
+		gw := billingtest.NewFakeAlipay(t, func(string, int, map[string]any) billingtest.AlipayAnswer { return alipayNotExist })
+		_, o := f.alipayOrder(gw.URL, aged(order.PaymentWindow+time.Minute))
 
-	if err := closeAs(system, f.svc, o.OrderNo); err != nil {
-		t.Fatalf("Close: %v", err)
+		assertUnconfirmed(t, closeAs(system, f.svc, o.OrderNo))
+		if f.status(o.OrderNo) != order.StatusPending || gw.Calls("alipay.trade.close") != 0 {
+			t.Fatal("want the order kept pending without a gateway close")
+		}
+	})
+	t.Run("expiry close after the extended window closes", func(t *testing.T) {
+		f := newCheckoutFixture(t)
+		gw := billingtest.NewFakeAlipay(t, func(string, int, map[string]any) billingtest.AlipayAnswer { return alipayNotExist })
+		_, o := f.alipayOrder(gw.URL, aged(order.UnpaidCloseAge+time.Minute))
+
+		if err := closeAs(system, f.svc, o.OrderNo); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if f.status(o.OrderNo) != order.StatusClosed || gw.Calls("alipay.trade.close") != 0 {
+			t.Fatal("want the order closed without a gateway close")
+		}
+	})
+	t.Run("owner closes at once", func(t *testing.T) {
+		f := newCheckoutFixture(t)
+		gw := billingtest.NewFakeAlipay(t, func(string, int, map[string]any) billingtest.AlipayAnswer { return alipayNotExist })
+		u, o := f.alipayOrder(gw.URL)
+
+		if err := closeAs(billingtest.UserContext(u), f.svc, o.OrderNo); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if f.status(o.OrderNo) != order.StatusClosed || gw.Calls("alipay.trade.close") != 0 {
+			t.Fatal("want the order closed without a gateway close")
+		}
+	})
+}
+
+// ------------------------------------------- checkout racing the close
+
+// A checkout records the payment expectation before it creates the payment
+// at the gateway. A close that read the order before that write sees a
+// checkout that "never started" and would close without asking the gateway,
+// leaving an Alipay QR code, an EPay payment page or a Stripe client secret
+// payable on a closed order; every gateway therefore requires the checkout
+// to be unchanged when the close commits. The gateways are unreachable: the
+// close must not contact them either way.
+func TestCloseRechecksConcurrentCheckoutForEveryGateway(t *testing.T) {
+	unreachable := unreachableGatewayURL()
+	methods := map[string]func(f *checkoutFixture) *payment.Payment{
+		"EPay": func(f *checkoutFixture) *payment.Payment {
+			return f.h.Payment("EPay", fmt.Sprintf(`{"pid":"1001","url":%q,"key":"secret","type":"alipay"}`, unreachable))
+		},
+		"AlipayF2F": func(f *checkoutFixture) *payment.Payment {
+			return f.h.Payment("AlipayF2F", billingtest.AlipayConfig(f.t, "2021000000000000", unreachable))
+		},
+		"Stripe": func(f *checkoutFixture) *payment.Payment {
+			return f.h.Payment("Stripe", `{"public_key":"pk_test","secret_key":"sk_test","webhook_secret":"whsec_test","payment":"card"}`)
+		},
 	}
-	if f.status(o.OrderNo) != order.StatusClosed || gw.Calls("alipay.trade.close") != 0 {
-		t.Fatal("want the order closed without a gateway close")
+	for platform, seedMethod := range methods {
+		t.Run(platform+"/checkout starts during the close", func(t *testing.T) {
+			f := newCheckoutFixture(t)
+			u, _ := f.buyer(40)
+			method := seedMethod(f)
+			o := f.h.Order(&order.Order{
+				OrderNo: "racing-order", UserId: u.Id, Status: order.StatusPending, Type: order.TypeSubscribe, Amount: 1000, GiftAmount: 40,
+				Method: method.Platform, PaymentId: method.Id, CreatedAt: time.Now().Add(-order.PaymentWindow - time.Minute),
+			})
+			f.svc.deps.Tx = raceTransactor{tx: f.h.Store, compete: func() {
+				if err := f.h.DB.Model(&order.Order{}).Where("order_no = ?", o.OrderNo).Update("payment_currency", "CNY").Error; err != nil {
+					t.Fatal(err)
+				}
+			}}
+
+			assertUnconfirmed(t, closeAs(system, f.svc, o.OrderNo))
+			if f.status(o.OrderNo) != order.StatusPending || f.h.ReloadWallet(u.Id).GiftAmount != 40 || len(f.h.GiftLogs(u.Id)) != 0 {
+				t.Fatal("an order whose checkout just started was closed or its gift credit released")
+			}
+		})
+		t.Run(platform+"/no checkout closes", func(t *testing.T) {
+			f := newCheckoutFixture(t)
+			u, _ := f.buyer(40)
+			method := seedMethod(f)
+			o := f.h.Order(&order.Order{
+				OrderNo: "idle-order", UserId: u.Id, Status: order.StatusPending, Type: order.TypeSubscribe, Amount: 1000, GiftAmount: 40,
+				Method: method.Platform, PaymentId: method.Id, CreatedAt: time.Now().Add(-order.PaymentWindow - time.Minute),
+			})
+
+			if err := closeAs(system, f.svc, o.OrderNo); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			if f.status(o.OrderNo) != order.StatusClosed || f.h.ReloadWallet(u.Id).GiftAmount != 80 {
+				t.Fatal("an order before checkout should close and return its gift credit")
+			}
+		})
 	}
 }
 

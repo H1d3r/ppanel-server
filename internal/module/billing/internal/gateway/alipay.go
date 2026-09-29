@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/billing/contract"
 	"github.com/perfect-panel/server/internal/module/billing/entity/order"
@@ -57,11 +58,15 @@ func (g *alipayGateway) ChargeCurrency() string { return alipayCurrency }
 func (g *alipayGateway) NeedsNotifyURL(*order.Order) bool { return true }
 
 // StartPayment pre-creates the face-to-face trade and returns its QR code.
+// The trade expires when the order's payment window ends, whenever the
+// checkout started: a relative timeout counted from the pre-creation let a
+// QR code issued late in the window outlive the order's close.
 func (g *alipayGateway) StartPayment(ctx context.Context, c Checkout) (*dto.CheckoutOrderResponse, error) {
 	qrCode, err := g.client.PreCreateTrade(ctx, alipay.Order{
 		OrderNo:   c.Order.OrderNo,
 		Amount:    c.Charge.Amount,
 		NotifyURL: c.NotifyURL,
+		ExpireAt:  c.Order.CreatedAt.Add(order.PaymentWindow),
 	})
 	if err != nil {
 		return nil, err
@@ -71,20 +76,29 @@ func (g *alipayGateway) StartPayment(ctx context.Context, c Checkout) (*dto.Chec
 
 // Reconcile asks the gateway about the trade. It creates a face-to-face trade
 // only when the buyer scans the QR code, so a missing trade proves no money
-// was collected and the close may proceed. Any existing trade must be
-// reconciled before the local close releases stock and coupons: a paid trade
-// is settled instead of cancelled — a lost payment notification would
-// otherwise void an order the customer already paid for — and a
-// scanned-but-unpaid trade is closed at the gateway first so its QR code
-// cannot collect money afterwards.
+// was collected so far. The QR code stays scannable until the trade expiry
+// set at checkout, the end of the order's payment window, and a scan just
+// before it may create the trade right after the query, so the expiry close
+// waits until the order is order.UnpaidCloseAge old before it releases stock
+// and coupons on a never-scanned code; the owner or an administrator may
+// give the order up at once. Any existing trade must be reconciled before
+// the local close: a paid trade is settled instead of cancelled — a lost
+// payment notification would otherwise void an order the customer already
+// paid for — and a scanned-but-unpaid trade is closed at the gateway first
+// so its QR code cannot collect money afterwards.
 func (g *alipayGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconciliation, error) {
 	o := req.Order
 	if o.PaymentCurrency == "" {
-		return Reconciliation{}, nil // checkout was never started; safe to close.
+		// Checkout never started; safe to close if it still has not when
+		// the close commits.
+		return Reconciliation{RequireStableCheckout: true}, nil
 	}
 	trade, err := g.client.QueryTrade(ctx, o.OrderNo)
 	if errors.Is(err, alipay.ErrTradeNotExist) {
-		return Reconciliation{}, nil // the QR code was never scanned; no money was collected.
+		if !req.Explicit && time.Since(o.CreatedAt) < order.UnpaidCloseAge {
+			return Reconciliation{}, fmt.Errorf("unscanned Alipay order %s stays pending until it is %s old: %w", o.OrderNo, order.UnpaidCloseAge, ErrUnconfirmed)
+		}
+		return Reconciliation{}, nil // the QR code was never scanned and has expired; no money was collected.
 	}
 	if err != nil {
 		if req.Explicit {

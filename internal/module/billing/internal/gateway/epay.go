@@ -82,7 +82,9 @@ func (g *epayGateway) StartPayment(_ context.Context, c Checkout) (*dto.Checkout
 func (g *epayGateway) Reconcile(ctx context.Context, req CloseRequest) (Reconciliation, error) {
 	o := req.Order
 	if o.PaymentCurrency == "" {
-		return Reconciliation{}, nil // checkout was never started; safe to close.
+		// Checkout never started; safe to close if it still has not when
+		// the close commits.
+		return Reconciliation{RequireStableCheckout: true}, nil
 	}
 	result, err := g.client.QueryOrder(ctx, o.OrderNo)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
 	"github.com/smartwalle/alipay/v3"
@@ -75,11 +76,28 @@ type Client struct {
 
 // Order is a face-to-face trade to create. Amount is in CNY minor units and
 // is sent to the gateway exactly, as FormatAmount renders it. NotifyURL
-// overrides the client's configured callback.
+// overrides the client's configured callback. ExpireAt is when the trade
+// stops accepting payment; the zero time falls back to the relative
+// fallbackTimeout counted from the pre-creation.
 type Order struct {
 	OrderNo   string
 	Amount    int64
 	NotifyURL string
+	ExpireAt  time.Time
+}
+
+// fallbackTimeout is the relative payment window of a trade created without
+// an absolute expiry, the local payment window.
+const fallbackTimeout = "15m"
+
+// gatewayZone is the zone Alipay reads absolute times in (UTC+8), whatever
+// the server's zone; it is fixed so a host without tzdata renders it too.
+var gatewayZone = time.FixedZone("CST", 8*60*60)
+
+// FormatTimeExpire renders an absolute trade expiry as the gateway expects
+// it: yyyy-MM-dd HH:mm:ss in UTC+8.
+func FormatTimeExpire(at time.Time) string {
+	return at.In(gatewayZone).Format(time.DateTime)
 }
 
 // NewClient loads the merchant key and the Alipay public key; a key that
@@ -119,18 +137,23 @@ func (c *Client) preCreateRequest(order Order) alipay.TradePreCreate {
 	if notifyURL == "" {
 		notifyURL = c.NotifyURL
 	}
-	return alipay.TradePreCreate{
-		Trade: alipay.Trade{
-			OutTradeNo:  order.OrderNo,
-			TotalAmount: payment.FormatAmount(order.Amount),
-			Subject:     c.InvoiceName,
-			NotifyURL:   notifyURL,
-			// Keep Alipay's payment window aligned with the local deferred
-			// close task.  Otherwise a QR code could still be paid after the
-			// order was closed and any reserved balance/inventory was restored.
-			TimeoutExpress: "15m",
-		},
+	trade := alipay.Trade{
+		OutTradeNo:  order.OrderNo,
+		TotalAmount: payment.FormatAmount(order.Amount),
+		Subject:     c.InvoiceName,
+		NotifyURL:   notifyURL,
 	}
+	// The trade must stop accepting payment when the local order closes,
+	// or a QR code could be paid after the order was closed and its reserved
+	// gift credit, coupon use and inventory were restored. The absolute
+	// expiry is the order's own deadline; a relative timeout would run from
+	// the pre-creation, letting a checkout late in the window outlive it.
+	if order.ExpireAt.IsZero() {
+		trade.TimeoutExpress = fallbackTimeout
+	} else {
+		trade.TimeExpire = FormatTimeExpire(order.ExpireAt)
+	}
+	return alipay.TradePreCreate{Trade: trade}
 }
 
 func (c *Client) QueryTrade(ctx context.Context, orderNo string) (*Trade, error) {

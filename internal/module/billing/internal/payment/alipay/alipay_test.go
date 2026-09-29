@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/perfect-panel/server/internal/module/billing/internal/billingtest"
 	"github.com/perfect-panel/server/internal/module/billing/internal/payment"
@@ -46,6 +47,25 @@ func TestPreCreateTradeAgainstGateway(t *testing.T) {
 		if sent := gateway.LastBiz("alipay.trade.precreate")["total_amount"]; sent != want {
 			t.Fatalf("amount %d was sent as %v, want %q", amount, sent, want)
 		}
+	}
+}
+
+// The trade expires at the order's own deadline, sent as the absolute time
+// the gateway reads in UTC+8; only a trade without a deadline falls back to
+// the relative window counted from the pre-creation.
+func TestPreCreateRequestSendsTheAbsoluteExpiry(t *testing.T) {
+	client := &Client{Config: Config{InvoiceName: "Plan"}}
+	expireAt := time.Date(2026, 9, 28, 16, 30, 0, 0, time.UTC) // 00:30 the next day in UTC+8
+	request := client.preCreateRequest(Order{OrderNo: "order-1", Amount: 100, ExpireAt: expireAt})
+	if request.TimeExpire != "2026-09-29 00:30:00" || request.TimeoutExpress != "" {
+		t.Fatalf("request = time_expire %q timeout_express %q, want the absolute expiry in UTC+8 only", request.TimeExpire, request.TimeoutExpress)
+	}
+	if got := FormatTimeExpire(expireAt.In(time.FixedZone("EST", -5*60*60))); got != "2026-09-29 00:30:00" {
+		t.Fatalf("FormatTimeExpire = %q, want the instant rendered in UTC+8 whatever its zone", got)
+	}
+	fallback := client.preCreateRequest(Order{OrderNo: "order-1", Amount: 100})
+	if fallback.TimeExpire != "" || fallback.TimeoutExpress != fallbackTimeout {
+		t.Fatalf("request without a deadline = time_expire %q timeout_express %q", fallback.TimeExpire, fallback.TimeoutExpress)
 	}
 }
 

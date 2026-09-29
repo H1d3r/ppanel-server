@@ -57,17 +57,13 @@ type platformSpec struct {
 	// canonical form stored on the payment method.
 	normalize func(raw []byte) (string, error)
 	style     CallbackStyle
-	// stableCheckoutClose requires a close to find the checkout unchanged
-	// even when none had started: the gateway records the expectation
-	// before it creates the payment, so a checkout may be in flight.
-	stableCheckoutClose bool
 }
 
 var platforms = map[payment.Platform]platformSpec{
 	payment.EPay:      {open: openEPay, normalize: normalizeEPay, style: CallbackStyle{UniqueParams: true, TextReply: true, TextFailure: true}},
 	payment.AlipayF2F: {open: openAlipay, normalize: normalizeAlipay, style: CallbackStyle{TextReply: true}},
 	payment.Stripe:    {open: openStripe, normalize: normalizeStripe, style: CallbackStyle{Body: true, StatusFailure: true}},
-	payment.Cryptomus: {open: openCryptomus, normalize: normalizeCryptomus, style: CallbackStyle{Body: true, TextReply: true, TextFailure: true}, stableCheckoutClose: true},
+	payment.Cryptomus: {open: openCryptomus, normalize: normalizeCryptomus, style: CallbackStyle{Body: true, TextReply: true, TextFailure: true}},
 }
 
 // Handles reports whether orders of platform are paid through a gateway.
@@ -90,9 +86,14 @@ func Collects(method string) bool {
 
 // CloseWithoutCheckout is the verdict on closing an order of platform whose
 // checkout never started: no gateway holds a payment for it, so it closes
-// without consulting the gateway.
-func (r *Registry) CloseWithoutCheckout(platform string) Reconciliation {
-	return Reconciliation{RequireStableCheckout: platforms[payment.ParsePlatform(platform)].stableCheckoutClose}
+// without consulting the gateway. The verdict only covers the snapshot it
+// was made on. Every gateway checkout records the payment expectation
+// before it creates the payment, so a checkout may be in flight when the
+// snapshot was read: the close must find the checkout still not started
+// under the order's row lock, or an Alipay QR code, an EPay payment page or
+// a Stripe client secret would stay payable on a closed order.
+func (r *Registry) CloseWithoutCheckout(string) Reconciliation {
+	return Reconciliation{RequireStableCheckout: true}
 }
 
 // ErrNotGateway reports a payment method that is not served by a gateway:
