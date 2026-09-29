@@ -107,6 +107,8 @@ func newIdentityModule(store repository.Store, srv *Application) identity.Servic
 
 // passwordChangedNotice is the Telegram message an account gets when its
 // password changed; the bindings are data and escaped by the renderer.
+//
+//nolint:gosec // G101: a notification template, not a credential
 const passwordChangedNotice = `🔐 *您的账户密码已更改*
 
 如果这不是您本人的操作，请立即重置密码并检查账户绑定。

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // G501: the device clients derive the CBC IV with MD5; the envelope format must not change
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -100,7 +100,7 @@ func generateKey(key string) []byte {
 // hex(MD5(iv)) followed by the key, of which CBC uses the first 16 bytes. The
 // device clients derive it the same way, so it must not change.
 func generateIv(iv, key string) []byte {
-	h := md5.New()
+	h := md5.New() //nolint:gosec // G401: see the import note
 	h.Write([]byte(iv))
 	return generateKey(hex.EncodeToString(h.Sum(nil)) + key)
 }

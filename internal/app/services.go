@@ -65,11 +65,17 @@ func (srv *Application) serviceDependencies(bootstrapped *lifecycle.Readiness) D
 		Bootstrap:    srv.bootstrapDependencies(),
 		Bootstrapped: bootstrapped,
 		HTTP: func() httpserver.Dependencies {
+			// The boot half of the runtime configuration carries the listener
+			// settings; they are fixed for the life of the process.
+			boot := srv.Runtime.Config()
 			return httpserver.Dependencies{
 				Routes:           srv.routeDependencies(),
 				Notification:     srv.Notification,
 				TelegramBotToken: func() string { return srv.Runtime.Config().Telegram.BotToken },
 				RequestMetadata:  srv.GeoIP.Enrich,
+				TrustedProxies:   boot.TrustedProxies,
+				AllowedOrigins:   boot.AllowedOrigins,
+				HTTP:             boot.HTTP,
 			}
 		},
 		SetRestart:             srv.Runtime.SetRestart,
@@ -130,6 +136,8 @@ func (srv *Application) routeDependencies() routes.Dependencies {
 		Subscription:   srv.Subscription,
 		Identity:       srv.Identity,
 		Network:        srv.Network,
+		Devices:        srv.DeviceManager,
+		DeviceLimit:    srv.deviceLimit,
 	}
 }
 

@@ -92,6 +92,61 @@
                 }
             }
         },
+        "/healthz": {
+            "get": {
+                "description": "Reports that the process serves HTTP. It answers 200 whenever the listener is up, regardless of the database and Redis; use /readyz for those.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "common"
+                ],
+                "summary": "Liveness probe",
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/readyz": {
+            "get": {
+                "description": "Reports whether the server can serve requests: the runtime bootstrap has loaded the settings and the database and Redis answer a ping (the ping result is cached for a few seconds). Otherwise it answers 503 with the reason.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "common"
+                ],
+                "summary": "Readiness probe",
+                "responses": {
+                    "200": {
+                        "description": "status ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "status unavailable with a reason",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/admin/ads/": {
             "put": {
                 "security": [
@@ -1672,6 +1727,87 @@
                 }
             }
         },
+        "/v1/admin/log/admin/list": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Pages the administrators' audit trail: settings changes, marketing tasks, ticket actions and Telegram bot commands, with the acting administrator and the request they came from.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Filter admin action log",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "name": "date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "name": "page",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "name": "search",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "type": "integer",
+                        "name": "size",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "UserId narrows the trail to one administrator.",
+                        "name": "user_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/result.ResponseSuccessBean"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FilterAdminActionLogResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/v1/admin/log/balance/list": {
             "get": {
                 "security": [
@@ -2275,6 +2411,87 @@
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/dto.FilterOrderLogResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/admin/log/payment/unmatched/list": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Pages the payments a gateway confirmed that could not settle their order, with the order and trade numbers, the amount and the reason, for manual refunds.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Filter unmatched payment log",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "name": "date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "name": "page",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "name": "search",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "type": "integer",
+                        "name": "size",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "UserId narrows the list to one payer.",
+                        "name": "user_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/result.ResponseSuccessBean"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.FilterUnmatchedPaymentLogResponse"
                                         }
                                     }
                                 }
@@ -5919,7 +6136,7 @@
             }
         },
         "/v1/admin/tool/restart": {
-            "get": {
+            "post": {
                 "security": [
                     {
                         "BearerAuth": []
@@ -7354,6 +7571,44 @@
                 }
             }
         },
+        "/v1/app/ws/{userid}/{identifier}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Upgrades the connection to the signed-in user's device socket. The client sends \"ping\" (or \"heartbeat\") as its heartbeat and is answered \"ping\"; the server pushes JSON messages such as {\"method\":\"subscribe_update\"}, {\"method\":\"kicked_device\"} and {\"method\":\"kicked_admin\"}.",
+                "tags": [
+                    "user"
+                ],
+                "summary": "Device WebSocket",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "User ID of the signed-in user",
+                        "name": "userid",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Device identifier",
+                        "name": "identifier",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "101": {
+                        "description": "Switching Protocols",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/auth/check": {
             "get": {
                 "consumes": [
@@ -7625,6 +7880,7 @@
         },
         "/v1/auth/oauth/login": {
             "post": {
+                "description": "Starts a sign-in through the provider and answers with its authorization URL. The optional nonce, a random value the client keeps for this sign-in, must be sent again to /v1/auth/oauth/login/token, which then completes only the sign-in this client started. Methods that redirect the browser to the given redirect (apple, telegram) require it to stay on the configured site host, or on the host this request was made to while no site host is configured.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7670,6 +7926,7 @@
         },
         "/v1/auth/oauth/login/token": {
             "post": {
+                "description": "Completes a sign-in with the provider's callback and answers with the session token. A sign-in started with a nonce (/v1/auth/oauth/login) is completed only with the same nonce; one started without is completed only without.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10321,7 +10578,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Sets the account's password and ends every session of the account. Changing an existing password requires the current one (old_password); setting the first password of an account with a bound email or phone number requires the security code sent to it (current_code); an account with neither sets it with the session alone.",
+                "description": "Sets the account's password and ends every session of the account. Changing an existing password requires the current one (old_password); setting the first password of an account with a bound email or phone number requires the security code sent to it (current_code); an account with neither sets it with the session alone. The response lists the third-party sign-in methods (OAuth providers, Telegram) still bound to the account, which the change does not remove.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10347,7 +10604,19 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/result.ResponseSuccessBean"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/result.ResponseSuccessBean"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.UpdateUserPasswordResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     }
                 }
@@ -11501,6 +11770,65 @@
         }
     },
     "definitions": {
+        "dto.AdminActionLog": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "client_ip": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "integer"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "ip_as_organization": {
+                    "type": "string"
+                },
+                "ip_asn": {
+                    "type": "integer"
+                },
+                "ip_city": {
+                    "type": "string"
+                },
+                "ip_country": {
+                    "type": "string"
+                },
+                "ip_country_code": {
+                    "type": "string"
+                },
+                "ip_region": {
+                    "type": "string"
+                },
+                "object": {
+                    "type": "string"
+                },
+                "object_id": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "telegram_sender_id": {
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "integer"
+                },
+                "user_agent": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "dto.Ads": {
             "type": "object",
             "properties": {
@@ -11747,7 +12075,11 @@
                 "limit": {
                     "type": "integer"
                 },
+                "recipient_count": {
+                    "type": "integer"
+                },
                 "recipients": {
+                    "description": "Recipients lists the first recorded recipients, one per line, and\nsays how many more there are; RecipientCount is the whole audience,\nthe additional addresses included.",
                     "type": "string"
                 },
                 "register_end_time": {
@@ -12286,7 +12618,8 @@
                 },
                 "quantity": {
                     "type": "integer",
-                    "maximum": 1000
+                    "maximum": 1000,
+                    "minimum": 1
                 },
                 "status": {
                     "type": "integer"
@@ -12295,12 +12628,23 @@
                     "type": "integer"
                 },
                 "trade_no": {
+                    "description": "TradeNo is refused when set: the gateway assigns it when the order is\npaid, and Stripe and Cryptomus read it as their own payment identifier.",
                     "type": "string"
                 },
                 "type": {
-                    "type": "integer"
+                    "type": "integer",
+                    "enum": [
+                        1,
+                        2,
+                        3,
+                        4
+                    ]
                 },
                 "user_id": {
+                    "type": "integer"
+                },
+                "user_subscribe_id": {
+                    "description": "UserSubscribeId is the user subscription a renewal (type 2) or traffic\nreset (type 3) order applies to; required for those types.",
                     "type": "integer"
                 }
             }
@@ -12552,16 +12896,22 @@
             ],
             "properties": {
                 "content": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 65535
                 },
                 "from": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 255
                 },
                 "ticket_id": {
                     "type": "integer"
                 },
                 "type": {
-                    "type": "integer"
+                    "type": "integer",
+                    "enum": [
+                        1,
+                        2
+                    ]
                 }
             }
         },
@@ -12616,7 +12966,8 @@
                     "type": "string"
                 },
                 "referral_percentage": {
-                    "type": "integer"
+                    "type": "integer",
+                    "maximum": 100
                 },
                 "telephone": {
                     "type": "string"
@@ -12645,29 +12996,46 @@
         },
         "dto.CreateUserTicketFollowRequest": {
             "type": "object",
+            "required": [
+                "content",
+                "ticket_id"
+            ],
             "properties": {
                 "content": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 65535
                 },
                 "from": {
-                    "type": "string"
+                    "description": "From is ignored: the author is always the ticket owner.",
+                    "type": "string",
+                    "maxLength": 255
                 },
                 "ticket_id": {
                     "type": "integer"
                 },
                 "type": {
-                    "type": "integer"
+                    "type": "integer",
+                    "enum": [
+                        0,
+                        1,
+                        2
+                    ]
                 }
             }
         },
         "dto.CreateUserTicketRequest": {
             "type": "object",
+            "required": [
+                "title"
+            ],
             "properties": {
                 "description": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 10000
                 },
                 "title": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 255
                 }
             }
         },
@@ -13071,6 +13439,20 @@
                 }
             }
         },
+        "dto.FilterAdminActionLogResponse": {
+            "type": "object",
+            "properties": {
+                "list": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.AdminActionLog"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "dto.FilterBalanceLogResponse": {
             "type": "object",
             "properties": {
@@ -13274,6 +13656,20 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/dto.TrafficLogDetails"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dto.FilterUnmatchedPaymentLogResponse": {
+            "type": "object",
+            "properties": {
+                "list": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.UnmatchedPaymentLog"
                     }
                 },
                 "total": {
@@ -14030,7 +14426,7 @@
                 "clear_days": {
                     "type": "integer",
                     "maximum": 3650,
-                    "minimum": 1
+                    "minimum": 7
                 }
             }
         },
@@ -14081,6 +14477,13 @@
         "dto.LoginResponse": {
             "type": "object",
             "properties": {
+                "third_party_bindings": {
+                    "description": "ThirdPartyBindings lists the types of the third-party sign-in methods\n(OAuth providers, Telegram) still bound to the account after a\npassword reset, so the client can show them: a binding made during a\ncompromise keeps signing in until its owner removes it. Empty for\nevery other sign-in.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "token": {
                     "type": "string"
                 }
@@ -14398,6 +14801,11 @@
                     "description": "google, facebook, apple, telegram, github etc.",
                     "type": "string"
                 },
+                "nonce": {
+                    "description": "Nonce is an optional random value the client generates and keeps (for\nexample in session storage) for this sign-in; it is presented again on\nthe token exchange, so a sign-in another browser started cannot be\ncompleted in this one. At least 16 random characters are recommended.",
+                    "type": "string",
+                    "maxLength": 128
+                },
                 "redirect": {
                     "type": "string"
                 }
@@ -14420,6 +14828,11 @@
                 "method": {
                     "description": "google, facebook, apple, telegram, github etc.",
                     "type": "string"
+                },
+                "nonce": {
+                    "description": "Nonce is the value the client sent when it started this sign-in; a\nsign-in started with a nonce is completed only with the same one, and\none started without a nonce only without one.",
+                    "type": "string",
+                    "maxLength": 128
                 }
             }
         },
@@ -14521,6 +14934,10 @@
                 },
                 "user_id": {
                     "type": "integer"
+                },
+                "user_subscribe_id": {
+                    "description": "UserSubscribeId is the user subscription a renewal or traffic reset\norder applies to; zero for other orders and for orders created before\nit was recorded.",
+                    "type": "integer"
                 }
             }
         },
@@ -14588,6 +15005,10 @@
                     "type": "integer"
                 },
                 "user_id": {
+                    "type": "integer"
+                },
+                "user_subscribe_id": {
+                    "description": "UserSubscribeId is the user subscription a renewal or traffic reset\norder applies to; zero for other orders and for orders created before\nit was recorded.",
                     "type": "integer"
                 }
             }
@@ -16044,6 +16465,10 @@
                 "type"
             ],
             "properties": {
+                "cf_token": {
+                    "description": "CfToken is the Turnstile response an anonymous request for a\nregistration code (type 1) carries while registration verification is\non; other requests leave it empty.",
+                    "type": "string"
+                },
                 "email": {
                     "type": "string"
                 },
@@ -16075,6 +16500,10 @@
                 "type"
             ],
             "properties": {
+                "cf_token": {
+                    "description": "CfToken is the Turnstile response an anonymous request for a\nregistration code (type 1) carries while registration verification is\non; other requests leave it empty.",
+                    "type": "string"
+                },
                 "telephone": {
                     "type": "string"
                 },
@@ -17153,6 +17582,68 @@
                 }
             }
         },
+        "dto.UnmatchedPaymentLog": {
+            "type": "object",
+            "properties": {
+                "actor_id": {
+                    "type": "integer"
+                },
+                "amount": {
+                    "type": "integer"
+                },
+                "client_ip": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "integer"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "ip_as_organization": {
+                    "type": "string"
+                },
+                "ip_asn": {
+                    "type": "integer"
+                },
+                "ip_city": {
+                    "type": "string"
+                },
+                "ip_country": {
+                    "type": "string"
+                },
+                "ip_country_code": {
+                    "type": "string"
+                },
+                "ip_region": {
+                    "type": "string"
+                },
+                "order_no": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "integer"
+                },
+                "trade_no": {
+                    "type": "string"
+                },
+                "user_agent": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "dto.UnsubscribeRequest": {
             "type": "object",
             "properties": {
@@ -17750,7 +18241,8 @@
                     "type": "integer"
                 },
                 "referral_percentage": {
-                    "type": "integer"
+                    "type": "integer",
+                    "maximum": 100
                 },
                 "telegram": {
                     "type": "integer"
@@ -17819,6 +18311,18 @@
                     "type": "string",
                     "maxLength": 128,
                     "minLength": 8
+                }
+            }
+        },
+        "dto.UpdateUserPasswordResponse": {
+            "type": "object",
+            "properties": {
+                "third_party_bindings": {
+                    "description": "ThirdPartyBindings lists the types of the third-party sign-in methods\n(OAuth providers, Telegram) still bound to the account, so the client\ncan show them: a binding made during a compromise keeps signing in\nuntil its owner removes it.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

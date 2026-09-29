@@ -36,6 +36,10 @@ type HandlerDeps struct {
 // @Router /v1/app/ws/{userid}/{identifier} [get]
 func Handler(manager *DeviceManager, deps HandlerDeps) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
+		if manager == nil {
+			httpx.HttpResult(c, nil, xerr.NewErrCode(xerr.ERROR))
+			return
+		}
 		account, ok := user.FromContext(ctx)
 		session, _ := ctx.Value(requestctx.CtxKeySessionID).(string)
 		if !ok || account == nil || session == "" {

@@ -18,7 +18,7 @@ import (
 
 // Endpoint pins a current Graph API version; the constants shipped with
 // golang.org/x/oauth2/facebook still point at the retired v3.2 dialog.
-var Endpoint = oauth2.Endpoint{
+var Endpoint = oauth2.Endpoint{ //nolint:gosec // G101: OAuth endpoint URLs, not credentials
 	AuthURL:  "https://www.facebook.com/v22.0/dialog/oauth",
 	TokenURL: "https://graph.facebook.com/v22.0/oauth/access_token",
 }

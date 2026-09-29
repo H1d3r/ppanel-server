@@ -6,6 +6,8 @@
 package routes
 
 import (
+	"context"
+
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/route"
@@ -16,6 +18,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/platform"
 	"github.com/perfect-panel/server/internal/module/subscription"
 	"github.com/perfect-panel/server/internal/module/support"
+	"github.com/perfect-panel/server/internal/transport/devicesocket"
 	"github.com/perfect-panel/server/internal/transport/http/middleware"
 	"github.com/redis/go-redis/v9"
 )
@@ -32,6 +35,10 @@ type Dependencies struct {
 	Subscription   subscription.Service
 	Identity       identity.Service
 	Network        network.Service
+	// Devices is the device WebSocket manager the device route serves;
+	// DeviceLimit caps the sockets one account may keep open.
+	Devices     *devicesocket.DeviceManager
+	DeviceLimit func(ctx context.Context, userID int64) int
 }
 
 func (deps Dependencies) runtimeConfig() config.Config {
@@ -89,6 +96,7 @@ func RegisterHandlers(router *server.Hertz, deps Dependencies) {
 	registerEdgeRoutes(router, deps)
 	registerSubscribeConfigRoutes(router, deps)
 	registerServerRoutes(router, deps)
+	registerDeviceRoutes(router, deps)
 
 	registerAdminAdsRoutes(router, deps)
 	registerAdminAnnouncementRoutes(router, deps)

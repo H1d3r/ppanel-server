@@ -1,6 +1,7 @@
 GET /v1/subscribe/config github.com/perfect-panel/server/internal/module/subscription/transport/http.SubscribeHandler
 GET /v1/server/config github.com/perfect-panel/server/internal/module/network/transport/http/server.GetServerConfigHandler
 GET /v1/server/user github.com/perfect-panel/server/internal/module/network/transport/http/server.GetServerUserListHandler
+GET /v1/app/ws/:userid/:identifier github.com/perfect-panel/server/internal/transport/devicesocket.Handler
 GET /v1/admin/ads/detail github.com/perfect-panel/server/internal/module/support/transport/http/admin/ads.GetAdsDetailHandler
 GET /v1/admin/ads/list github.com/perfect-panel/server/internal/module/support/transport/http/admin/ads.GetAdsListHandler
 GET /v1/admin/announcement/detail github.com/perfect-panel/server/internal/module/support/transport/http/admin/announcement.GetAnnouncementHandler
@@ -18,6 +19,7 @@ GET /v1/admin/console/user github.com/perfect-panel/server/internal/module/platf
 GET /v1/admin/coupon/list github.com/perfect-panel/server/internal/module/billing/transport/http/admin/coupon.GetCouponListHandler
 GET /v1/admin/document/detail github.com/perfect-panel/server/internal/module/support/transport/http/admin/document.GetDocumentDetailHandler
 GET /v1/admin/document/list github.com/perfect-panel/server/internal/module/support/transport/http/admin/document.GetDocumentListHandler
+GET /v1/admin/log/admin/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterAdminActionLogHandler
 GET /v1/admin/log/balance/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterBalanceLogHandler
 GET /v1/admin/log/commission/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterCommissionLogHandler
 GET /v1/admin/log/email/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterEmailLogHandler
@@ -25,6 +27,7 @@ GET /v1/admin/log/gift/list github.com/perfect-panel/server/internal/module/plat
 GET /v1/admin/log/login/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterLoginLogHandler
 GET /v1/admin/log/message/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.GetMessageLogListHandler
 GET /v1/admin/log/mobile/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterMobileLogHandler
+GET /v1/admin/log/payment/unmatched/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterUnmatchedPaymentLogHandler
 GET /v1/admin/log/order/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterOrderLogHandler
 GET /v1/admin/log/register/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterRegisterLogHandler
 GET /v1/admin/log/server/traffic/list github.com/perfect-panel/server/internal/module/platform/transport/http/admin/log.FilterServerTrafficLogHandler

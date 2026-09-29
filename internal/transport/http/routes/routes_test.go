@@ -62,8 +62,8 @@ func TestRegisterHandlers_routeInventory(t *testing.T) {
 	}
 
 	// Then
-	if len(routes) != 248 {
-		t.Fatalf("expected 248 routes, got %d", len(routes))
+	if len(routes) != 251 {
+		t.Fatalf("expected 251 routes, got %d", len(routes))
 	}
 	if !bytes.Equal([]byte(actual.String()), expected) {
 		t.Fatalf("route inventory differs from %s (rerun with -update to accept the change)\nactual:\n%s", routesGolden, actual.String())
@@ -82,6 +82,16 @@ func normalizeRouteHandler(raw string, owners map[string]string) (string, error)
 		}
 	}
 	return "", errors.New("handler owner not found for " + closureOwner)
+}
+
+// handlerOwnerImport reports whether an import path supplies route handlers:
+// the module transports, and the device WebSocket package, whose handler
+// lives with its manager outside the modules.
+func handlerOwnerImport(path string) bool {
+	if strings.Contains(path, "/internal/module/") && strings.Contains(path, "/transport/http") {
+		return true
+	}
+	return strings.HasSuffix(path, "/internal/transport/devicesocket")
 }
 
 // routeHandlerOwners derives the logical handler owner from route source
@@ -107,7 +117,7 @@ func routeHandlerOwners(t *testing.T) map[string]string {
 		imports := make(map[string]string)
 		for _, spec := range file.Imports {
 			path := strings.Trim(spec.Path.Value, `"`)
-			if !strings.Contains(path, "/internal/module/") || !strings.Contains(path, "/transport/http") {
+			if !handlerOwnerImport(path) {
 				continue
 			}
 			name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -176,7 +186,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 	}{
 		{
 			name:           "empty-fallback",
-			wantRouteCount: 248,
+			wantRouteCount: 251,
 			present:        []string{"/v1/subscribe/config"},
 			absent:         []string{"/"},
 		},
@@ -185,7 +195,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			subscribe: appconfig.SubscribeConfig{
 				SubscribePath: "/custom/subscribe",
 			},
-			wantRouteCount: 248,
+			wantRouteCount: 251,
 			present:        []string{"/custom/subscribe"},
 			absent:         []string{"/v1/subscribe/config", "/"},
 		},
@@ -194,7 +204,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			subscribe: appconfig.SubscribeConfig{
 				PanDomain: false,
 			},
-			wantRouteCount: 248,
+			wantRouteCount: 251,
 			present:        []string{"/v1/subscribe/config"},
 			absent:         []string{"/"},
 		},
@@ -203,12 +213,12 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			subscribe: appconfig.SubscribeConfig{
 				PanDomain: true,
 			},
-			wantRouteCount: 249,
+			wantRouteCount: 252,
 			present:        []string{"/v1/subscribe/config", "/"},
 		},
 		{
 			name:           "edge-manifest-enabled",
-			wantRouteCount: 249,
+			wantRouteCount: 252,
 			present:        []string{"/v1/subscribe/config", "/api/edge/v1/manifest"},
 		},
 	}

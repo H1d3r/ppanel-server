@@ -32,6 +32,7 @@ func registerAdminConsoleRoutes(router *server.Hertz, deps Dependencies) {
 
 func registerAdminLogRoutes(router *server.Hertz, deps Dependencies) {
 	group := deps.adminGroup(router, "/v1/admin/log")
+	group.GET("/admin/list", adminLog.FilterAdminActionLogHandler(deps.Platform))
 	group.GET("/balance/list", adminLog.FilterBalanceLogHandler(deps.Platform))
 	group.GET("/commission/list", adminLog.FilterCommissionLogHandler(deps.Platform))
 	group.GET("/email/list", adminLog.FilterEmailLogHandler(deps.Platform))
@@ -39,6 +40,7 @@ func registerAdminLogRoutes(router *server.Hertz, deps Dependencies) {
 	group.GET("/login/list", adminLog.FilterLoginLogHandler(deps.Platform))
 	group.GET("/message/list", adminLog.GetMessageLogListHandler(deps.Platform))
 	group.GET("/mobile/list", adminLog.FilterMobileLogHandler(deps.Platform))
+	group.GET("/payment/unmatched/list", adminLog.FilterUnmatchedPaymentLogHandler(deps.Platform))
 	group.GET("/order/list", adminLog.FilterOrderLogHandler(deps.Platform))
 	group.GET("/register/list", adminLog.FilterRegisterLogHandler(deps.Platform))
 	group.GET("/server/traffic/list", adminLog.FilterServerTrafficLogHandler(deps.Platform))

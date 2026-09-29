@@ -6,7 +6,7 @@
 package password
 
 import (
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // G501: verifies legacy hashes only; they are rehashed with argon2id on the next login
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
@@ -96,13 +96,13 @@ func MultiPasswordVerify(algo, salt, password, hash string) bool {
 	}
 	switch strings.ToLower(strings.TrimSpace(algo)) {
 	case "md5":
-		sum := md5.Sum([]byte(password))
+		sum := md5.Sum([]byte(password)) //nolint:gosec // G401: legacy hash verification, see the import note
 		return constantTimeStringEqual(hex.EncodeToString(sum[:]), hash)
 	case "sha256":
 		sum := sha256.Sum256([]byte(password))
 		return constantTimeStringEqual(hex.EncodeToString(sum[:]), hash)
 	case "md5salt":
-		sum := md5.Sum([]byte(password + salt))
+		sum := md5.Sum([]byte(password + salt)) //nolint:gosec // G401: legacy hash verification, see the import note
 		return constantTimeStringEqual(hex.EncodeToString(sum[:]), hash)
 	case "sha256salt":
 		// sha256(password + salt), used by SSPanel-style panels (pwdMethod=sha256)
