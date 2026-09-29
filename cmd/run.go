@@ -98,7 +98,7 @@ func createConfigFileIfMissing() {
 		return
 	}
 	dir := filepath.Dir(startConfigPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		log.Fatalf("Please create the directory %s and place the configuration file %s in it: %v", dir, startConfigPath, err)
 	}
 	// The file will hold the JWT secret and database credentials.

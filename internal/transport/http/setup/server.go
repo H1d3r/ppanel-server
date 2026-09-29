@@ -363,7 +363,7 @@ func HandleDatabaseTest(_ context.Context, ctx *app.RequestContext) {
 		goto result
 	}
 	defer closeDatabase(tx)
-	if err := tx.Ping(); err != nil {
+	if err := pingDatabase(tx); err != nil {
 		logger.Errorf("ping database failed, err: %v\n", err.Error())
 		status = false
 		message = "Database connection failed"
@@ -388,6 +388,14 @@ result:
 		"msg":    message,
 		"status": status,
 	})
+}
+
+// pingDatabase checks that the connection answers within a bounded time, so
+// an address that drops packets cannot hold the install page indefinitely.
+func pingDatabase(db *sql.DB) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return db.PingContext(ctx)
 }
 
 // closeDatabase releases the connection pool a setup request opened. The

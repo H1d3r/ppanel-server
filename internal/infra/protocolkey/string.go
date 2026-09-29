@@ -28,7 +28,7 @@ func FixedUniqueString(s string, length int, alphabet string) (string, error) {
 	hash := sha256.Sum256([]byte(s))
 	seed := int64(binary.LittleEndian.Uint64(hash[:8]))
 
-	r := rand.New(rand.NewSource(seed))
+	r := rand.New(rand.NewSource(seed)) //nolint:gosec // G404: a deterministic shuffle seeded from SHA-256, not a source of randomness
 
 	// Copy alphabet to mutable array
 	data := []rune(alphabet)

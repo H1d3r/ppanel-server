@@ -313,9 +313,11 @@ func (a *Aggregator) FlushDueBuckets(ctx context.Context, now time.Time) error {
 	}
 
 	maxScore := bucketMinute(now).Unix() - 1
-	buckets, err := a.deps.Redis.ZRangeByScore(ctx, bucketIndexKey, &redis.ZRangeBy{
-		Min: "-inf",
-		Max: strconv.FormatInt(maxScore, 10),
+	buckets, err := a.deps.Redis.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     bucketIndexKey,
+		Start:   "-inf",
+		Stop:    strconv.FormatInt(maxScore, 10),
+		ByScore: true,
 	}).Result()
 	if err != nil {
 		return err

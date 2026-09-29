@@ -2,7 +2,8 @@ package devicesocket
 
 import (
 	"bufio"
-	"crypto/sha1"
+	"context"
+	"crypto/sha1" //nolint:gosec // G505: RFC 6455 prescribes SHA-1 for Sec-WebSocket-Accept; not a security primitive here
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -74,7 +75,9 @@ func (dm *DeviceManager) UpgradeHertz(c *app.RequestContext, session string, use
 // compatRequest is the Hertz request as the net/http request
 // gorilla/websocket's Upgrade reads: its method, URL and headers.
 func compatRequest(c *app.RequestContext) (*http.Request, error) {
-	req, err := http.NewRequest(string(c.Method()), c.URI().String(), http.NoBody)
+	// The request only carries the handshake headers to gorilla/websocket; it
+	// is never sent, so no deadline applies.
+	req, err := http.NewRequestWithContext(context.Background(), string(c.Method()), c.URI().String(), http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +134,7 @@ func validChallengeKey(key string) bool {
 // acceptKey computes the Sec-WebSocket-Accept value of a challenge key.
 func acceptKey(challengeKey string) string {
 	// RFC 6455 prescribes SHA-1 for the accept key; it is not used for security here.
-	h := sha1.New()
+	h := sha1.New() //nolint:gosec // G401: see the import note; the handshake digest is not security-relevant
 	h.Write([]byte(challengeKey))
 	h.Write([]byte(websocketGUID))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))

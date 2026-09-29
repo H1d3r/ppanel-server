@@ -8,6 +8,7 @@ package geoip
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -249,7 +250,7 @@ func DownloadGeoIPDatabase(url, path, databaseType string) error {
 // once it has the SHA-256 digest, when one is given, and has been verified
 // as a complete database of databaseType.
 func downloadDatabase(url, path, databaseType string, digest []byte) error {
-	err := os.MkdirAll(filepath.Dir(path), 0755)
+	err := os.MkdirAll(filepath.Dir(path), 0o750)
 	if err != nil {
 		logger.Errorf("[GeoIP] Failed to create directory: %v", err.Error())
 		return err
@@ -271,7 +272,13 @@ func downloadDatabase(url, path, databaseType string, digest []byte) error {
 	}()
 
 	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(url)
+	// The client's timeout bounds the whole download; no caller carries a
+	// request context down to this start-up path.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

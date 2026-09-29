@@ -391,7 +391,8 @@ ORDER BY ordinal_position`, table)
 }
 
 func listMySQLPrimaryKeyColumns(ctx context.Context, db *sql.DB, table string) (_ []string, err error) {
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.QueryContext(ctx, //nolint:sqlclosecheck // closed by closeRows, which folds the close error into err
+		`
 SELECT column_name
 FROM information_schema.key_column_usage
 WHERE table_schema = DATABASE()
@@ -415,7 +416,8 @@ ORDER BY ordinal_position`, table)
 }
 
 func listPostgresColumns(ctx context.Context, db *sql.DB, schema, table string) (_ []postgresColumn, err error) {
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.QueryContext(ctx, //nolint:sqlclosecheck // closed by closeRows, which folds the close error into err
+		`
 SELECT column_name,
        data_type,
        udt_name,
@@ -448,7 +450,8 @@ ORDER BY ordinal_position`, schema, table)
 }
 
 func listPostgresForeignKeys(ctx context.Context, db *sql.DB, schema string) (_ []foreignKey, err error) {
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.QueryContext(ctx, //nolint:sqlclosecheck // closed by closeRows, which folds the close error into err
+		`
 SELECT child.relname AS child_table,
        parent.relname AS parent_table
 FROM pg_constraint c
@@ -550,7 +553,7 @@ func truncateTables(ctx context.Context, db *sql.DB, schema string, plans []tabl
 	for _, plan := range plans {
 		names = append(names, quotePGIdent(schema)+"."+quotePGIdent(plan.Name))
 	}
-	query := "TRUNCATE TABLE " + strings.Join(names, ", ") + " RESTART IDENTITY CASCADE"
+	query := "TRUNCATE TABLE " + strings.Join(names, ", ") + " RESTART IDENTITY CASCADE" //nolint:gosec // G202: identifiers quoted by quotePGIdent from the catalog
 	log.Printf("truncate %d target table(s)", len(names))
 	if _, err := db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("truncate target tables: %w", err)
@@ -565,11 +568,11 @@ func copyTable(ctx context.Context, mysqlDB, postgresDB *sql.DB, schema string, 
 		cols[i] = col.Name
 	}
 
-	query := "SELECT " + quoteMySQLIdentList(cols) + " FROM " + quoteMySQLIdent(plan.Name)
+	query := "SELECT " + quoteMySQLIdentList(cols) + " FROM " + quoteMySQLIdent(plan.Name) //nolint:gosec // G202: identifiers quoted by quoteMySQLIdent from information_schema
 	if len(plan.OrderColumns) > 0 {
 		query += " ORDER BY " + quoteMySQLIdentList(plan.OrderColumns)
 	}
-	rows, err := mysqlDB.QueryContext(ctx, query)
+	rows, err := mysqlDB.QueryContext(ctx, query) //nolint:rowserrcheck // rows.Err is checked by the CopyFrom source's Err method
 	if err != nil {
 		return fmt.Errorf("query mysql table %s: %w", plan.Name, err)
 	}
@@ -864,7 +867,8 @@ func parseTimestamp(value string, location *time.Location) (time.Time, error) {
 }
 
 func resetSequences(ctx context.Context, db *sql.DB, schema string) (err error) {
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.QueryContext(ctx, //nolint:sqlclosecheck // closed by closeRows, which folds the close error into err
+		`
 SELECT table_name, column_name
 FROM information_schema.columns
 WHERE table_schema = $1
@@ -901,7 +905,7 @@ ORDER BY table_name, ordinal_position`, schema)
 			continue
 		}
 
-		query := fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s", quotePGIdent(item.column), tableName)
+		query := fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s", quotePGIdent(item.column), tableName) //nolint:gosec // G201: identifiers quoted by quotePGIdent from information_schema
 		var maxID int64
 		if err := db.QueryRowContext(ctx, query).Scan(&maxID); err != nil {
 			return fmt.Errorf("get max id for %s.%s: %w", item.table, item.column, err)

@@ -4,7 +4,7 @@ var message map[uint32]string
 
 func init() {
 	message = make(map[uint32]string)
-	message = map[uint32]string{
+	message = map[uint32]string{ //nolint:gosec // G101: user-facing error texts, not credentials
 		// General error
 		SUCCESS: "Success",
 		ERROR:   "Internal Server Error",
