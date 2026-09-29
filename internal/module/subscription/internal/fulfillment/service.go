@@ -176,7 +176,7 @@ func (s *Service) loadOutcome(ctx context.Context, orderInfo *order.Order) (*out
 		// A new purchase created its subscription under this order.
 		userSub, err = s.deps.UserSubs.FindOneSubscribeByOrderId(ctx, orderInfo.Id)
 	} else {
-		userSub, err = s.deps.UserSubs.FindOneSubscribeByToken(ctx, orderInfo.SubscribeToken)
+		userSub, err = s.orderSubscription(ctx, orderInfo)
 	}
 	if err != nil {
 		return nil, err
@@ -290,8 +290,42 @@ func (s *Service) createUserSubscriptionTx(ctx context.Context, store repository
 	return userSub, nil
 }
 
+// errOrderSubscription rejects a renewal or reset order that names no
+// subscription at all: neither the id nor the token it had at checkout. A
+// lookup by an empty token could otherwise resolve to a row of an older
+// version that stored no token.
+var errOrderSubscription = fmt.Errorf("order names no subscription")
+
+// lockOrderSubscription locks the subscription a renewal or reset order is
+// for. The order carries the subscription's id since it was introduced; the
+// id survives the token rotations (the owner's, an administrator's or the
+// rotation of every token) that happen between checkout and payment, which
+// used to leave a paid order without a subscription to fulfil. Orders created
+// before the id existed carry only the token they saw at checkout.
+func lockOrderSubscription(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*usersub.Subscribe, error) {
+	if orderInfo.UserSubscribeId > 0 {
+		return store.UserSubscription().FindOneSubscribeForUpdate(ctx, orderInfo.UserSubscribeId)
+	}
+	if orderInfo.SubscribeToken == "" {
+		return nil, errOrderSubscription
+	}
+	return store.UserSubscription().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
+}
+
+// orderSubscription reads, without locking, the subscription a renewal or
+// reset order is for, resolving it like lockOrderSubscription.
+func (s *Service) orderSubscription(ctx context.Context, orderInfo *order.Order) (*usersub.Subscribe, error) {
+	if orderInfo.UserSubscribeId > 0 {
+		return s.deps.UserSubs.FindOneSubscribe(ctx, orderInfo.UserSubscribeId)
+	}
+	if orderInfo.SubscribeToken == "" {
+		return nil, errOrderSubscription
+	}
+	return s.deps.UserSubs.FindOneSubscribeByToken(ctx, orderInfo.SubscribeToken)
+}
+
 func (s *Service) activateRenewalTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*outcomeParts, error) {
-	userSub, err := store.UserSubscription().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
+	userSub, err := lockOrderSubscription(ctx, store, orderInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +416,7 @@ func termEnd(plan *subscribe.Subscribe, quantity int64, start time.Time) (time.T
 }
 
 func (s *Service) activateResetTrafficTx(ctx context.Context, store repository.SubscriptionStore, orderInfo *order.Order) (*outcomeParts, error) {
-	userSub, err := store.UserSubscription().FindOneSubscribeByTokenForUpdate(ctx, orderInfo.SubscribeToken)
+	userSub, err := lockOrderSubscription(ctx, store, orderInfo)
 	if err != nil {
 		return nil, err
 	}
