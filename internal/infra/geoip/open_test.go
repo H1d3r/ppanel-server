@@ -135,7 +135,7 @@ func TestOpenReplacesADatabaseWithTheWrongDigestFromTheMirror(t *testing.T) {
 	if current, _ := os.ReadFile(path); string(current) != string(stale) {
 		t.Fatal("a download with the wrong digest replaced the database")
 	}
-	assertOnlyFile(t, dir, "GeoLite2-City.mmdb")
+	assertOnlyCityDatabase(t, dir)
 
 	// The mirror serves the configured file.
 	right := newMirror(t, fresh)
@@ -171,7 +171,7 @@ func TestOpenDownloadsFromTheConfiguredURLOnly(t *testing.T) {
 	if own.requests.Load() != 1 || builtin.requests.Load() != 0 {
 		t.Fatalf("requests: own %d, built-in mirror %d; want one to the configured URL only", own.requests.Load(), builtin.requests.Load())
 	}
-	assertOnlyFile(t, dir, "GeoLite2-City.mmdb")
+	assertOnlyCityDatabase(t, dir)
 	if loc.ASNDB != nil {
 		t.Fatal("an ASN database was opened although none was placed")
 	}
