@@ -275,12 +275,15 @@ func (a *Admin) replyTicket(ctx context.Context, msg *models.Message, args strin
 	}
 	previous, err := a.deps.Tickets.Reply(ctx, id, staffAuthor, parts[1], false)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
 			a.reply(ctx, msg, "工单不存在。")
-			return
+		case errors.Is(err, ticket.ErrClosed):
+			a.reply(ctx, msg, fmt.Sprintf("工单 #%d 已关闭，请先 /reopen_%d 重新打开后再回复。", id, id))
+		default:
+			logger.WithContext(ctx).Errorw("ticket reply failed", logger.Field("error", err.Error()), logger.Field("ticket_id", id))
+			a.reply(ctx, msg, "回复失败，请稍后再试。")
 		}
-		logger.WithContext(ctx).Errorw("ticket reply failed", logger.Field("error", err.Error()), logger.Field("ticket_id", id))
-		a.reply(ctx, msg, "回复失败，请稍后再试。")
 		return
 	}
 	a.reply(ctx, msg, fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(previous)))

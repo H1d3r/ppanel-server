@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -34,17 +36,82 @@ func newSupportModule(store repository.Store, queue *taskqueue.Client, srv *Appl
 		QuotaTargets:  supportSubscriptions{srv: srv},
 		Queue:         marketingQueue{client: queue},
 		EmailStopper:  emailWorkerStopper{},
-		TicketNotify:  ticketTopicNotifier{srv: srv},
+		TicketNotify:  ticketTopicNotifier{srv: srv, pool: newMirrorPool(mirrorWorkers, mirrorQueueSize)},
 		Redis:         srv.Redis,
+		AuditLogs:     store.Log(),
 	})
+}
+
+// The mirror pool: a few workers relay ticket events into the Telegram
+// group, and a bounded queue holds the events waiting for one. Telegram
+// allows a bot about twenty messages a minute in a group, so more workers
+// would only be throttled; a flood of replies fills the queue and the
+// excess is dropped with a log line rather than kept as a goroutine each.
+const (
+	mirrorWorkers   = 4
+	mirrorQueueSize = 256
+	mirrorTimeout   = 15 * time.Second
+)
+
+// mirrorJob is one ticket event to relay.
+type mirrorJob struct {
+	ctx      context.Context
+	ticketID int64
+	what     string
+	call     func(ctx context.Context) error
+}
+
+// mirrorPool runs the mirror jobs on a fixed number of workers.
+type mirrorPool struct {
+	jobs    chan mirrorJob
+	start   sync.Once
+	workers int
+	// dropped counts the events the full queue turned away.
+	dropped atomic.Int64
+}
+
+func newMirrorPool(workers, queueSize int) *mirrorPool {
+	return &mirrorPool{jobs: make(chan mirrorJob, queueSize), workers: workers}
+}
+
+// submit queues job, starting the workers on first use, and reports whether
+// it was accepted: a full queue turns the event away.
+func (p *mirrorPool) submit(job mirrorJob) bool {
+	p.start.Do(func() {
+		for range p.workers {
+			go p.run()
+		}
+	})
+	select {
+	case p.jobs <- job:
+		return true
+	default:
+		p.dropped.Add(1)
+		return false
+	}
+}
+
+func (p *mirrorPool) run() {
+	for job := range p.jobs {
+		mirrorCtx, cancel := context.WithTimeout(job.ctx, mirrorTimeout)
+		if err := job.call(mirrorCtx); err != nil {
+			logger.WithContext(mirrorCtx).Errorw("[TicketTopic] "+job.what+" mirror failed",
+				logger.Field("error", err.Error()), logger.Field("ticket_id", job.ticketID))
+		}
+		cancel()
+	}
 }
 
 // ticketTopicNotifier mirrors ticket lifecycle into the Telegram admin
 // group. Best-effort by the port's contract: the group being unconfigured
 // or unreachable only logs — the ticket operation already succeeded. The
-// mirror runs detached from the request: a user submitting a ticket must
-// not wait on Telegram round-trips (the bot client's HTTP timeout is 60s).
-type ticketTopicNotifier struct{ srv *Application }
+// mirror runs detached from the request, on the pool: a user submitting a
+// ticket must not wait on Telegram round-trips (the bot client's HTTP
+// timeout is 60s), and a flood of replies must not start a goroutine each.
+type ticketTopicNotifier struct {
+	srv  *Application
+	pool *mirrorPool
+}
 
 func (n ticketTopicNotifier) enabled() bool {
 	return n.srv.Runtime.Config().Telegram.GroupChatID != 0 && n.srv.Notification != nil
@@ -54,15 +121,11 @@ func (n ticketTopicNotifier) mirror(ctx context.Context, ticketID int64, what st
 	if !n.enabled() {
 		return
 	}
-	detached := context.WithoutCancel(ctx)
-	go func() {
-		mirrorCtx, cancel := context.WithTimeout(detached, 15*time.Second)
-		defer cancel()
-		if err := call(mirrorCtx); err != nil {
-			logger.WithContext(mirrorCtx).Errorw("[TicketTopic] "+what+" mirror failed",
-				logger.Field("error", err.Error()), logger.Field("ticket_id", ticketID))
-		}
-	}()
+	job := mirrorJob{ctx: context.WithoutCancel(ctx), ticketID: ticketID, what: what, call: call}
+	if !n.pool.submit(job) {
+		logger.WithContext(ctx).Errorw("[TicketTopic] "+what+" mirror dropped: the mirror queue is full",
+			logger.Field("ticket_id", ticketID))
+	}
 }
 
 func (n ticketTopicNotifier) TicketCreated(ctx context.Context, t *ticket.Ticket) {

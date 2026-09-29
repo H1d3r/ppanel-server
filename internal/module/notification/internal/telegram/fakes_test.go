@@ -232,7 +232,8 @@ type ticketReply struct {
 }
 
 // fakeTickets applies replies and status changes to its tickets the way the
-// support use case does: a reply moves the ticket to Waiting.
+// support use case does: a reply moves the ticket to Waiting, and a closed
+// ticket refuses a staff reply with ticket.ErrClosed.
 type fakeTickets struct {
 	tickets  map[int64]*ticket.Ticket
 	details  *ticket.Details
@@ -286,6 +287,9 @@ func (f *fakeTickets) Reply(_ context.Context, id int64, from, content string, i
 	t, ok := f.tickets[id]
 	if !ok {
 		return 0, errors.Join(errors.New("find ticket"), gorm.ErrRecordNotFound)
+	}
+	if t.Status == ticket.Closed {
+		return 0, errors.Join(errors.New("staff reply"), ticket.ErrClosed)
 	}
 	previous := t.Status
 	t.Status = ticket.Waiting

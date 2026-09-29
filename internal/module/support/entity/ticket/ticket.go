@@ -3,6 +3,7 @@
 package ticket
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -13,6 +14,11 @@ const (
 	Processed = 3 // Processed
 	Closed    = 4 // Closed
 )
+
+// ErrClosed reports a staff reply to a closed ticket. Closing ends the
+// conversation for staff: a closed ticket takes no staff reply until it is
+// explicitly reopened. The owner's reply is the exception and reopens it.
+var ErrClosed = errors.New("ticket is closed")
 
 // Follow types.
 const (

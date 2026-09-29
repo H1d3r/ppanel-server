@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -210,8 +211,15 @@ func TestUserTicketHandlersRefuseMalformedRequests(t *testing.T) {
 		msg                        string
 	}{
 		{"open not JSON", http.MethodPost, "/v1/public/ticket/", `{"title":"help"`, ""},
+		{"open without title", http.MethodPost, "/v1/public/ticket/", `{"description":"no subject"}`, "Title is a required field"},
+		{"open title too long", http.MethodPost, "/v1/public/ticket/", `{"title":"` + strings.Repeat("t", 256) + `"}`, "Title must be a maximum of 255 characters"},
+		{"open description too long", http.MethodPost, "/v1/public/ticket/", `{"title":"help","description":"` + strings.Repeat("d", 10001) + `"}`, "Description must be a maximum of 10,000 characters"},
 		{"reply not JSON", http.MethodPost, "/v1/public/ticket/follow", `{"ticket_id":3,"content":}`, ""},
 		{"reply ticket not a number", http.MethodPost, "/v1/public/ticket/follow", `{"ticket_id":"3","content":"hi"}`, ""},
+		{"reply without ticket", http.MethodPost, "/v1/public/ticket/follow", `{"content":"hi"}`, "TicketId is a required field"},
+		{"reply without content", http.MethodPost, "/v1/public/ticket/follow", `{"ticket_id":3}`, "Content is a required field"},
+		{"reply too long", http.MethodPost, "/v1/public/ticket/follow", `{"ticket_id":3,"content":"` + strings.Repeat("c", 65536) + `"}`, "Content must be a maximum of 65,535 characters"},
+		{"reply of an unknown type", http.MethodPost, "/v1/public/ticket/follow", `{"ticket_id":3,"type":7,"content":"hi"}`, "Type must be one of"},
 		{"detail id not a number", http.MethodGet, "/v1/public/ticket/detail?id=latest", "", "bind Id"},
 		{"detail without id", http.MethodGet, "/v1/public/ticket/detail", "", "Id is a required field"},
 		{"list page not a number", http.MethodGet, "/v1/public/ticket/list?page=next&size=10", "", "bind Page"},

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/go-telegram/bot/models"
@@ -143,6 +144,10 @@ func (b *Bot) appendTicketFollow(ctx context.Context, msg *models.Message, topic
 		return
 	}
 	if _, err := b.deps.Tickets.Reply(ctx, topic.RefId, staffAuthor, msg.Text, true); err != nil {
+		if errors.Is(err, ticket.ErrClosed) {
+			b.sendToTopic(ctx, msg, fmt.Sprintf("⚠️ 工单 #%d 已关闭，回复未保存。请先 /reopen_%d 重新打开工单。", topic.RefId, topic.RefId))
+			return
+		}
 		logger.WithContext(ctx).Errorw("ticket relay: reply failed", logger.Field("error", err.Error()), logger.Field("ticket_id", topic.RefId))
 		b.sendToTopic(ctx, msg, "⚠️ 回复保存失败，请稍后再试。")
 	}

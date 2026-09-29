@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -235,6 +236,43 @@ func isTopicNotModifiedError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "topic_not_modified")
 }
 
+// ErrRateLimited reports that Telegram throttled the bot (HTTP 429): the
+// delivery was not made and nothing about the topic is wrong. Callers that
+// can wait retry after the pause the error's RetryAfter names; the others
+// report it as a delivery failure.
+var ErrRateLimited = errors.New("telegram rate limit")
+
+// RateLimitedError is ErrRateLimited with the pause Telegram asked for.
+type RateLimitedError struct {
+	RetryAfter time.Duration
+	cause      error
+}
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("telegram rate limit, retry after %s: %v", e.RetryAfter, e.cause)
+}
+
+func (e *RateLimitedError) Unwrap() []error { return []error{ErrRateLimited, e.cause} }
+
+// rateLimited classifies Telegram's 429 rejection, which the bot library
+// reports as a TooManyRequestsError carrying retry_after in seconds.
+func rateLimited(err error) (*RateLimitedError, bool) {
+	var tooMany *tgbot.TooManyRequestsError
+	if !errors.As(err, &tooMany) {
+		return nil, false
+	}
+	retryAfter := time.Duration(tooMany.RetryAfter) * time.Second
+	if retryAfter <= 0 {
+		retryAfter = time.Second
+	}
+	return &RateLimitedError{RetryAfter: retryAfter, cause: err}, true
+}
+
+// relayRetryAfterLimit bounds the pause Relay waits out itself before
+// retrying a throttled delivery once. A longer pause is the caller's to
+// schedule: the relays run under short request-bound contexts.
+const relayRetryAfterLimit = 5 * time.Second
+
 // PostMarkdown sends MarkdownV2 into a topic through Relay's self-healing.
 func (s *TopicService) PostMarkdown(ctx context.Context, m TelegramMessenger, topic *telegramtopic.Topic, text string) (*telegramtopic.Topic, error) {
 	return s.Relay(ctx, topic, func(threadID int64) error {
@@ -251,7 +289,11 @@ func (s *TopicService) PostText(ctx context.Context, m TelegramMessenger, topic 
 
 // Relay runs op against the topic's thread, transparently recreating a
 // deleted topic or reopening a closed one, then retrying once. It returns
-// the mapping actually used, which may have been repointed.
+// the mapping actually used, which may have been repointed. A delivery
+// Telegram throttled (HTTP 429) is distinct from a broken topic: nothing is
+// recreated or reopened; when the pause Telegram asks for is short and the
+// context allows it, Relay waits it out and retries once, otherwise it
+// reports a RateLimitedError so the caller can back off.
 func (s *TopicService) Relay(ctx context.Context, topic *telegramtopic.Topic, op func(threadID int64) error) (*telegramtopic.Topic, error) {
 	err := op(topic.ThreadId)
 	switch {
@@ -270,5 +312,34 @@ func (s *TopicService) Relay(ctx context.Context, topic *telegramtopic.Topic, op
 		}
 		return reopened, op(reopened.ThreadId)
 	}
+	if limited, ok := rateLimited(err); ok {
+		return topic, s.retryAfter(ctx, topic, op, limited)
+	}
 	return topic, err
+}
+
+// retryAfter waits out a throttled delivery's pause and retries it once; a
+// pause the context or the bound rules out is reported as it is.
+func (s *TopicService) retryAfter(ctx context.Context, topic *telegramtopic.Topic, op func(threadID int64) error, limited *RateLimitedError) error {
+	if limited.RetryAfter > relayRetryAfterLimit {
+		return limited
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < limited.RetryAfter {
+		return limited
+	}
+	timer := time.NewTimer(limited.RetryAfter)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return limited
+	}
+	err := op(topic.ThreadId)
+	if err == nil {
+		return nil
+	}
+	if again, ok := rateLimited(err); ok {
+		return again
+	}
+	return err
 }

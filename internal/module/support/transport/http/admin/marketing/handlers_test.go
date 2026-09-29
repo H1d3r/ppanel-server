@@ -65,7 +65,7 @@ func marketingFixture(t *testing.T) marketingWorld {
 // campaignView is how the admin API lists the fixture's campaign.
 func campaignView(w marketingWorld, t *testing.T) dto.BatchSendEmailTask {
 	row := w.env.ReloadTask(t, 1)
-	return dto.BatchSendEmailTask{Id: 1, Subject: "welcome", Content: "<p>hi</p>", Recipients: "a@example.com\nb@example.com", Scope: 1,
+	return dto.BatchSendEmailTask{Id: 1, Subject: "welcome", Content: "<p>hi</p>", Recipients: "a@example.com\nb@example.com", RecipientCount: 2, Scope: 1,
 		Scheduled: 1758000000, Status: uint8(supporttest.TaskInProgress), Total: 2, Current: 1,
 		Errors:    `[{"error":"mailbox full","email":"a@example.com","time":1758000100}]`,
 		CreatedAt: row.CreatedAt.UnixMilli(), UpdatedAt: row.UpdatedAt.UnixMilli()}
