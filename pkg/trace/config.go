@@ -31,6 +31,11 @@ type Config struct {
 	// OtlpHttpSecure represents the scheme to use for OTLP HTTP transport
 	// with a host:port Endpoint.
 	OtlpHttpSecure bool `yaml:"OtlpHttpSecure"`
+	// OtlpGrpcSecure makes the otlpgrpc batcher connect with TLS, verifying
+	// the collector against the system roots. False, the default and the
+	// only behaviour before the key existed, sends the spans in plaintext,
+	// which suits a collector on the same host or private network only.
+	OtlpGrpcSecure bool `yaml:"OtlpGrpcSecure"`
 	// Disabled indicates whether StartAgent starts the agent.
 	Disabled bool `yaml:"Disabled"`
 }

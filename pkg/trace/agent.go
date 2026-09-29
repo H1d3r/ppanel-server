@@ -161,6 +161,20 @@ func jaegerOptions(c Config) []otlptracehttp.Option {
 	return opts
 }
 
+// otlpGrpcOptions are the otlpgrpc exporter's options: the endpoint, the
+// headers, and plaintext unless OtlpGrpcSecure asks for TLS, which is then
+// verified against the system roots.
+func otlpGrpcOptions(c Config) []otlptracegrpc.Option {
+	opts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(c.Endpoint)}
+	if !c.OtlpGrpcSecure {
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	}
+	if len(c.OtlpHeaders) > 0 {
+		opts = append(opts, otlptracegrpc.WithHeaders(c.OtlpHeaders))
+	}
+	return opts
+}
+
 // createExporter builds the exporter c names. The exporter lives as long as
 // the process, beyond any caller, so the OTLP exporters are built with a root
 // context, which New only uses to start the client.
@@ -179,14 +193,7 @@ func createExporter(c Config) (sdktrace.SpanExporter, error) {
 		// endpoint can not reach.
 		// If the connection not dial success, the global otel ErrorHandler will catch error
 		// when reporting data like other exporters.
-		opts := []otlptracegrpc.Option{
-			otlptracegrpc.WithInsecure(),
-			otlptracegrpc.WithEndpoint(c.Endpoint),
-		}
-		if len(c.OtlpHeaders) > 0 {
-			opts = append(opts, otlptracegrpc.WithHeaders(c.OtlpHeaders))
-		}
-		return otlptracegrpc.New(context.Background(), opts...)
+		return otlptracegrpc.New(context.Background(), otlpGrpcOptions(c)...)
 	case kindOtlpHttp:
 		// Not support flexible configuration now.
 		opts := []otlptracehttp.Option{
