@@ -238,10 +238,18 @@ func (s *Service) handleCommissionTx(ctx context.Context, store repository.Billi
 
 // calculateCommission is percentage percent of price, rounded down to whole
 // minor units. The float product it replaced under-paid a unit whenever the
-// percentage has no exact binary fraction (29% of 100 came out as 28).
+// percentage has no exact binary fraction (29% of 100 came out as 28). A
+// percentage above 100, which an older administration API accepted, pays the
+// whole price at most: a commission must never exceed what the buyer paid.
 func calculateCommission(price int64, percentage uint8) int64 {
+	if percentage > maxCommissionPercentage {
+		percentage = maxCommissionPercentage
+	}
 	return price * int64(percentage) / 100
 }
+
+// maxCommissionPercentage caps the referral percentage at the whole price.
+const maxCommissionPercentage uint8 = 100
 
 // UnfulfillableRefunded reports whether the order was refunded because the
 // subscription domain could not fulfil it.
