@@ -3,9 +3,11 @@ package supporttest
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	"github.com/perfect-panel/server/internal/module/support/entity/ticket"
 )
@@ -180,4 +182,37 @@ func (n *Notifier) TicketReplied(_ context.Context, ticketID int64, from, conten
 // TicketStatusChanged records the status change.
 func (n *Notifier) TicketStatusChanged(_ context.Context, ticketID int64, status uint8) {
 	n.Statuses = append(n.Statuses, MirroredStatus{TicketID: ticketID, Status: status})
+}
+
+// AuditLog is the platform log port the administrators' mutations are
+// recorded in: every row written, and Err failing every write.
+type AuditLog struct {
+	Rows []*log.SystemLog
+	Err  error
+}
+
+// Insert records the row.
+func (a *AuditLog) Insert(_ context.Context, row *log.SystemLog) error {
+	if a.Err != nil {
+		return a.Err
+	}
+	a.Rows = append(a.Rows, row)
+	return nil
+}
+
+// Actions decodes the administrator actions recorded so far.
+func (a *AuditLog) Actions(t testing.TB) []log.AdminAction {
+	t.Helper()
+	actions := make([]log.AdminAction, 0, len(a.Rows))
+	for _, row := range a.Rows {
+		if row.Type != log.TypeAdminAction.Uint8() {
+			t.Fatalf("audit row %+v is not an administrator action", row)
+		}
+		var action log.AdminAction
+		if err := action.Unmarshal([]byte(row.Content)); err != nil {
+			t.Fatalf("audit row %d: %v", row.Id, err)
+		}
+		actions = append(actions, action)
+	}
+	return actions
 }

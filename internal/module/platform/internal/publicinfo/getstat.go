@@ -16,6 +16,7 @@ import (
 	"github.com/perfect-panel/server/internal/config"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/redis/go-redis/v9"
 )
@@ -38,16 +39,26 @@ const (
 	// runs on a context of its own: a refresh that used up its budget
 	// building the statistics still caches them.
 	statCacheWriteTimeout = 2 * time.Second
+	// statFailureBackoff is how long a failed refresh is answered from
+	// memory before the store is asked again: the anonymous statistics
+	// endpoint must not turn a store outage into a query per call.
+	statFailureBackoff = 30 * time.Second
 )
 
 // GetStat returns the public site statistics: the enabled users (rounded
 // down), the enabled nodes, the number of countries the nodes are in and the
-// protocols they offer. The statistics are cached for an hour. Concurrent
-// cache misses share one refresh, and a caller may stop waiting for it
-// without cancelling it for the others.
+// protocols they offer. The statistics are cached for an hour in Redis and
+// remembered in the process: while Redis is unreachable the process serves
+// its own copy for as long as the cache would have, and a refresh that
+// failed is not tried again for statFailureBackoff. Concurrent cache misses
+// share one refresh, and a caller may stop waiting for it without cancelling
+// it for the others.
 func (s *Service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
 	if cached := s.cachedStat(ctx); cached != nil {
 		return cached, nil
+	}
+	if err := s.statMemo.recentFailure(timeutil.Now()); err != nil {
+		return nil, err
 	}
 	refresh := s.statRefresh.DoChan(config.CommonStatCacheKey, func() (stat any, err error) {
 		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.refreshTimeout)
@@ -61,13 +72,21 @@ func (s *Service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
 					logger.Field("panic", fmt.Sprint(r)), logger.Field("stack", string(debug.Stack())))
 				stat, err = nil, xerr.Errorf(xerr.ERROR, "refresh the site statistics: %v", r)
 			}
+			if err != nil {
+				s.statMemo.failed(timeutil.Now(), err)
+			}
 		}()
 		// A refresh that finished while this one was being scheduled has
 		// already done the work.
 		if cached := s.cachedStat(refreshCtx); cached != nil {
 			return cached, nil
 		}
-		return s.refreshStat(refreshCtx)
+		refreshed, err := s.refreshStat(refreshCtx)
+		if err != nil {
+			return nil, err
+		}
+		s.statMemo.remember(refreshed, timeutil.Now())
+		return refreshed, nil
 	})
 	select {
 	case result := <-refresh:
@@ -83,19 +102,64 @@ func (s *Service) GetStat(ctx context.Context) (*dto.GetStatResponse, error) {
 	}
 }
 
+// cachedStat reads the statistics from Redis, or, when Redis cannot be
+// read, from the process's own copy while that is no older than the cache
+// would be.
 func (s *Service) cachedStat(ctx context.Context) *dto.GetStatResponse {
 	data, err := s.deps.Redis.Get(ctx, config.CommonStatCacheKey).Result()
 	if err != nil {
-		if !errors.Is(err, redis.Nil) && ctx.Err() == nil {
-			logger.WithContext(ctx).Errorw("[GetStat] read the cached statistics", logger.Field("error", err.Error()))
+		if errors.Is(err, redis.Nil) || ctx.Err() != nil {
+			return nil
 		}
-		return nil
+		logger.WithContext(ctx).Errorw("[GetStat] read the cached statistics", logger.Field("error", err.Error()))
+		return s.statMemo.fresh(timeutil.Now(), statCacheTTL)
 	}
 	var cached dto.GetStatResponse
 	if json.Unmarshal([]byte(data), &cached) != nil {
 		return nil
 	}
+	s.statMemo.remember(&cached, timeutil.Now())
 	return &cached
+}
+
+// remember keeps a copy of stat, built or read at now.
+func (m *statMemo) remember(stat *dto.GetStatResponse, now time.Time) {
+	copied := *stat
+	copied.Protocol = slices.Clone(stat.Protocol)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stat, m.at, m.err = &copied, now, nil
+}
+
+// fresh returns a copy of the remembered statistics when they are younger
+// than maxAge, else nil.
+func (m *statMemo) fresh(now time.Time, maxAge time.Duration) *dto.GetStatResponse {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stat == nil || now.Sub(m.at) > maxAge {
+		return nil
+	}
+	copied := *m.stat
+	copied.Protocol = slices.Clone(m.stat.Protocol)
+	return &copied
+}
+
+// failed records a refresh that failed at now with err.
+func (m *statMemo) failed(now time.Time, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failedAt, m.err = now, err
+}
+
+// recentFailure returns the error of a refresh that failed within the
+// backoff, which is answered instead of refreshing again; nil otherwise.
+func (m *statMemo) recentFailure(now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err == nil || now.Sub(m.failedAt) > statFailureBackoff {
+		return nil
+	}
+	return m.err
 }
 
 func (s *Service) refreshStat(ctx context.Context) (*dto.GetStatResponse, error) {

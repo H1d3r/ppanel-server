@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/platform/entity/task"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
@@ -52,11 +53,22 @@ type BatchEmailStopper interface {
 	StopBatchEmail(taskID int64)
 }
 
+// AuditLog records the administrators' marketing mutations in the platform's
+// system log; the platform kernel's log repository satisfies it.
+type AuditLog interface {
+	Insert(ctx context.Context, data *log.SystemLog) error
+}
+
 type emailTaskError struct {
 	Error string `json:"error"`
 	Email string `json:"email"`
 	Time  int64  `json:"time"`
 }
+
+// maxListedRecipients bounds the addresses a campaign's list entry shows:
+// a campaign to a hundred thousand accounts must not ship its whole audience
+// with every page of the list.
+const maxListedRecipients = 20
 
 // Service runs the marketing tasks for the support facade: it records each
 // task and hands its execution to the task queue.
@@ -66,12 +78,40 @@ type Service struct {
 	selector   SubscriptionSelector
 	queue      Queue
 	stopper    BatchEmailStopper
+	audit      AuditLog
 }
 
 // NewService builds the marketing service; stopper, which interrupts a
-// running campaign at once, may be nil.
-func NewService(tasks repository.TaskRepo, recipients EmailRecipientReader, selector SubscriptionSelector, queue Queue, stopper BatchEmailStopper) *Service {
-	return &Service{tasks: tasks, recipients: recipients, selector: selector, queue: queue, stopper: stopper}
+// running campaign at once, and audit, which records the administrators'
+// actions, may be nil.
+func NewService(tasks repository.TaskRepo, recipients EmailRecipientReader, selector SubscriptionSelector, queue Queue, stopper BatchEmailStopper, audit AuditLog) *Service {
+	return &Service{tasks: tasks, recipients: recipients, selector: selector, queue: queue, stopper: stopper, audit: audit}
+}
+
+// recordAdminAction writes the administrator's marketing mutation to the
+// audit trail. The mutation is already stored; a trail that cannot be
+// written is logged, not reported as the mutation's failure.
+func (s *Service) recordAdminAction(ctx context.Context, action, object string, objectID int64, detail string) {
+	if s.audit == nil {
+		return
+	}
+	row, err := log.NewAdminActionLog(log.AdminActionFrom(ctx, log.AdminAction{Action: action, Object: object, ObjectID: objectID, Detail: detail}))
+	if err == nil {
+		err = s.audit.Insert(ctx, row)
+	}
+	if err != nil {
+		logger.WithContext(ctx).Errorw("[Marketing] record admin action failed", logger.Field("error", err.Error()),
+			logger.Field("action", action), logger.Field("task_id", objectID))
+	}
+}
+
+// listedRecipients shows the first recipients of a campaign, one per line,
+// and how many more there are.
+func listedRecipients(recipients []string) string {
+	if len(recipients) <= maxListedRecipients {
+		return strings.Join(recipients, "\n")
+	}
+	return strings.Join(recipients[:maxListedRecipients], "\n") + fmt.Sprintf("\n… and %d more", len(recipients)-maxListedRecipients)
 }
 
 func (s *Service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateBatchSendEmailTaskRequest) error {
@@ -173,6 +213,9 @@ func (s *Service) CreateBatchSendEmailTask(ctx context.Context, req *dto.CreateB
 		return xerr.NewErrCode(xerr.QueueEnqueueError)
 	}
 	log.Infof("[CreateBatchSendEmailTask] Successfully enqueued email task with ID: %s, scheduled at: %s", queueTaskID, scheduledAt.Format(time.DateTime))
+	// The trail names the audience's size and selection, never an address.
+	s.recordAdminAction(ctx, "marketing.campaign.create", "email_task", taskInfo.Id,
+		fmt.Sprintf("scope=%d recipients=%d additional=%d scheduled=%d interval=%d limit=%d", scope.Int8(), len(emails), len(additionalEmails), scheduledAt.Unix(), req.Interval, req.Limit))
 
 	return nil
 }
@@ -280,7 +323,8 @@ func (s *Service) GetBatchSendEmailTaskList(ctx context.Context, req *dto.GetBat
 			Id:                t.Id,
 			Subject:           contentInfo.Subject,
 			Content:           contentInfo.Content,
-			Recipients:        strings.Join(scopeInfo.Recipients, "\n"),
+			Recipients:        listedRecipients(scopeInfo.Recipients),
+			RecipientCount:    int64(t.Total),
 			Scope:             scopeInfo.Type,
 			RegisterStartTime: scopeInfo.RegisterStartTime,
 			RegisterEndTime:   scopeInfo.RegisterEndTime,
@@ -351,6 +395,7 @@ func (s *Service) StopBatchSendEmailTask(ctx context.Context, req *dto.StopBatch
 	} else {
 		logger.WithContext(ctx).Error("[StopBatchSendEmailTask] email worker manager is nil, cannot stop task")
 	}
+	s.recordAdminAction(ctx, "marketing.campaign.stop", "email_task", req.Id, "")
 	return nil
 }
 
@@ -418,6 +463,8 @@ func (s *Service) CreateQuotaTask(ctx context.Context, req *dto.CreateQuotaTaskR
 		return xerr.Errorf(xerr.QueueEnqueueError, "enqueue task error")
 	}
 	logger.Infof("[CreateQuotaTask] Successfully created task with ID: %d", newTask.Id)
+	s.recordAdminAction(ctx, "marketing.quota.create", "quota_task", newTask.Id,
+		fmt.Sprintf("subscriptions=%d reset_traffic=%t days=%d gift_type=%d gift_value=%d", len(subIds), req.ResetTraffic, req.Days, req.GiftType, req.GiftValue))
 	return nil
 }
 

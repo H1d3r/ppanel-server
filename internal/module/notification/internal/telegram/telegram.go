@@ -266,27 +266,47 @@ func bindTokenKey(token string) string {
 	return fmt.Sprintf("%v:%v", config.TelegramBindKey, token)
 }
 
+// bindLockKey addresses the lock one account's bindings are made under.
+func bindLockKey(userID int64) string {
+	return fmt.Sprintf("%v:lock:%d", config.TelegramBindKey, userID)
+}
+
+// bindLockTTL bounds the binding lock: long enough for the checks and the
+// insert, short enough that a crashed redemption does not lock the account
+// out of binding for long.
+const bindLockTTL = 10 * time.Second
+
 // bindFailed answers every bind failure the user cannot fix themselves.
 const bindFailed = "Bind failed. Please try again later."
 
 // bind redeems a single-use binding token issued by the panel, binding the
 // chat to the panel account it names. /start (the deep link) and /bind (the
 // manual command) differ only in the prompt for a missing token.
+//
+// The token is consumed before anything else, in one step: in webhook mode
+// updates are handled concurrently, so two chats opening the same forwarded
+// link at once must not both find the token. A redemption that then fails
+// for a reason the user can fix, or a failure of the stores, puts the token
+// back with the life it had left, so the user can retry without a new link
+// and nobody can keep a leaked link alive by failing on purpose. The
+// binding itself runs under a lock on the account, so two links of one
+// account redeemed at once cannot both pass the "not yet bound" check.
 func (b *Bot) bind(ctx context.Context, chatID int64, token, missingToken string) {
 	if token == "" {
 		b.send(ctx, chatID, missingToken)
 		return
 	}
 	log := logger.WithContext(ctx)
-	value, err := b.deps.Sessions.Get(ctx, bindTokenKey(token))
-	if err != nil && !errors.Is(err, redis.Nil) {
+	key := bindTokenKey(token)
+	value, ttl, err := b.deps.Sessions.Take(ctx, key)
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			log.Infow("[Telegram] bind: token not found or expired")
+			b.send(ctx, chatID, "Bind token is invalid or expired. Please request a new one.")
+			return
+		}
 		log.Errorw("[Telegram] bind: read token failed", logger.Field("error", err.Error()))
 		b.send(ctx, chatID, bindFailed)
-		return
-	}
-	if value == "" {
-		log.Infow("[Telegram] bind: token not found or expired")
-		b.send(ctx, chatID, "Bind token is invalid or expired. Please request a new one.")
 		return
 	}
 	userID, err := strconv.ParseInt(value, 10, 64)
@@ -295,6 +315,15 @@ func (b *Bot) bind(ctx context.Context, chatID int64, token, missingToken string
 		b.send(ctx, chatID, "Bind failed. Invalid session data.")
 		return
 	}
+	// restore puts the unredeemed token back for the time it had left.
+	restore := func() {
+		if ttl <= 0 {
+			return
+		}
+		if err := b.deps.Sessions.Set(ctx, key, value, ttl); err != nil {
+			log.Errorw("[Telegram] bind: restore token failed", logger.Field("error", err.Error()))
+		}
+	}
 	chatIDStr := strconv.FormatInt(chatID, 10)
 
 	// One Telegram account binds one panel account...
@@ -302,42 +331,62 @@ func (b *Bot) bind(ctx context.Context, chatID int64, token, missingToken string
 	switch {
 	case err != nil && !errors.Is(err, gorm.ErrRecordNotFound):
 		log.Errorw("[Telegram] bind: query chat binding failed", logger.Field("error", err.Error()), logger.Field("chat_id", chatID))
+		restore()
 		b.send(ctx, chatID, bindFailed)
 		return
 	case err == nil && byChat.Id > 0 && byChat.UserId != userID:
 		log.Infow("[Telegram] bind: chat already bound to another user",
 			logger.Field("chat_id", chatID), logger.Field("existing_user_id", byChat.UserId), logger.Field("user_id", userID))
+		restore()
 		b.send(ctx, chatID, "This Telegram account is already bound to another user.")
 		return
 	}
 
+	lock := bindLockKey(userID)
+	locked, err := b.deps.Sessions.Acquire(ctx, lock, bindLockTTL)
+	if err != nil || !locked {
+		if err != nil {
+			log.Errorw("[Telegram] bind: acquire binding lock failed", logger.Field("error", err.Error()), logger.Field("user_id", userID))
+		} else {
+			log.Infow("[Telegram] bind: another redemption for the account is in progress", logger.Field("user_id", userID))
+		}
+		restore()
+		b.send(ctx, chatID, bindFailed)
+		return
+	}
+	defer func() {
+		if err := b.deps.Sessions.Delete(ctx, lock); err != nil {
+			log.Errorw("[Telegram] bind: release binding lock failed", logger.Field("error", err.Error()), logger.Field("user_id", userID))
+		}
+	}()
+
 	// ...and one panel account one Telegram account; an existing binding is
-	// never overwritten silently.
+	// never overwritten silently. The check runs under the lock, so a
+	// binding another redemption is making right now is seen.
 	byUser, err := b.deps.Accounts.FindUserBinding(ctx, userID, "telegram")
 	switch {
 	case err != nil && !errors.Is(err, gorm.ErrRecordNotFound):
 		log.Errorw("[Telegram] bind: query user binding failed", logger.Field("error", err.Error()), logger.Field("user_id", userID))
+		restore()
 		b.send(ctx, chatID, bindFailed)
 		return
 	case err == nil && byUser.Id > 0 && byUser.AuthIdentifier == chatIDStr:
+		// Bound already: the token has done its work and stays consumed.
 		b.send(ctx, chatID, "This account is already bound to your Telegram.")
 		return
 	case err == nil && byUser.Id > 0:
 		log.Infow("[Telegram] bind: user already bound to a different chat",
 			logger.Field("user_id", userID), logger.Field("existing_chat_id", byUser.AuthIdentifier), logger.Field("chat_id", chatID))
+		restore()
 		b.send(ctx, chatID, "Your account is already bound to a different Telegram account. Please unbind it first.")
 		return
 	}
 
 	if err := b.deps.Accounts.BindTelegram(ctx, userID, chatIDStr); err != nil {
 		log.Errorw("[Telegram] bind: insert binding failed", logger.Field("error", err.Error()), logger.Field("user_id", userID))
+		restore()
 		b.send(ctx, chatID, bindFailed)
 		return
-	}
-	// Invalidate the token once redeemed, so a link that leaks afterwards
-	// cannot rebind the account.
-	if err := b.deps.Sessions.Delete(ctx, bindTokenKey(token)); err != nil {
-		log.Errorw("[Telegram] bind: invalidate token failed", logger.Field("error", err.Error()))
 	}
 
 	text, err := RenderMarkdownV2(BindNotify, map[string]string{

@@ -71,16 +71,18 @@ func (m *documentRepo) FindOne(ctx context.Context, id int64) (*document.Documen
 	return &resp, nil
 }
 
+// Update rewrites the document's mutable columns from data. An update of an
+// unknown document is refused: the row is looked up first, and the column
+// update inserts nothing.
 func (m *documentRepo) Update(ctx context.Context, data *document.Document) error {
-	// Save inserts a row it does not find; an update of an unknown
-	// document is refused instead.
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil {
 		return err
 	}
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		return db.Save(data).Error
+		return conn.Model(&document.Document{}).Where("id = ?", data.Id).
+			Select("title", "content", "tags", "show").
+			Updates(data).Error
 	}, m.getCacheKeys(old)...)
 	return err
 }

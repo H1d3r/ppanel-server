@@ -14,7 +14,12 @@ import (
 // is only logged, the settings being stored.
 func (s *Service) UpdateSubscribeConfig(ctx context.Context, req *dto.SubscribeConfig) error {
 	log := logger.WithContext(ctx)
-	if err := updateConfigFields(ctx, s.deps, "subscribe", convertedConfigFields(*req)); err != nil {
+	change := settingsChange{
+		category: "subscribe",
+		next:     convertedConfigFields(*req),
+		previous: previousFields(ctx, "subscribe", s.GetSubscribeConfig, convertedConfigFields),
+	}
+	if err := updateConfigFields(ctx, s.deps, change); err != nil {
 		log.Errorw("[UpdateSubscribeConfig] update subscribe config error", logger.Field("error", err.Error()))
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update subscribe config error: %v", err)
 	}

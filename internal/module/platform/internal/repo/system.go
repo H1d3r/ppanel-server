@@ -109,6 +109,8 @@ func (m *systemRepo) FindOne(ctx context.Context, id int64) (*system.System, err
 	return &resp, nil
 }
 
+// Update rewrites the setting's mutable columns from data. It never inserts
+// a row and never touches the creation time, which a whole-row save would.
 func (m *systemRepo) Update(ctx context.Context, data *system.System) error {
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -116,8 +118,8 @@ func (m *systemRepo) Update(ctx context.Context, data *system.System) error {
 	}
 	keys := append(m.getCacheKeys(old), m.getCacheKeys(data)...)
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		return db.Save(data).Error
+		return conn.Model(&system.System{}).Where("id = ?", data.Id).
+			Select("category", "key", "value", "type", "desc").Updates(data).Error
 	}, keys...)
 	return err
 }

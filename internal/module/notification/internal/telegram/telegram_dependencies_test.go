@@ -27,7 +27,7 @@ func TestRedisStoreGetDelConsumesTheKeyOnce(t *testing.T) {
 	if _, err := store.GetDel(ctx, tgActionPrefix+"abc"); !errors.Is(err, redis.Nil) {
 		t.Fatalf("second GetDel error = %v, want redis.Nil", err)
 	}
-	if _, err := store.Get(ctx, tgActionPrefix+"abc"); !errors.Is(err, redis.Nil) {
-		t.Fatalf("Get after GetDel error = %v, want the key gone", err)
+	if _, _, err := store.Take(ctx, tgActionPrefix+"abc"); !errors.Is(err, redis.Nil) {
+		t.Fatalf("Take after GetDel error = %v, want the key gone", err)
 	}
 }

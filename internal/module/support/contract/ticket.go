@@ -1,22 +1,32 @@
 package dto
 
+// The bounds below keep a reply inside its TEXT column and the mirror into
+// the Telegram admin group finite: a follow may be an inline image, so its
+// content is bounded by the column, a title by its VARCHAR(255) column.
+const (
+	MaxTicketTitleLength       = 255
+	MaxTicketDescriptionLength = 10000
+	MaxTicketFollowLength      = 65535
+)
+
 type CreateTicketFollowRequest struct {
-	TicketId int64  `json:"ticket_id" validate:"required"`
-	From     string `json:"from" validate:"required"`
-	Type     uint8  `json:"type" validate:"required"`
-	Content  string `json:"content" validate:"required"`
+	TicketId int64  `json:"ticket_id" validate:"required,gt=0"`
+	From     string `json:"from" validate:"required,max=255"`
+	Type     uint8  `json:"type" validate:"required,oneof=1 2"`
+	Content  string `json:"content" validate:"required,max=65535"`
 }
 
 type CreateUserTicketFollowRequest struct {
-	TicketId int64  `json:"ticket_id"`
-	From     string `json:"from"`
-	Type     uint8  `json:"type"`
-	Content  string `json:"content"`
+	TicketId int64 `json:"ticket_id" validate:"required,gt=0"`
+	// From is ignored: the author is always the ticket owner.
+	From    string `json:"from" validate:"max=255"`
+	Type    uint8  `json:"type" validate:"oneof=0 1 2"`
+	Content string `json:"content" validate:"required,max=65535"`
 }
 
 type CreateUserTicketRequest struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	Title       string `json:"title" validate:"required,max=255"`
+	Description string `json:"description" validate:"max=10000"`
 }
 
 type Follow struct {

@@ -5,8 +5,10 @@
 package publicinfo
 
 import (
+	"sync"
 	"time"
 
+	dto "github.com/perfect-panel/server/internal/module/platform/contract"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -20,6 +22,21 @@ type Service struct {
 	// refresh and of the hostname resolution inside it (statRefreshTimeout
 	// and statResolveTimeout); tests shorten them.
 	refreshTimeout, resolveTimeout time.Duration
+	// statMemo is the process's own copy of the statistics, serving the
+	// anonymous callers while Redis is unreachable.
+	statMemo statMemo
+}
+
+// statMemo remembers the last statistics built or read by this process and
+// the last failed refresh, so that a Redis outage does not turn every
+// anonymous call into a rebuild (four counts and a resolution of every node
+// hostname) and a failing store is asked again only after a pause.
+type statMemo struct {
+	mu       sync.Mutex
+	stat     *dto.GetStatResponse
+	at       time.Time
+	failedAt time.Time
+	err      error
 }
 
 // NewService builds the public-info service.

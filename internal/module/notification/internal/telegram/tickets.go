@@ -17,6 +17,19 @@ func TicketTopicTitle(t *ticket.Ticket) string {
 	return fmt.Sprintf("🎫 #%d %s", t.Id, t.Title)
 }
 
+// telegramMessageLimit is Telegram's cap on a text message, in characters.
+const telegramMessageLimit = 4096
+
+// clampMessage shortens text to what Telegram accepts in one message, so a
+// long website reply is mirrored cut rather than rejected whole.
+func clampMessage(text string) string {
+	r := []rune(text)
+	if len(r) <= telegramMessageLimit {
+		return text
+	}
+	return string(r[:telegramMessageLimit-1]) + "…"
+}
+
 // TicketCreated opens the ticket's topic and posts its opening message.
 // Only tickets created after the group went live get a topic; older tickets
 // have no mapping and their events are skipped upstream.
@@ -30,7 +43,7 @@ func (s *TopicService) TicketCreated(ctx context.Context, m TelegramMessenger, t
 		body += "\n\n" + t.Description
 	}
 	body += "\n\n直接在本话题回复即可答复用户；关闭话题即关闭工单。"
-	_, err = s.PostText(ctx, m, topic, body)
+	_, err = s.PostText(ctx, m, topic, clampMessage(body))
 	return err
 }
 
@@ -52,7 +65,7 @@ func (s *TopicService) TicketReplied(ctx context.Context, m TelegramMessenger, t
 	if ticket.IsFromUser(from) {
 		label = "👤 用户回复"
 	}
-	_, err = s.PostText(ctx, m, topic, label+"：\n"+content)
+	_, err = s.PostText(ctx, m, topic, clampMessage(label+"：\n"+content))
 	return err
 }
 

@@ -94,12 +94,14 @@ func TestStaffReplyRecordsFollowAndWaitsForUser(t *testing.T) {
 }
 
 // A reply typed inside the ticket's Telegram topic is stored, but not echoed
-// back into the topic that already shows it.
+// back into the topic that already shows it. (A closed topic takes no
+// message in Telegram until it is reopened, which reopens the ticket first;
+// the ticket here awaits staff.)
 func TestStaffReplyFromMirrorIsNotEchoed(t *testing.T) {
 	w := openSupportWorld(t)
 	notify := &fakeTicketNotifier{}
 	svc := w.ticketService(notify)
-	id := w.seedTicket(t, 11, ticketEntity.Closed)
+	id := w.seedTicket(t, 11, ticketEntity.Pending)
 
 	if _, err := svc.UpdateTicketAsStaff(context.Background(), &dto.StaffTicketUpdateCommand{TicketId: id, Reply: "reopened", From: "admin", FromMirror: true}); err != nil {
 		t.Fatalf("UpdateTicketAsStaff: %v", err)

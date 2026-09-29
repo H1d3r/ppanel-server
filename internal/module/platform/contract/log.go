@@ -1,5 +1,76 @@
 package dto
 
+// AdminActionLog is one administrator mutation: what was done to which
+// object, by whom (UserId is the administrator's account) and from where
+// (Source "http" carries the request's address and agent; "telegram" the
+// bot command's sender).
+type AdminActionLog struct {
+	Id               int64  `json:"id"`
+	UserId           int64  `json:"user_id"`
+	Action           string `json:"action"`
+	Object           string `json:"object,omitempty"`
+	ObjectId         int64  `json:"object_id,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	Source           string `json:"source"`
+	TelegramSenderId int64  `json:"telegram_sender_id,omitempty"`
+	Timestamp        int64  `json:"timestamp"`
+	CreatedAt        int64  `json:"created_at"`
+	ClientIP         string `json:"client_ip,omitempty"`
+	UserAgent        string `json:"user_agent,omitempty"`
+	IPCountryCode    string `json:"ip_country_code,omitempty"`
+	IPCountry        string `json:"ip_country,omitempty"`
+	IPRegion         string `json:"ip_region,omitempty"`
+	IPCity           string `json:"ip_city,omitempty"`
+	IPASN            uint   `json:"ip_asn,omitempty"`
+	IPASOrganization string `json:"ip_as_organization,omitempty"`
+}
+
+type FilterAdminActionLogRequest struct {
+	FilterLogParams
+	// UserId narrows the trail to one administrator.
+	UserId int64 `form:"user_id"`
+}
+
+type FilterAdminActionLogResponse struct {
+	Total int64            `json:"total"`
+	List  []AdminActionLog `json:"list"`
+}
+
+// UnmatchedPaymentLog is a payment a gateway confirmed that could not settle
+// its order; UserId is the payer when known.
+type UnmatchedPaymentLog struct {
+	Id               int64  `json:"id"`
+	UserId           int64  `json:"user_id"`
+	OrderNo          string `json:"order_no"`
+	TradeNo          string `json:"trade_no"`
+	Platform         string `json:"platform"`
+	Amount           int64  `json:"amount"`
+	Currency         string `json:"currency"`
+	Reason           string `json:"reason"`
+	Timestamp        int64  `json:"timestamp"`
+	CreatedAt        int64  `json:"created_at"`
+	ClientIP         string `json:"client_ip,omitempty"`
+	UserAgent        string `json:"user_agent,omitempty"`
+	ActorID          int64  `json:"actor_id,omitempty"`
+	IPCountryCode    string `json:"ip_country_code,omitempty"`
+	IPCountry        string `json:"ip_country,omitempty"`
+	IPRegion         string `json:"ip_region,omitempty"`
+	IPCity           string `json:"ip_city,omitempty"`
+	IPASN            uint   `json:"ip_asn,omitempty"`
+	IPASOrganization string `json:"ip_as_organization,omitempty"`
+}
+
+type FilterUnmatchedPaymentLogRequest struct {
+	FilterLogParams
+	// UserId narrows the list to one payer.
+	UserId int64 `form:"user_id"`
+}
+
+type FilterUnmatchedPaymentLogResponse struct {
+	Total int64                 `json:"total"`
+	List  []UnmatchedPaymentLog `json:"list"`
+}
+
 type BalanceLog struct {
 	Type             uint16 `json:"type"`
 	UserId           int64  `json:"user_id"`
@@ -171,9 +242,12 @@ type LogResponse struct {
 	List any `json:"list"`
 }
 
+// LogSetting is the log retention: ClearDays may not go below seven days,
+// so the login, registration and subscription logs outlive the time it
+// takes to notice an incident.
 type LogSetting struct {
 	AutoClear *bool `json:"auto_clear" validate:"required"`
-	ClearDays int64 `json:"clear_days" validate:"required,gte=1,lte=3650"`
+	ClearDays int64 `json:"clear_days" validate:"required,gte=7,lte=3650"`
 }
 
 type LoginLog struct {

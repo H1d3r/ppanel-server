@@ -63,8 +63,12 @@ func TestBindConsumesDedicatedTokenExactlyOnce(t *testing.T) {
 			if got := accounts.bound[0]; got.UserId != 7 || got.AuthIdentifier != "1001" {
 				t.Fatalf("binding = %+v, want user 7 bound to chat 1001", got)
 			}
-			if len(store.deleted) != 1 || store.deleted[0] != bindKey(token) {
-				t.Fatalf("deleted keys = %v, want [%s]", store.deleted, bindKey(token))
+			if _, present := store.values[bindKey(token)]; present {
+				t.Fatal("the redeemed token is still stored")
+			}
+			// The binding lock is released; nothing else is left behind.
+			if len(store.values) != 0 || len(store.deleted) != 1 || store.deleted[0] != bindLockKey(7) {
+				t.Fatalf("store = %v, deleted = %v; want the lock released and the token consumed", store.values, store.deleted)
 			}
 			if !messenger.last().markdown {
 				t.Fatal("bind confirmation must be sent as MarkdownV2, not plain text")
@@ -96,19 +100,25 @@ func TestBindWithoutTokenPromptsPerEntryPoint(t *testing.T) {
 }
 
 // One Telegram account binds one panel account and the other way round; an
-// existing binding is never overwritten.
+// existing binding is never overwritten. A token refused for a reason the
+// user can fix is put back with the life it had left, so the user retries
+// without a new link and the link's life is not extended; a token that finds
+// its account already bound here has done its work and stays consumed.
 func TestBindKeepsExistingBindings(t *testing.T) {
 	for name, tt := range map[string]struct {
-		seed func(*fakeAccounts)
-		want string
+		seed     func(*fakeAccounts)
+		want     string
+		restored bool
 	}{
 		"chat bound elsewhere": {
-			seed: func(a *fakeAccounts) { a.addBinding(8, "telegram", "1001") },
-			want: "This Telegram account is already bound to another user.",
+			seed:     func(a *fakeAccounts) { a.addBinding(8, "telegram", "1001") },
+			want:     "This Telegram account is already bound to another user.",
+			restored: true,
 		},
 		"account bound to another chat": {
-			seed: func(a *fakeAccounts) { a.addBinding(7, "telegram", "5005") },
-			want: "Your account is already bound to a different Telegram account. Please unbind it first.",
+			seed:     func(a *fakeAccounts) { a.addBinding(7, "telegram", "5005") },
+			want:     "Your account is already bound to a different Telegram account. Please unbind it first.",
+			restored: true,
 		},
 		"already bound here": {
 			seed: func(a *fakeAccounts) { a.addBinding(7, "telegram", "1001") },
@@ -127,8 +137,12 @@ func TestBindKeepsExistingBindings(t *testing.T) {
 			if got := messenger.last().message; got != tt.want {
 				t.Fatalf("message = %q, want %q", got, tt.want)
 			}
-			if len(store.deleted) != 0 {
-				t.Fatal("an unredeemed token was consumed")
+			value, present := store.values[bindKey("tok")]
+			if present != tt.restored || (present && (value != "7" || store.ttls[bindKey("tok")] != fakeTokenTTL)) {
+				t.Fatalf("token stored = %v (%q, ttl %v), want restored %v with its remaining life", present, value, store.ttls[bindKey("tok")], tt.restored)
+			}
+			if _, locked := store.values[bindLockKey(7)]; locked {
+				t.Fatal("the binding lock was not released")
 			}
 		})
 	}

@@ -177,8 +177,15 @@ func Telegram(ctx context.Context, deps *Dependencies) error {
 		// Telegram does not send yet.
 		webhookURL := fmt.Sprintf("%s/v1/telegram/webhook", tgConfig.WebHookDomain)
 		if _, err = bot.SetWebhook(ctx, &tgbot.SetWebhookParams{
-			URL:            webhookURL,
-			SecretToken:    notification.WebhookSecret(tgConfig.BotToken),
+			URL:         webhookURL,
+			SecretToken: notification.WebhookSecret(tgConfig.BotToken),
+			// One connection: Telegram then delivers the updates one at a
+			// time, in order, as the long-polling loop does (see
+			// WithNotAsyncHandlers above). The handlers' double-submit
+			// protection (bind tokens, admin confirmations) is atomic on its
+			// own, but a bot chat is not a workload that needs forty
+			// concurrent deliveries either.
+			MaxConnections: 1,
 			AllowedUpdates: []string{models.AllowedUpdateMessage},
 		}); err != nil {
 			log.Errorf("[Init Telegram Config] Request Webhook Error: %s", err.Error())

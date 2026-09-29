@@ -35,6 +35,19 @@ type content[C any] interface {
 	Unmarshal(data []byte) error
 }
 
+// logList pages the log of kind about objectID (any object when it is 0)
+// under req, like logPage, but answers an empty list, never null.
+func logList[C any, P content[C], V any](ctx context.Context, logs logFilter, name string, kind log.Type, objectID int64, req dto.FilterLogParams, view func(row *log.SystemLog, content *C) V) (int64, []V, error) {
+	total, list, err := logPage[C, P](ctx, logs, name, filterParams(kind, objectID, req), view)
+	if err != nil {
+		return 0, nil, err
+	}
+	if list == nil {
+		list = []V{}
+	}
+	return total, list, nil
+}
+
 // logPage pages the system log rows params selects, decodes each row's
 // content into a C and shows it with view. A row whose content does not
 // decode fails the page: a corrupt row is reported, not hidden. Without rows

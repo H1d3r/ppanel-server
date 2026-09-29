@@ -11,7 +11,12 @@ import (
 // UpdateSiteConfig stores the site settings, every value as written, and
 // reloads the site subsystem.
 func (s *Service) UpdateSiteConfig(ctx context.Context, req *dto.SiteConfig) error {
-	if err := updateConfigFields(ctx, s.deps, "site", stringConfigFields(*req)); err != nil {
+	change := settingsChange{
+		category: "site",
+		next:     stringConfigFields(*req),
+		previous: previousFields(ctx, "site", s.GetSiteConfig, stringConfigFields),
+	}
+	if err := updateConfigFields(ctx, s.deps, change); err != nil {
 		logger.WithContext(ctx).Errorw("[UpdateSiteConfig] update site config error", logger.Field("error", err.Error()))
 		return xerr.Wrapf(err, xerr.DatabaseUpdateError, "update site config error: %v", err.Error())
 	}

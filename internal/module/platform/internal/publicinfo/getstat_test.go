@@ -379,7 +379,10 @@ func TestGetStatSurvivesAPanicInTheRefresh(t *testing.T) {
 	if w.redis.Exists(config.CommonStatCacheKey) {
 		t.Fatal("a failed refresh was cached")
 	}
-	// The next call refreshes again.
+	// The next call after the failure backoff refreshes again.
+	w.svc.statMemo.mu.Lock()
+	w.svc.statMemo.failedAt = time.Now().Add(-2 * statFailureBackoff)
+	w.svc.statMemo.mu.Unlock()
 	w.svc.deps.Nodes = w.nodes
 	w.nodes.enabled = 3
 	if got, err := w.svc.GetStat(context.Background()); err != nil || got.Node != 3 {

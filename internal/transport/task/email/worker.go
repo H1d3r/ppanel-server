@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/perfect-panel/server/internal/infra/mail"
+	"github.com/perfect-panel/server/internal/module/identity/entity/user"
 	logEntity "github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/platform/entity/task"
 	"github.com/perfect-panel/server/pkg/logger"
@@ -37,6 +39,27 @@ func (e *DailyLimitReached) Error() string {
 	return fmt.Sprintf("batch email daily limit reached; resume at %s", e.NextAt.Format(time.RFC3339))
 }
 
+// RunBudgetExhausted asks the queue shell to continue the campaign from a
+// follow-up task right away: the run's deadline (the queue's task timeout)
+// is too close to pace another delivery, so the worker stopped after the
+// last recipient it recorded instead of being cut off mid-run and retried
+// with a backoff. Sent is the recipients delivered so far, the position the
+// continuation resumes from; ResumeAt keeps the campaign's pacing across the
+// two runs.
+type RunBudgetExhausted struct {
+	Sent     uint64
+	ResumeAt time.Time
+}
+
+func (e *RunBudgetExhausted) Error() string {
+	return fmt.Sprintf("batch email run budget exhausted after %d recipients; resume at %s", e.Sent, e.ResumeAt.Format(time.RFC3339))
+}
+
+// runBudgetReserve is the time a worker keeps in hand before its deadline:
+// a delivery, its audit rows and the progress update must all finish inside
+// the run, since the queue treats a run its deadline cuts off as failed.
+const runBudgetReserve = time.Minute
+
 // Worker sends one campaign to its recipients, one at a time, recording the
 // progress and every failure on the task so a later run resumes after the
 // last recipient sent.
@@ -47,6 +70,11 @@ type Worker struct {
 	sender   mail.Sender
 	logs     MessageLogStore
 	platform string
+	// recipients re-resolves the campaign's audience when the run starts;
+	// nil sends to the snapshot as recorded.
+	recipients RecipientResolver
+	// reserve is the budget kept before the run's deadline.
+	reserve time.Duration
 }
 
 // WorkerOption configures a Worker.
@@ -58,6 +86,12 @@ type MessageLogStore interface {
 	Update(ctx context.Context, data *logEntity.SystemLog) error
 }
 
+// RecipientResolver selects the accounts a campaign scope reaches today; the
+// identity facade provides it.
+type RecipientResolver interface {
+	QueryEmailRecipients(ctx context.Context, filter *user.EmailRecipientFilter) ([]string, error)
+}
+
 // WithMessageLogs audits each delivery in logs under the provider platform.
 func WithMessageLogs(logs MessageLogStore, platform string) WorkerOption {
 	return func(worker *Worker) {
@@ -66,9 +100,18 @@ func WithMessageLogs(logs MessageLogStore, platform string) WorkerOption {
 	}
 }
 
+// WithRecipientResolver re-checks the campaign's recipients against the
+// accounts its scope selects when the run starts, so an account deleted or
+// no longer eligible since the campaign was created is skipped.
+func WithRecipientResolver(recipients RecipientResolver) WorkerOption {
+	return func(worker *Worker) {
+		worker.recipients = recipients
+	}
+}
+
 // NewWorker builds the worker of task id; ctx bounds the run.
 func NewWorker(ctx context.Context, id int64, tasks TaskStore, sender mail.Sender, options ...WorkerOption) *Worker {
-	worker := &Worker{id: id, tasks: tasks, ctx: ctx, sender: sender}
+	worker := &Worker{id: id, tasks: tasks, ctx: ctx, sender: sender, reserve: runBudgetReserve}
 	for _, option := range options {
 		if option != nil {
 			option(worker)
@@ -87,22 +130,55 @@ type batchRun struct {
 	scope      task.EmailScope
 	content    task.EmailContent
 	recipients []string
-	interval   time.Duration
-	failures   []ErrorInfo
+	// skipped are the recorded recipients the scope no longer selects; they
+	// keep their position, so the progress cursor stays valid, but get no
+	// email.
+	skipped  map[string]struct{}
+	interval time.Duration
+	failures []ErrorInfo
 }
 
-// Start processes a batch-email task until completion or cancellation.
+// Start processes a batch-email task until completion, cancellation or the
+// end of the run's budget, which a follow-up task continues from.
 func (w *Worker) Start() error {
 	run, err := w.prepare()
 	if err != nil || run == nil {
 		return err
 	}
-	for index := int(run.task.Current); index < len(run.recipients); index++ {
+	start := int(run.task.Current)
+	for index := start; index < len(run.recipients); index++ {
+		// The budget is checked before the pause that paces the deliveries,
+		// so a run does not sleep only to stop, and before the first delivery
+		// too: a run that starts with no budget left hands the whole chunk to
+		// a fresh task instead of being cut off during its first delivery.
+		if w.budgetExhausted(run.interval) {
+			logger.WithContext(w.ctx).Info("Batch Send Email", logger.Field("message", "Run budget exhausted, continuing from a follow-up task"),
+				logger.Field("task_id", w.id), logger.Field("sent", run.task.Current))
+			return &RunBudgetExhausted{Sent: run.task.Current, ResumeAt: timeutil.Now().Add(run.interval)}
+		}
+		// The pause paces the provider, so a recipient that gets no email
+		// is not paced.
+		if _, stale := run.skipped[run.recipients[index]]; index > start && !stale {
+			if err := waitContext(w.ctx, run.interval); err != nil {
+				return err
+			}
+		}
 		if err := w.sendNext(run, index); err != nil {
 			return err
 		}
 	}
 	return w.complete(run)
+}
+
+// budgetExhausted reports whether the run's deadline is too close to pace
+// another delivery: the interval before it plus the reserve the delivery
+// itself needs. A run without a deadline never runs out.
+func (w *Worker) budgetExhausted(interval time.Duration) bool {
+	deadline, ok := w.ctx.Deadline()
+	if !ok {
+		return false
+	}
+	return time.Until(deadline) < interval+w.reserve
 }
 
 // prepare loads the task and marks it in progress. It returns no run when
@@ -156,6 +232,9 @@ func (w *Worker) prepare() (*batchRun, error) {
 	if run.scope.Interval != 0 {
 		run.interval = time.Duration(run.scope.Interval) * time.Second
 	}
+	if run.skipped, err = w.staleRecipients(&run.scope); err != nil {
+		return nil, err
+	}
 	if run.failures, err = w.storedFailures(taskInfo); err != nil {
 		return nil, err
 	}
@@ -174,6 +253,51 @@ func (w *Worker) prepare() (*batchRun, error) {
 	return run, nil
 }
 
+// staleRecipients returns the recorded recipients the campaign's scope no
+// longer selects: accounts deleted, or moved out of the scope, since the
+// campaign was created. The recorded list keeps its order and positions, so
+// the progress cursor stays valid; the stale ones are skipped when their turn
+// comes. The additional addresses were typed by the administrator and are
+// always sent to. Without a resolver, or for the scope that selects nobody,
+// the recorded list is sent to as it is.
+func (w *Worker) staleRecipients(scope *task.EmailScope) (map[string]struct{}, error) {
+	if w.recipients == nil || len(scope.Recipients) == 0 || task.ParseScopeType(scope.Type) == task.ScopeSkip {
+		return nil, nil
+	}
+	current, err := w.recipients.QueryEmailRecipients(w.ctx, &user.EmailRecipientFilter{
+		Scope:             scope.Type,
+		RegisterStartTime: scope.RegisterStartTime,
+		RegisterEndTime:   scope.RegisterEndTime,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("re-resolve campaign recipients: %w", err)
+	}
+	selected := make(map[string]struct{}, len(current))
+	for _, email := range current {
+		selected[strings.ToLower(email)] = struct{}{}
+	}
+	additional := make(map[string]struct{}, len(scope.Additional))
+	for _, email := range scope.Additional {
+		additional[strings.ToLower(email)] = struct{}{}
+	}
+	stale := make(map[string]struct{})
+	for _, email := range scope.Recipients {
+		key := strings.ToLower(email)
+		if _, ok := selected[key]; ok {
+			continue
+		}
+		if _, ok := additional[key]; ok {
+			continue
+		}
+		stale[email] = struct{}{}
+	}
+	if len(stale) > 0 {
+		logger.WithContext(w.ctx).Info("Batch Send Email", logger.Field("message", "Recipients no longer selected by the campaign scope are skipped"),
+			logger.Field("task_id", w.id), logger.Field("skipped", len(stale)))
+	}
+	return stale, nil
+}
+
 // storedFailures reads the delivery failures the task recorded in the
 // task_error table.
 func (w *Worker) storedFailures(taskInfo *task.Task) ([]ErrorInfo, error) {
@@ -188,8 +312,9 @@ func (w *Worker) storedFailures(taskInfo *task.Task) ([]ErrorInfo, error) {
 	return failures, nil
 }
 
-// sendNext sends the email of recipient index and records the progress,
-// then waits the task's interval unless it was the last recipient.
+// sendNext sends the email of recipient index and records the progress. A
+// recipient the scope no longer selects is passed over: the cursor advances
+// and nothing is sent or audited.
 func (w *Worker) sendNext(run *batchRun, index int) error {
 	if err := w.ensureDailyCapacity(&run.scope, run.task); err != nil {
 		return err
@@ -202,6 +327,10 @@ func (w *Worker) sendNext(run *batchRun, index int) error {
 	}
 
 	recipient := run.recipients[index]
+	if _, stale := run.skipped[recipient]; stale {
+		run.task.Current = uint64(index + 1)
+		return w.persist(run.task, &run.scope)
+	}
 	audit, err := w.beginMessage()
 	if err != nil {
 		// Nothing has been delivered yet, so returning the error is safe and
@@ -234,9 +363,6 @@ func (w *Worker) sendNext(run *batchRun, index int) error {
 	if persistErr != nil {
 		logger.WithContext(w.ctx).Error("Batch Send Email", logger.Field("message", "Failed to update task progress"), logger.Field("error", persistErr.Error()), logger.Field("task_id", w.id))
 		return persistErr
-	}
-	if index+1 < len(run.recipients) {
-		return waitContext(w.ctx, run.interval)
 	}
 	return nil
 }

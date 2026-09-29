@@ -77,14 +77,17 @@ func (m *ticketRepo) FindOne(ctx context.Context, id int64) (*ticket.Ticket, err
 	return &resp, nil
 }
 
+// Update rewrites the ticket's mutable columns from data; the creation time
+// stays, and a missing row is not inserted, which a whole-row save would do.
 func (m *ticketRepo) Update(ctx context.Context, data *ticket.Ticket) error {
 	old, err := m.FindOne(ctx, data.Id)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	err = m.ExecCtx(ctx, func(conn *gorm.DB) error {
-		db := conn
-		return db.Save(data).Error
+		return conn.Model(&ticket.Ticket{}).Where("id = ?", data.Id).
+			Select("title", "description", "user_id", "status").
+			Updates(data).Error
 	}, m.getCacheKeys(old)...)
 	return err
 }

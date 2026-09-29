@@ -6,11 +6,13 @@
 package log
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/requestmeta"
+	"github.com/perfect-panel/server/pkg/timeutil"
 )
 
 type Type uint8
@@ -102,6 +104,11 @@ type FilterParams struct {
 	Search    string
 	ObjectID  int64
 	SkipCount bool // when true, skip the COUNT(*) query (total will be 0)
+	// ContentInt64 keeps the rows whose JSON content has each named
+	// top-level field equal to the value, matched by the database's JSON
+	// extraction rather than by a text pattern (which "12" would share with
+	// "120"). The keys are field names of the content types in this package.
+	ContentInt64 map[string]int64
 }
 
 // SystemLog represents a log entry in the system.
@@ -553,6 +560,51 @@ func (u *UnmatchedPayment) clean() {
 
 // maxAdminDetailBytes bounds the free-text detail of an administration entry.
 const maxAdminDetailBytes = 2048
+
+// The sources an administrator mutation arrives from.
+const (
+	AdminActionSourceHTTP     = "http"
+	AdminActionSourceTelegram = "telegram"
+)
+
+// NewAdminActionLog builds the system log row recording action, dated now.
+// The row's object is the acting administrator (action.ActorID), so the
+// trail of one administrator is an indexed read; the object the action
+// changed is in the content. An unset Source is the HTTP API and an unset
+// Timestamp is now.
+func NewAdminActionLog(action AdminAction) (*SystemLog, error) {
+	now := timeutil.Now()
+	if action.Timestamp == 0 {
+		action.Timestamp = now.UnixMilli()
+	}
+	if action.Source == "" {
+		action.Source = AdminActionSourceHTTP
+	}
+	content, err := action.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return &SystemLog{
+		Type:     TypeAdminAction.Uint8(),
+		Date:     now.Format(time.DateOnly),
+		ObjectID: action.ActorID,
+		Content:  string(content),
+	}, nil
+}
+
+// AdminActionFrom returns action with the request metadata of ctx (the
+// administrator's request, ActorID included) as recorded by the HTTP
+// middleware; without one the action is recorded as it is.
+func AdminActionFrom(ctx context.Context, action AdminAction) AdminAction {
+	if metadata, ok := requestmeta.From(ctx); ok {
+		actor := action.ActorID
+		action.Metadata = metadata
+		if actor != 0 {
+			action.ActorID = actor
+		}
+	}
+	return action
+}
 
 // AdminAction records a mutation an administrator made: which action, on
 // which object, from the HTTP API (ActorID) or the Telegram bot

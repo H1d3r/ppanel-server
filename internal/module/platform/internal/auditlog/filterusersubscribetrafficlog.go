@@ -12,8 +12,9 @@ import (
 )
 
 // FilterUserSubscribeTrafficLog pages the subscriptions' daily traffic:
-// today's live ranking first, then the archived days. The retention settings
-// decide which archived days still have their details.
+// today's live ranking first, then the archived days, narrowed to one user
+// or one subscription when asked. The retention settings decide which
+// archived days still have their details.
 func (s *Service) FilterUserSubscribeTrafficLog(ctx context.Context, req *dto.FilterSubscribeTrafficRequest) (*dto.FilterSubscribeTrafficResponse, error) {
 	now := timeutil.Now()
 	today := now.Format(time.DateOnly)
@@ -29,6 +30,9 @@ func (s *Service) FilterUserSubscribeTrafficLog(ctx context.Context, req *dto.Fi
 			return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "today traffic query error: %s", err)
 		}
 		for _, row := range traffic {
+			if (req.UserId != 0 && row.UserId != req.UserId) || (req.UserSubscribeId != 0 && row.SubscribeId != req.UserSubscribeId) {
+				continue
+			}
 			list = append(list, dto.UserSubscribeTrafficLog{UserId: row.UserId, SubscribeId: row.SubscribeId, Upload: row.Upload, Download: row.Download, Total: row.Total, Date: today, Details: true})
 		}
 	}
@@ -41,7 +45,12 @@ func (s *Service) FilterUserSubscribeTrafficLog(ctx context.Context, req *dto.Fi
 	offset := (page - 1) * size
 	todayTotal := len(list)
 	historyOffset := max(0, offset-todayTotal)
-	params := &log.FilterParams{Page: historyOffset/size + 1, Size: size, Type: log.TypeSubscribeTraffic.Uint8(), StartDate: startDate, EndDate: endDate, Search: req.Search}
+	// An archived row's object is its subscription; its user is in the
+	// content.
+	params := &log.FilterParams{Page: historyOffset/size + 1, Size: size, Type: log.TypeSubscribeTraffic.Uint8(), StartDate: startDate, EndDate: endDate, Search: req.Search, ObjectID: req.UserSubscribeId}
+	if req.UserId != 0 {
+		params.ContentInt64 = map[string]int64{"user_id": req.UserId}
+	}
 	history, historyTotal, err := s.deps.Logs.FilterSystemLog(ctx, params)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "history query error: %s", err)

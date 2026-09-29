@@ -5,11 +5,13 @@ package ticket
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
 	entity "github.com/perfect-panel/server/internal/module/support/entity/ticket"
 	"github.com/perfect-panel/server/internal/repository"
@@ -27,17 +29,35 @@ type Notifier interface {
 	TicketStatusChanged(ctx context.Context, ticketID int64, status uint8)
 }
 
+// AuditLog records the administrators' ticket mutations in the platform's
+// system log; the platform kernel's log repository satisfies it.
+type AuditLog interface {
+	Insert(ctx context.Context, data *log.SystemLog) error
+}
+
+// Limits are the per-user caps of the user-facing ticket writes; a nil
+// limiter turns its cap off.
+type Limits struct {
+	// Creation caps how many tickets one user opens per window.
+	Creation CreationLimiter
+	// Follows caps how many replies one user writes per window: every reply
+	// is mirrored into the Telegram admin group.
+	Follows CreationLimiter
+}
+
 // Service runs the ticket desk for the support facade.
 type Service struct {
-	repo    repository.TicketRepo
-	notify  Notifier
-	limiter CreationLimiter
+	repo   repository.TicketRepo
+	notify Notifier
+	limits Limits
+	audit  AuditLog
 }
 
 // NewService builds the ticket service; notify may be nil when no mirror
-// channel is wired, limiter nil when ticket creation is not rate limited.
-func NewService(repo repository.TicketRepo, notify Notifier, limiter CreationLimiter) *Service {
-	return &Service{repo: repo, notify: notify, limiter: limiter}
+// channel is wired, the limits nil when the user writes are not rate
+// limited, audit nil when the administrators' actions are not recorded.
+func NewService(repo repository.TicketRepo, notify Notifier, limits Limits, audit AuditLog) *Service {
+	return &Service{repo: repo, notify: notify, limits: limits, audit: audit}
 }
 
 func currentUser(ctx context.Context) (*user.User, error) {
@@ -47,6 +67,23 @@ func currentUser(ctx context.Context) (*user.User, error) {
 		return nil, xerr.Wrapf(errors.New("no authenticated user"), xerr.InvalidAccess, "Invalid Access")
 	}
 	return u, nil
+}
+
+// allow takes one permit of limiter for the user; what is the write being
+// limited, for the refusal. The limit fails open: it protects staff from
+// floods, not the ticket desk from a Redis outage.
+func allow(ctx context.Context, limiter CreationLimiter, userID int64, what string) error {
+	if limiter == nil {
+		return nil
+	}
+	allowed, err := limiter.Allow(ctx, userID)
+	switch {
+	case err != nil:
+		logger.WithContext(ctx).Errorw("[Ticket] rate limit check failed", logger.Field("error", err.Error()), logger.Field("user_id", userID), logger.Field("limit", what))
+	case !allowed:
+		return xerr.Wrapf(errors.New("rate limited"), xerr.TooManyRequests, "%s limit exceeded for user %d", what, userID)
+	}
+	return nil
 }
 
 // change is one write to a ticket: the follow to append, if any, and the
@@ -96,12 +133,46 @@ func (s *Service) findTicket(ctx context.Context, id int64) (*entity.Ticket, err
 	return t, nil
 }
 
+// staffMayReply refuses a staff reply to a closed ticket: closing ends the
+// conversation for staff, who reopen the ticket explicitly (a status change
+// to Pending) before writing again. The refusal carries entity.ErrClosed for
+// the channels to name it.
+func staffMayReply(t *entity.Ticket) error {
+	if t.Status != entity.Closed {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", entity.ErrClosed, xerr.NewErrCodeMsg(xerr.InvalidParams, "the ticket is closed; reopen it before replying"))
+}
+
+// recordAdminAction writes the administrator's ticket mutation to the audit
+// trail. The mutation is already stored; a trail that cannot be written is
+// logged, not reported as the mutation's failure.
+func (s *Service) recordAdminAction(ctx context.Context, action log.AdminAction) {
+	if s.audit == nil {
+		return
+	}
+	action.Object = "ticket"
+	row, err := log.NewAdminActionLog(log.AdminActionFrom(ctx, action))
+	if err == nil {
+		err = s.audit.Insert(ctx, row)
+	}
+	if err != nil {
+		logger.WithContext(ctx).Errorw("[Ticket] record admin action failed", logger.Field("error", err.Error()),
+			logger.Field("action", action.Action), logger.Field("ticket_id", action.ObjectID))
+	}
+}
+
 // CreateFollow appends an admin reply and flips the ticket back to Waiting.
+// A closed ticket takes no reply until it is reopened.
 func (s *Service) CreateFollow(ctx context.Context, req *dto.CreateTicketFollowRequest) error {
-	if _, err := s.findTicket(ctx, req.TicketId); err != nil {
+	t, err := s.findTicket(ctx, req.TicketId)
+	if err != nil {
 		return err
 	}
-	return s.apply(ctx, change{
+	if err := staffMayReply(t); err != nil {
+		return err
+	}
+	if err := s.apply(ctx, change{
 		ticketID: req.TicketId,
 		follow: &entity.Follow{
 			TicketId: req.TicketId,
@@ -111,13 +182,19 @@ func (s *Service) CreateFollow(ctx context.Context, req *dto.CreateTicketFollowR
 		},
 		status: entity.Waiting,
 		mirror: true,
-	})
+	}); err != nil {
+		return err
+	}
+	s.recordAdminAction(ctx, log.AdminAction{Action: "ticket.reply", ObjectID: req.TicketId})
+	return nil
 }
 
 // UpdateAsStaff applies a ticket change staff made outside the admin panel:
 // a reply is appended as a text follow and moves the ticket to Waiting, like
 // a reply from the admin panel; otherwise the ticket moves to cmd.Status. A
-// missing ticket is an error whose chain holds gorm.ErrRecordNotFound.
+// reply to a closed ticket is refused with entity.ErrClosed; a status change
+// is the explicit reopen. A missing ticket is an error whose chain holds
+// gorm.ErrRecordNotFound. The channel records its own audit trail.
 func (s *Service) UpdateAsStaff(ctx context.Context, cmd *dto.StaffTicketUpdateCommand) (*dto.StaffTicketUpdateResult, error) {
 	c := change{ticketID: cmd.TicketId, status: cmd.Status, mirror: !cmd.FromMirror}
 	if cmd.Reply != "" {
@@ -134,6 +211,11 @@ func (s *Service) UpdateAsStaff(ctx context.Context, cmd *dto.StaffTicketUpdateC
 	t, err := s.findTicket(ctx, cmd.TicketId)
 	if err != nil {
 		return nil, err
+	}
+	if c.follow != nil {
+		if err := staffMayReply(t); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.apply(ctx, c); err != nil {
 		return nil, err
@@ -189,7 +271,11 @@ func (s *Service) UpdateStatus(ctx context.Context, req *dto.UpdateTicketStatusR
 	if _, err := s.findTicket(ctx, req.Id); err != nil {
 		return err
 	}
-	return s.apply(ctx, change{ticketID: req.Id, status: *req.Status, mirror: true})
+	if err := s.apply(ctx, change{ticketID: req.Id, status: *req.Status, mirror: true}); err != nil {
+		return err
+	}
+	s.recordAdminAction(ctx, log.AdminAction{Action: "ticket.status", ObjectID: req.Id, Detail: fmt.Sprintf("status=%d", *req.Status)})
+	return nil
 }
 
 // CreateUserTicket opens a ticket for the current user, within the creation
@@ -199,16 +285,8 @@ func (s *Service) CreateUserTicket(ctx context.Context, req *dto.CreateUserTicke
 	if err != nil {
 		return err
 	}
-	if s.limiter != nil {
-		allowed, err := s.limiter.Allow(ctx, u.Id)
-		switch {
-		case err != nil:
-			// Fail open: the limit protects staff from floods, not the
-			// ticket desk from a Redis outage.
-			logger.WithContext(ctx).Errorw("[CreateUserTicket] rate limit check failed", logger.Field("error", err.Error()), logger.Field("user_id", u.Id))
-		case !allowed:
-			return xerr.Wrapf(errors.New("rate limited"), xerr.TooManyRequests, "ticket creation limit exceeded for user %d", u.Id)
-		}
+	if err := allow(ctx, s.limits.Creation, u.Id, "ticket creation"); err != nil {
+		return err
 	}
 	// Insert backfills the id, which the mirror channel needs for its topic.
 	t := &entity.Ticket{
@@ -240,9 +318,13 @@ func (s *Service) ownTicket(ctx context.Context, u *user.User, id int64) error {
 	return nil
 }
 
-// CreateUserFollow appends a user reply after verifying ticket ownership and
-// flips the ticket to Pending. The author is always the ticket owner: a
-// client-supplied "from" would let a user post what renders as a staff reply.
+// CreateUserFollow appends a user reply, within the reply limit, after
+// verifying ticket ownership, and flips the ticket to Pending. This is the
+// product rule for closed tickets as well: the owner's reply reopens a
+// closed ticket, since the owner has no other way to say the matter is not
+// settled; staff, in contrast, must reopen a ticket explicitly before
+// replying. The author is always the ticket owner: a client-supplied "from"
+// would let a user post what renders as a staff reply.
 func (s *Service) CreateUserFollow(ctx context.Context, req *dto.CreateUserTicketFollowRequest) error {
 	u, err := currentUser(ctx)
 	if err != nil {
@@ -250,6 +332,9 @@ func (s *Service) CreateUserFollow(ctx context.Context, req *dto.CreateUserTicke
 	}
 	followType, err := userFollowType(req.Type, req.Content)
 	if err != nil {
+		return err
+	}
+	if err := allow(ctx, s.limits.Follows, u.Id, "ticket reply"); err != nil {
 		return err
 	}
 	if err := s.ownTicket(ctx, u, req.TicketId); err != nil {

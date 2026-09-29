@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/subscription/entity/usersub"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
 	"github.com/perfect-panel/server/internal/module/support/internal/ads"
@@ -120,6 +121,13 @@ type BatchEmailStopper interface {
 	StopBatchEmail(taskID int64)
 }
 
+// AuditLog records the administrators' mutations (ticket replies and status
+// changes, marketing tasks) in the platform's system log; the platform
+// kernel's log repository satisfies it.
+type AuditLog interface {
+	Insert(ctx context.Context, data *log.SystemLog) error
+}
+
 // Deps declares everything the module needs; the composition root
 // (internal/app) provides them. The ticket, announcement, ads and document
 // repositories are the module's own (see NewRepoBuilder); the rest are ports
@@ -138,8 +146,11 @@ type Deps struct {
 	// TicketNotify mirrors ticket lifecycle into the Telegram admin group;
 	// nil disables the mirror. Best-effort by contract.
 	TicketNotify ticket.Notifier
-	// Redis backs the per-user ticket creation limit; nil disables it.
+	// Redis backs the per-user ticket creation and reply limits; nil
+	// disables them.
 	Redis *redis.Client
+	// AuditLogs records the administrators' mutations; nil records nothing.
+	AuditLogs AuditLog
 }
 
 // NewRepoBuilder exports the module-owned repository implementations for
@@ -163,8 +174,11 @@ func New(deps Deps) Service {
 		announcements: announcement.NewService(deps.Announcements),
 		ads:           ads.NewService(deps.Ads),
 		documents:     document.NewService(deps.Documents, deps.Subscriptions),
-		tickets:       ticket.NewService(deps.Tickets, deps.TicketNotify, ticket.NewCreationLimiter(deps.Redis)),
-		marketing:     marketing.NewService(deps.Tasks, deps.Recipients, deps.QuotaTargets, deps.Queue, deps.EmailStopper),
+		tickets: ticket.NewService(deps.Tickets, deps.TicketNotify, ticket.Limits{
+			Creation: ticket.NewCreationLimiter(deps.Redis),
+			Follows:  ticket.NewFollowLimiter(deps.Redis),
+		}, deps.AuditLogs),
+		marketing: marketing.NewService(deps.Tasks, deps.Recipients, deps.QuotaTargets, deps.Queue, deps.EmailStopper, deps.AuditLogs),
 	}
 }
 

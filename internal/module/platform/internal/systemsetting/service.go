@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/repository/kernel"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
@@ -20,10 +21,24 @@ type SettingsWriter interface {
 	UpdateValueByCategoryKey(ctx context.Context, category, key, value string, valueType ...string) error
 }
 
+// AuditWriter records the administrator's change next to the settings it
+// changed, in the same transaction.
+type AuditWriter interface {
+	Insert(ctx context.Context, data *log.SystemLog) error
+}
+
+// SettingsStore is what one settings update reaches inside its transaction:
+// the settings it writes and the audit trail it records the change in.
+type SettingsStore interface {
+	SettingsWriter
+	AuditWriter
+}
+
 // SettingsTransactor runs the writes of one settings update in a single
-// transaction, so an update is stored whole or not at all.
+// transaction, so an update and its audit row are stored whole or not at
+// all.
 type SettingsTransactor interface {
-	InSettingsTx(ctx context.Context, fn func(SettingsWriter) error) error
+	InSettingsTx(ctx context.Context, fn func(SettingsStore) error) error
 }
 
 // PlatformTransactor mirrors the store's platform-scoped transaction.
@@ -32,7 +47,8 @@ type PlatformTransactor interface {
 }
 
 // NewSettingsTransactor runs the settings writes in platform-scoped
-// transactions of store, on its system settings repository.
+// transactions of store, on its system settings and system log
+// repositories.
 func NewSettingsTransactor(store PlatformTransactor) SettingsTransactor {
 	return platformSettings{store: store}
 }
@@ -43,9 +59,15 @@ type platformSettings struct {
 	store PlatformTransactor
 }
 
-func (p platformSettings) InSettingsTx(ctx context.Context, fn func(SettingsWriter) error) error {
+// settingsStore is the settings and the log of one platform transaction.
+type settingsStore struct {
+	SettingsWriter
+	AuditWriter
+}
+
+func (p platformSettings) InSettingsTx(ctx context.Context, fn func(SettingsStore) error) error {
 	return p.store.InPlatformTx(ctx, func(store kernel.PlatformStore) error {
-		return fn(store.System())
+		return fn(settingsStore{SettingsWriter: store.System(), AuditWriter: store.Log()})
 	})
 }
 

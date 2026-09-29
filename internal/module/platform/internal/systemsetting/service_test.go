@@ -13,6 +13,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	dto "github.com/perfect-panel/server/internal/module/platform/contract"
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/platform/entity/system"
 	"github.com/perfect-panel/server/internal/module/platform/internal/repo"
 	"github.com/perfect-panel/server/internal/repository/kernel"
@@ -34,9 +35,9 @@ type platformTx struct {
 
 var _ SettingsTransactor = (*platformTx)(nil)
 
-func (p *platformTx) InSettingsTx(ctx context.Context, fn func(SettingsWriter) error) error {
+func (p *platformTx) InSettingsTx(ctx context.Context, fn func(SettingsStore) error) error {
 	return p.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := fn(repo.NewSystemRepo(cache.NewConn(tx, p.rds))); err != nil {
+		if err := fn(settingsStore{SettingsWriter: repo.NewSystemRepo(cache.NewConn(tx, p.rds)), AuditWriter: repo.NewLogRepo(tx)}); err != nil {
 			return err
 		}
 		return p.failCommit
@@ -86,7 +87,7 @@ func newSettingsWorld(t *testing.T) *settingsWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&system.System{}); err != nil {
+	if err := db.AutoMigrate(&system.System{}, &log.SystemLog{}); err != nil {
 		t.Fatal(err)
 	}
 	server := miniredis.RunT(t)
@@ -119,7 +120,8 @@ func newSettingsWorld(t *testing.T) *settingsWorld {
 	return w
 }
 
-// Every setting reads back as it was written.
+// Every setting reads back as it was written, except the secrets, which read
+// back masked (see TestSecretsReadBackMaskedAndAreKeptWhenMasked).
 func TestSettingsReadBackAsWritten(t *testing.T) {
 	w := newSettingsWorld(t)
 	ctx := context.Background()
@@ -150,8 +152,10 @@ func TestSettingsReadBackAsWritten(t *testing.T) {
 		func() (any, error) { return w.svc.GetRegisterConfig(ctx) }, register)
 
 	verify := &dto.VerifyConfig{TurnstileSiteKey: "site-key", TurnstileSecret: "secret", EnableLoginVerify: true, EnableRegisterVerify: true, EnableResetPasswordVerify: true}
+	maskedVerify := *verify
+	maskedVerify.TurnstileSecret = dto.SecretMask
 	check("verify", func() error { return w.svc.UpdateVerifyConfig(ctx, verify) },
-		func() (any, error) { return w.svc.GetVerifyConfig(ctx) }, verify)
+		func() (any, error) { return w.svc.GetVerifyConfig(ctx) }, &maskedVerify)
 
 	invite := &dto.InviteConfig{ForcedInvite: true, ReferralPercentage: 20, OnlyFirstPurchase: true, WithdrawalMethod: "usdt"}
 	check("invite", func() error { return w.svc.UpdateInviteConfig(ctx, invite) },
@@ -171,7 +175,7 @@ func TestSettingsReadBackAsWritten(t *testing.T) {
 
 	currency := &dto.CurrencyConfig{AccessKey: "key", CurrencyUnit: "USD", CurrencySymbol: "$"}
 	check("currency", func() error { return w.svc.UpdateCurrencyConfig(ctx, currency) },
-		func() (any, error) { return w.svc.GetCurrencyConfig(ctx) }, currency)
+		func() (any, error) { return w.svc.GetCurrencyConfig(ctx) }, &dto.CurrencyConfig{AccessKey: dto.SecretMask, CurrencyUnit: "USD", CurrencySymbol: "$"})
 
 	verifyCode := &dto.VerifyCodeConfig{VerifyCodeExpireTime: 300, VerifyCodeLimit: 15, VerifyCodeInterval: 60}
 	check("verify code", func() error { return w.svc.UpdateVerifyCodeConfig(ctx, verifyCode) },
@@ -183,8 +187,12 @@ func TestSettingsReadBackAsWritten(t *testing.T) {
 		Block:    []string{"ads.example"},
 		Outbound: []dto.PlatformNodeOutboundSnapshot{{Name: "warp", Protocol: "wireguard", Address: "162.159.192.1", Port: 2408, Password: "k", Rules: []string{"geosite:openai"}}},
 	}
+	// The node secret reads back in clear: administrators copy it to deploy
+	// nodes. The outbound credentials read back masked.
+	maskedNode := *node
+	maskedNode.Outbound = []dto.PlatformNodeOutboundSnapshot{{Name: "warp", Protocol: "wireguard", Address: "162.159.192.1", Port: 2408, Password: dto.SecretMask, Rules: []string{"geosite:openai"}}}
 	check("node", func() error { return w.svc.UpdateNodeConfig(ctx, node) },
-		func() (any, error) { return w.svc.GetNodeConfig(ctx) }, node)
+		func() (any, error) { return w.svc.GetNodeConfig(ctx) }, &maskedNode)
 
 	periods := []dto.TimePeriod{{StartTime: "00:00", EndTime: "06:00", Multiplier: 0.5}}
 	check("node multiplier", func() error { return w.svc.SetNodeMultiplier(ctx, &dto.SetNodeMultiplierRequest{Periods: periods}) },
@@ -421,7 +429,7 @@ func TestSettingsTransactorWritesInAPlatformTransaction(t *testing.T) {
 	settings := NewSettingsTransactor(storeTx{db: w.db, rds: w.tx.rds})
 	ctx := context.Background()
 	write := func(value string, then error) error {
-		return settings.InSettingsTx(ctx, func(writer SettingsWriter) error {
+		return settings.InSettingsTx(ctx, func(writer SettingsStore) error {
 			if err := writer.UpdateValueByCategoryKey(ctx, "site", "SiteName", value, "string"); err != nil {
 				return err
 			}

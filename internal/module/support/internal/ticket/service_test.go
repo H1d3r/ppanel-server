@@ -23,19 +23,29 @@ var _ Notifier = (*supporttest.Notifier)(nil)
 
 func newDesk(t *testing.T, limiter CreationLimiter) (*supporttest.Env, *Service, *supporttest.Notifier) {
 	t.Helper()
+	env, svc, mirror, _ := newAuditedDesk(t, Limits{Creation: limiter})
+	return env, svc, mirror
+}
+
+// newAuditedDesk builds the desk with limits and an audit trail recorded.
+func newAuditedDesk(t *testing.T, limits Limits) (*supporttest.Env, *Service, *supporttest.Notifier, *supporttest.AuditLog) {
+	t.Helper()
 	logtest.Discard(t)
 	env := supporttest.New(t)
 	mirror := &supporttest.Notifier{}
-	return env, NewService(env.Tickets, mirror, limiter), mirror
+	audit := &supporttest.AuditLog{}
+	return env, NewService(env.Tickets, mirror, limits, audit), mirror, audit
 }
 
 func statusPtr(status uint8) *uint8 { return &status }
 
 // Whoever writes last decides who a ticket waits for, from whatever status
 // it was in: a reply from staff (the admin panel or the bot) hands it to the
-// user, a reply from the user hands it back to staff, and a closed ticket
-// reopens on a reply. Staff may move a ticket to any status, the user only
-// close it. Every change is mirrored as what it was.
+// user, a reply from the user hands it back to staff. A closed ticket is the
+// exception for staff: it takes no staff reply until it is explicitly
+// reopened, while the owner's reply reopens it. Staff may move a ticket to
+// any status, the user only close it. Every change is mirrored as what it
+// was.
 func TestTicketStatusTransitions(t *testing.T) {
 	const owner = 11
 	actions := []struct {
@@ -44,27 +54,29 @@ func TestTicketStatusTransitions(t *testing.T) {
 		want   uint8
 		thread []string // the follow the action stores, "from:content"
 		mirror string   // "reply" or "status"
+		// staffReply marks a reply staff write, which a closed ticket refuses.
+		staffReply bool
 	}{
 		{"staff reply", func(s *Service, id int64) error {
 			return s.CreateFollow(context.Background(), &dto.CreateTicketFollowRequest{TicketId: id, From: "System", Type: entity.FollowText, Content: "try again"})
-		}, entity.Waiting, []string{"System:try again"}, "reply"},
+		}, entity.Waiting, []string{"System:try again"}, "reply", true},
 		{"bot reply", func(s *Service, id int64) error {
 			_, err := s.UpdateAsStaff(context.Background(), &dto.StaffTicketUpdateCommand{TicketId: id, Reply: "fixed", From: "admin"})
 			return err
-		}, entity.Waiting, []string{"admin:fixed"}, "reply"},
+		}, entity.Waiting, []string{"admin:fixed"}, "reply", true},
 		{"user reply", func(s *Service, id int64) error {
 			return s.CreateUserFollow(supporttest.WithUser(context.Background(), owner), &dto.CreateUserTicketFollowRequest{TicketId: id, Content: "still broken"})
-		}, entity.Pending, []string{"User:still broken"}, "reply"},
+		}, entity.Pending, []string{"User:still broken"}, "reply", false},
 		{"staff marks processed", func(s *Service, id int64) error {
 			return s.UpdateStatus(context.Background(), &dto.UpdateTicketStatusRequest{Id: id, Status: statusPtr(entity.Processed)})
-		}, entity.Processed, nil, "status"},
+		}, entity.Processed, nil, "status", false},
 		{"bot closes", func(s *Service, id int64) error {
 			_, err := s.UpdateAsStaff(context.Background(), &dto.StaffTicketUpdateCommand{TicketId: id, Status: entity.Closed})
 			return err
-		}, entity.Closed, nil, "status"},
+		}, entity.Closed, nil, "status", false},
 		{"user closes", func(s *Service, id int64) error {
 			return s.UpdateUserStatus(supporttest.WithUser(context.Background(), owner), &dto.UpdateUserTicketStatusRequest{Id: id, Status: statusPtr(entity.Closed)})
-		}, entity.Closed, nil, "status"},
+		}, entity.Closed, nil, "status", false},
 	}
 	for _, from := range []uint8{entity.Pending, entity.Waiting, entity.Processed, entity.Closed} {
 		for _, action := range actions {
@@ -72,7 +84,12 @@ func TestTicketStatusTransitions(t *testing.T) {
 				env, svc, mirror := newDesk(t, nil)
 				id := env.Ticket(t, entity.Ticket{UserId: owner, Status: from}).Id
 
-				if err := action.run(svc, id); err != nil {
+				err := action.run(svc, id)
+				if from == entity.Closed && action.staffReply {
+					expectClosedRefusal(t, env, mirror, id, err)
+					return
+				}
+				if err != nil {
 					t.Fatal(err)
 				}
 				if got := env.ReloadTicket(t, id).Status; got != action.want {
@@ -91,6 +108,18 @@ func TestTicketStatusTransitions(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// expectClosedRefusal checks that a staff reply to the closed ticket id was
+// refused as closed and changed or mirrored nothing.
+func expectClosedRefusal(t *testing.T, env *supporttest.Env, mirror *supporttest.Notifier, id int64, err error) {
+	t.Helper()
+	if !errors.Is(err, entity.ErrClosed) || xerr.CodeOf(err) != xerr.InvalidParams {
+		t.Fatalf("staff reply to a closed ticket: %v, want it refused as closed", err)
+	}
+	if env.ReloadTicket(t, id).Status != entity.Closed || len(env.Follows(t, id)) != 0 || len(mirror.Replies)+len(mirror.Statuses) != 0 {
+		t.Fatal("a refused staff reply changed or mirrored the closed ticket")
 	}
 }
 
@@ -432,7 +461,7 @@ func TestStaffStatusChangeNeedsTheTicket(t *testing.T) {
 func TestDeskWorksWithoutMirror(t *testing.T) {
 	logtest.Discard(t)
 	env := supporttest.New(t)
-	svc := NewService(env.Tickets, nil, nil)
+	svc := NewService(env.Tickets, nil, Limits{}, nil)
 	id := env.Ticket(t, entity.Ticket{UserId: 11}).Id
 	if err := svc.CreateFollow(context.Background(), &dto.CreateTicketFollowRequest{TicketId: id, From: "System", Type: entity.FollowText, Content: "on it"}); err != nil {
 		t.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/go-telegram/bot/models"
@@ -30,7 +31,7 @@ var (
 	_ Tickets                      = (*fakeTickets)(nil)
 	_ Subscriptions                = (*fakeSubscriptions)(nil)
 	_ Billing                      = fakeBilling{}
-	_ AuditLogs                    = fakeAuditLogs{}
+	_ AuditLogs                    = (*fakeAuditLogs)(nil)
 	_ repository.TelegramTopicRepo = (*fakeTopicRepo)(nil)
 	_ TelegramTopicClient          = (*fakeTopicClient)(nil)
 )
@@ -75,16 +76,28 @@ func (h *fakeAdminHandler) Handle(_ context.Context, msg *models.Message) {
 	h.handled = append(h.handled, msg)
 }
 
-// fakeRedisStore stands in for binding tokens and administrator
-// confirmations; a missing key reads as redis.Nil, as Redis reports it.
+// fakeTokenTTL is the life a seeded binding token has left.
+const fakeTokenTTL = 4 * time.Minute
+
+// fakeRedisStore stands in for binding tokens, binding locks and
+// administrator confirmations; a missing key reads as redis.Nil, as Redis
+// reports it.
 type fakeRedisStore struct {
 	values map[string]string
-	// deleted records the keys removed through Delete; a GetDel consumes its
-	// key without a trace, like the Redis command.
+	// ttls records the life of every key Set stored; a seeded key has
+	// fakeTokenTTL left.
+	ttls map[string]time.Duration
+	// deleted records the keys removed through Delete; a GetDel or Take
+	// consumes its key without a trace, like the Redis command.
 	deleted []string
+	// err fails every call when set, like Redis being unreachable.
+	err error
 }
 
 func (s *fakeRedisStore) Get(_ context.Context, key string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
 	value, ok := s.values[key]
 	if !ok {
 		return "", redis.Nil
@@ -93,22 +106,56 @@ func (s *fakeRedisStore) Get(_ context.Context, key string) (string, error) {
 }
 
 func (s *fakeRedisStore) GetDel(ctx context.Context, key string) (string, error) {
-	value, err := s.Get(ctx, key)
-	delete(s.values, key)
+	value, _, err := s.Take(ctx, key)
 	return value, err
 }
 
-func (s *fakeRedisStore) Set(_ context.Context, key, value string, _ time.Duration) error {
+func (s *fakeRedisStore) Take(ctx context.Context, key string) (string, time.Duration, error) {
+	value, err := s.Get(ctx, key)
+	if err != nil {
+		return "", 0, err
+	}
+	ttl := fakeTokenTTL
+	if stored, ok := s.ttls[key]; ok {
+		ttl = stored
+	}
+	delete(s.values, key)
+	delete(s.ttls, key)
+	return value, ttl, nil
+}
+
+func (s *fakeRedisStore) Set(_ context.Context, key, value string, ttl time.Duration) error {
+	if s.err != nil {
+		return s.err
+	}
 	if s.values == nil {
 		s.values = make(map[string]string)
 	}
+	if s.ttls == nil {
+		s.ttls = make(map[string]time.Duration)
+	}
 	s.values[key] = value
+	s.ttls[key] = ttl
 	return nil
 }
 
+func (s *fakeRedisStore) Acquire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	if _, held := s.values[key]; held {
+		return false, nil
+	}
+	return true, s.Set(ctx, key, "1", ttl)
+}
+
 func (s *fakeRedisStore) Delete(_ context.Context, key string) error {
+	if s.err != nil {
+		return s.err
+	}
 	s.deleted = append(s.deleted, key)
 	delete(s.values, key)
+	delete(s.ttls, key)
 	return nil
 }
 
@@ -131,6 +178,10 @@ type fakeAccounts struct {
 	// write, so a test can interleave a second command with the first one's
 	// write.
 	afterSetEnabled func()
+	// beforeBind, when set, runs once right before the next binding is
+	// recorded, so a test can interleave a second redemption with the first
+	// one's insert.
+	beforeBind func()
 }
 
 func newFakeAccounts() *fakeAccounts {
@@ -195,6 +246,13 @@ func (f *fakeAccounts) ListBindings(_ context.Context, userID int64) ([]*user.Au
 }
 
 func (f *fakeAccounts) BindTelegram(_ context.Context, userID int64, chatID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if hook := f.beforeBind; hook != nil {
+		f.beforeBind = nil
+		hook()
+	}
 	f.addBinding(userID, "telegram", chatID)
 	f.bound = append(f.bound, &user.AuthMethods{UserId: userID, AuthType: "telegram", AuthIdentifier: chatID})
 	return nil
@@ -232,7 +290,8 @@ type ticketReply struct {
 }
 
 // fakeTickets applies replies and status changes to its tickets the way the
-// support use case does: a reply moves the ticket to Waiting.
+// support use case does: a reply moves the ticket to Waiting, and a closed
+// ticket refuses a staff reply with ticket.ErrClosed.
 type fakeTickets struct {
 	tickets  map[int64]*ticket.Ticket
 	details  *ticket.Details
@@ -286,6 +345,9 @@ func (f *fakeTickets) Reply(_ context.Context, id int64, from, content string, i
 	t, ok := f.tickets[id]
 	if !ok {
 		return 0, errors.Join(errors.New("find ticket"), gorm.ErrRecordNotFound)
+	}
+	if t.Status == ticket.Closed {
+		return 0, errors.Join(errors.New("staff reply"), ticket.ErrClosed)
 	}
 	previous := t.Status
 	t.Status = ticket.Waiting
@@ -361,13 +423,37 @@ func (f fakeBilling) Balance(_ context.Context, userID int64) (int64, error) {
 
 type fakeAuditLogs struct {
 	logins []*log.SystemLog
+	// rows records the audit rows the bot wrote.
+	rows []*log.SystemLog
 }
 
-func (f fakeAuditLogs) RecentLogins(_ context.Context, _ int64, limit int) ([]*log.SystemLog, error) {
+func (f *fakeAuditLogs) RecentLogins(_ context.Context, _ int64, limit int) ([]*log.SystemLog, error) {
 	if len(f.logins) > limit {
 		return f.logins[:limit], nil
 	}
 	return f.logins, nil
+}
+
+func (f *fakeAuditLogs) Insert(_ context.Context, row *log.SystemLog) error {
+	f.rows = append(f.rows, row)
+	return nil
+}
+
+// actions decodes the administrator actions recorded so far.
+func (f *fakeAuditLogs) actions(t *testing.T) []log.AdminAction {
+	t.Helper()
+	actions := make([]log.AdminAction, 0, len(f.rows))
+	for _, row := range f.rows {
+		if row.Type != log.TypeAdminAction.Uint8() {
+			t.Fatalf("row %+v is not an administrator action", row)
+		}
+		var action log.AdminAction
+		if err := action.Unmarshal([]byte(row.Content)); err != nil {
+			t.Fatal(err)
+		}
+		actions = append(actions, action)
+	}
+	return actions
 }
 
 // ───────────────────────── topics ─────────────────────────

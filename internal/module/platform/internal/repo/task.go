@@ -108,8 +108,13 @@ func (m *taskRepo) taskListQuery(ctx context.Context, filter *task.Filter) *gorm
 	return query
 }
 
+// Update rewrites the task's mutable columns from data; the row's type and
+// creation time stay as they were, and a missing row is not inserted, which
+// a whole-row save would do.
 func (m *taskRepo) Update(ctx context.Context, data *task.Task) error {
-	return m.db.WithContext(ctx).Where("id = ?", data.Id).Save(data).Error
+	return m.db.WithContext(ctx).Model(&task.Task{}).Where("id = ?", data.Id).
+		Select("scope", "content", "status", "errors", "total", "current", "daily_date", "daily_sent").
+		Updates(data).Error
 }
 
 func (m *taskRepo) UpdateActive(ctx context.Context, data *task.Task) (bool, error) {

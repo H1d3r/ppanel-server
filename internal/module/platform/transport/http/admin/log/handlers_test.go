@@ -82,10 +82,20 @@ func (f *fakeLogs) GetMessageLogList(_ context.Context, req *dto.GetMessageLogLi
 	return handlertest.Answer[dto.GetMessageLogListResponse](&f.Recorder, "GetMessageLogList", req)
 }
 
+func (f *fakeLogs) FilterAdminActionLog(_ context.Context, req *dto.FilterAdminActionLogRequest) (*dto.FilterAdminActionLogResponse, error) {
+	return handlertest.Answer[dto.FilterAdminActionLogResponse](&f.Recorder, "FilterAdminActionLog", req)
+}
+
+func (f *fakeLogs) FilterUnmatchedPaymentLog(_ context.Context, req *dto.FilterUnmatchedPaymentLogRequest) (*dto.FilterUnmatchedPaymentLogResponse, error) {
+	return handlertest.Answer[dto.FilterUnmatchedPaymentLogResponse](&f.Recorder, "FilterUnmatchedPaymentLog", req)
+}
+
 // logRoutes registers the log handlers on their production routes.
 func logRoutes(port Logs) *server.Hertz {
 	h := server.New()
 	group := h.Group("/v1/admin/log")
+	group.GET("/admin/list", FilterAdminActionLogHandler(port))
+	group.GET("/payment/unmatched/list", FilterUnmatchedPaymentLogHandler(port))
 	group.GET("/balance/list", FilterBalanceLogHandler(port))
 	group.GET("/commission/list", FilterCommissionLogHandler(port))
 	group.GET("/email/list", FilterEmailLogHandler(port))
@@ -118,6 +128,14 @@ type logCase struct {
 }
 
 var logCases = []logCase{
+	{name: "admin action", target: "/v1/admin/log/admin/list?user_id=7&" + window, call: "FilterAdminActionLog",
+		request: &dto.FilterAdminActionLogRequest{FilterLogParams: windowParams, UserId: 7},
+		answer: &dto.FilterAdminActionLogResponse{Total: 1, List: []dto.AdminActionLog{{Id: 12, UserId: 7, Action: "settings.update", Object: "verify", Detail: "keys: TurnstileSecret",
+			Source: "http", Timestamp: 1758000000000, CreatedAt: 1758000000000, ClientIP: "203.0.113.9", UserAgent: "AdminPanel/1.0"}}}},
+	{name: "unmatched payment", target: "/v1/admin/log/payment/unmatched/list?user_id=7&" + window, call: "FilterUnmatchedPaymentLog",
+		request: &dto.FilterUnmatchedPaymentLogRequest{FilterLogParams: windowParams, UserId: 7},
+		answer: &dto.FilterUnmatchedPaymentLogResponse{Total: 1, List: []dto.UnmatchedPaymentLog{{Id: 13, UserId: 7, OrderNo: "o-9", TradeNo: "t-9", Platform: "alipay",
+			Amount: 1200, Currency: "CNY", Reason: "order already closed", Timestamp: 1758000000000, CreatedAt: 1758000000000}}}},
 	{name: "balance", target: "/v1/admin/log/balance/list?user_id=7&" + window, call: "FilterBalanceLog",
 		request: &dto.FilterBalanceLogRequest{FilterLogParams: windowParams, UserId: 7},
 		answer:  &dto.FilterBalanceLogResponse{Total: 1, List: []dto.BalanceLog{{Type: 321, UserId: 7, Amount: -500, OrderNo: "o-1", Balance: 100, Timestamp: 1758000000000}}}},
@@ -214,6 +232,10 @@ func TestLogHandlersRefuseMalformedRequests(t *testing.T) {
 		}
 	}
 	cases = append(cases, []refusal{
+		{"admin action user not a number", http.MethodGet, "/v1/admin/log/admin/list?page=1&size=10&user_id=me", "", "bind UserId"},
+		{"admin action without size", http.MethodGet, "/v1/admin/log/admin/list?page=1", "", "Size is a required field"},
+		{"unmatched payment size too large", http.MethodGet, "/v1/admin/log/payment/unmatched/list?page=1&size=101", "", "Size must be 100 or less"},
+		{"setting keeps logs too short", http.MethodPost, "/v1/admin/log/setting", `{"auto_clear":true,"clear_days":6}`, "ClearDays must be 7 or greater"},
 		{"balance user not a number", http.MethodGet, "/v1/admin/log/balance/list?page=1&size=10&user_id=me", "", "bind UserId"},
 		{"balance without page", http.MethodGet, "/v1/admin/log/balance/list?size=10", "", "Page is a required field"},
 		{"commission page zero", http.MethodGet, "/v1/admin/log/commission/list?page=0&size=10", "", "Page is a required field"},

@@ -200,3 +200,7 @@ func (l botAuditLogs) RecentLogins(ctx context.Context, userID int64, limit int)
 	})
 	return entries, err
 }
+
+func (l botAuditLogs) Insert(ctx context.Context, row *log.SystemLog) error {
+	return l.logs.Insert(ctx, row)
+}

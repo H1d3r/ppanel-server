@@ -48,13 +48,16 @@ func (a *Admin) Handle(ctx context.Context, msg *models.Message) {
 		return
 	}
 
-	// Step 2: Confirm / cancel short-circuit
+	// Step 2: Confirm / cancel short-circuit. A confirmation belongs to the
+	// administrator who asked for it: both commands address the sender's own
+	// actions, so another administrator's confirmation is never found, let
+	// alone cancelled.
 	if actionID, ok := strings.CutPrefix(rawCmd, "confirm_"); ok {
 		a.confirmAction(ctx, msg, adminUser, actionID)
 		return
 	}
 	if actionID, ok := strings.CutPrefix(rawCmd, "cancel_"); ok {
-		if err := a.deps.Actions.Delete(ctx, tgActionPrefix+actionID); err != nil {
+		if err := a.deps.Actions.Delete(ctx, actionKey(adminUser.Id, actionID)); err != nil {
 			logger.WithContext(ctx).Errorw("admin cancel action: redis del failed", logger.Field("error", err.Error()))
 		}
 		a.reply(ctx, msg, "❌ 操作已取消。")
@@ -77,11 +80,11 @@ func (a *Admin) Handle(ctx context.Context, msg *models.Message) {
 	case "tk":
 		a.ticketDetail(ctx, msg, arg)
 	case "rp":
-		a.replyTicket(ctx, msg, arg)
+		a.replyTicket(ctx, msg, adminUser, arg)
 	case "close":
 		a.confirmCloseTicket(ctx, msg, adminUser, arg)
 	case "reopen":
-		a.reopenTicket(ctx, msg, arg)
+		a.reopenTicket(ctx, msg, adminUser, arg)
 	case "user":
 		a.userDetail(ctx, msg, arg)
 	case "user_sub":
@@ -262,7 +265,30 @@ func (a *Admin) ticketDetail(ctx context.Context, msg *models.Message, idStr str
 	a.reply(ctx, msg, sb.String())
 }
 
-func (a *Admin) replyTicket(ctx context.Context, msg *models.Message, args string) {
+// recordAction writes the audit row of a mutation the administrator made
+// through the bot: the bound panel account is the actor, the Telegram sender
+// is kept next to it. The mutation is already made; a trail that cannot be
+// written is logged.
+func (a *Admin) recordAction(ctx context.Context, msg *models.Message, adminUser *user.User, action, object string, objectID int64, detail string) {
+	if a.deps.AuditLogs == nil {
+		return
+	}
+	entry := log.AdminAction{Action: action, Object: object, ObjectID: objectID, Detail: detail, Source: log.AdminActionSourceTelegram}
+	entry.ActorID = adminUser.Id
+	if msg.From != nil {
+		entry.TelegramSenderID = msg.From.ID
+	}
+	row, err := log.NewAdminActionLog(entry)
+	if err == nil {
+		err = a.deps.AuditLogs.Insert(ctx, row)
+	}
+	if err != nil {
+		logger.WithContext(ctx).Errorw("[Telegram] record admin action failed", logger.Field("error", err.Error()),
+			logger.Field("action", action), logger.Field("admin_id", adminUser.Id))
+	}
+}
+
+func (a *Admin) replyTicket(ctx context.Context, msg *models.Message, adminUser *user.User, args string) {
 	parts := strings.SplitN(args, " ", 2)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		a.reply(ctx, msg, "用法：/rp <工单ID> <回复内容>")
@@ -275,14 +301,18 @@ func (a *Admin) replyTicket(ctx context.Context, msg *models.Message, args strin
 	}
 	previous, err := a.deps.Tickets.Reply(ctx, id, staffAuthor, parts[1], false)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
 			a.reply(ctx, msg, "工单不存在。")
-			return
+		case errors.Is(err, ticket.ErrClosed):
+			a.reply(ctx, msg, fmt.Sprintf("工单 #%d 已关闭，请先 /reopen_%d 重新打开后再回复。", id, id))
+		default:
+			logger.WithContext(ctx).Errorw("ticket reply failed", logger.Field("error", err.Error()), logger.Field("ticket_id", id))
+			a.reply(ctx, msg, "回复失败，请稍后再试。")
 		}
-		logger.WithContext(ctx).Errorw("ticket reply failed", logger.Field("error", err.Error()), logger.Field("ticket_id", id))
-		a.reply(ctx, msg, "回复失败，请稍后再试。")
 		return
 	}
+	a.recordAction(ctx, msg, adminUser, "ticket.reply", "ticket", id, "")
 	a.reply(ctx, msg, fmt.Sprintf("✅ 已回复工单 #%d\n 状态：%s → 🟡 等待用户回复", id, ticketStatusName(previous)))
 }
 
@@ -305,7 +335,7 @@ func (a *Admin) confirmCloseTicket(ctx context.Context, msg *models.Message, adm
 	a.reply(ctx, msg, fmt.Sprintf("确认关闭工单 #%d ？\n/confirm_%s 确认\n/cancel_%s 取消", id, actionID, actionID))
 }
 
-func (a *Admin) reopenTicket(ctx context.Context, msg *models.Message, idStr string) {
+func (a *Admin) reopenTicket(ctx context.Context, msg *models.Message, adminUser *user.User, idStr string) {
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		a.reply(ctx, msg, "ID格式错误。")
@@ -320,6 +350,7 @@ func (a *Admin) reopenTicket(ctx context.Context, msg *models.Message, idStr str
 		a.reply(ctx, msg, "操作失败。")
 		return
 	}
+	a.recordAction(ctx, msg, adminUser, "ticket.status", "ticket", id, fmt.Sprintf("status=%d", ticket.Pending))
 	a.reply(ctx, msg, fmt.Sprintf("✅ 工单 #%d 已重新打开", id))
 }
 
@@ -488,14 +519,8 @@ func (a *Admin) userDetail(ctx context.Context, msg *models.Message, input strin
 	if len(subs) > 0 {
 		sb.WriteString("\n─── 当前订阅 ───\n")
 		for _, s := range subs {
-			daysLeft := int(time.Until(s.ExpireTime).Hours() / 24)
-			expiryWarn := ""
-			if daysLeft <= 3 {
-				expiryWarn = " ⚠️即将过期"
-			}
-			fmt.Fprintf(&sb, "📦 %s (ID:%d)\n   流量：%.1f/%.1fGB  到期：%s (剩%d天)%s\n\n",
-				planName(s), s.Id, gigabytes(s.Download+s.Upload), gigabytes(s.Traffic),
-				s.ExpireTime.Format("2006-01-02"), daysLeft, expiryWarn,
+			fmt.Fprintf(&sb, "📦 %s (ID:%d)\n   流量：%.1f/%.1fGB  到期：%s\n\n",
+				planName(s), s.Id, gigabytes(s.Download+s.Upload), gigabytes(s.Traffic), expiryLabel(s.ExpireTime, timeutil.Now()),
 			)
 		}
 	}
@@ -523,12 +548,29 @@ func (a *Admin) userSubs(ctx context.Context, msg *models.Message, input string)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "📦 用户 %s 订阅列表 (%d)\n", a.userEmail(ctx, u.Id), len(subs))
 	for i, s := range subs {
-		fmt.Fprintf(&sb, "\n%d. %s (ID:%d)\n   %s\n   到期：%s\n",
-			i+1, planName(s), s.Id, subStatusName(s.Status),
-			s.ExpireTime.Format("2006-01-02 15:04"),
-		)
+		expiry := "无限期"
+		if !usersub.NoExpiry(s.ExpireTime) {
+			expiry = s.ExpireTime.In(timeutil.Location()).Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(&sb, "\n%d. %s (ID:%d)\n   %s\n   到期：%s\n", i+1, planName(s), s.Id, subStatusName(s.Status), expiry)
 	}
 	a.reply(ctx, msg, sb.String())
+}
+
+// expiryLabel names a subscription's term end for staff: the date with the
+// days left and a warning when it is near, or "no time limit" for a
+// subscription without one (usersub.NoExpiry), which used to show as a
+// negative number of days about to expire.
+func expiryLabel(expireTime, now time.Time) string {
+	if usersub.NoExpiry(expireTime) {
+		return "无限期"
+	}
+	daysLeft := int(expireTime.Sub(now).Hours() / 24)
+	label := fmt.Sprintf("%s (剩%d天)", expireTime.In(timeutil.Location()).Format("2006-01-02"), daysLeft)
+	if daysLeft <= 3 {
+		label += " ⚠️即将过期"
+	}
+	return label
 }
 
 func (a *Admin) userLogs(ctx context.Context, msg *models.Message, input string) {
@@ -662,34 +704,35 @@ func (a *Admin) confirmAction(ctx context.Context, msg *models.Message, adminUse
 	settled := true
 	switch act.Cmd {
 	case "close":
-		settled = a.closeTicket(ctx, msg, id)
+		settled = a.closeTicket(ctx, msg, adminUser, id)
 	case "reset":
-		settled = a.resetTraffic(ctx, msg, id)
+		settled = a.resetTraffic(ctx, msg, adminUser, id)
 	case "toggle":
-		settled = a.toggleSubscription(ctx, msg, id, act.Extra)
+		settled = a.toggleSubscription(ctx, msg, adminUser, id, act.Extra)
 	case "ban":
-		settled = a.toggleBan(ctx, msg, id, act.Extra)
+		settled = a.toggleBan(ctx, msg, adminUser, id, act.Extra)
 	default:
 		a.reply(ctx, msg, "未知操作。")
 	}
 	if !settled {
 		// A confirmation that failed stays redeemable, so the administrator
 		// can retry it.
-		a.storeAction(ctx, actionID, act)
+		a.storeAction(ctx, adminUser.Id, actionID, act)
 	}
 }
 
-func (a *Admin) closeTicket(ctx context.Context, msg *models.Message, id int64) bool {
+func (a *Admin) closeTicket(ctx context.Context, msg *models.Message, adminUser *user.User, id int64) bool {
 	if err := a.deps.Tickets.SetStatus(ctx, id, ticket.Closed, false); err != nil {
 		logger.WithContext(ctx).Errorw("close ticket failed", logger.Field("error", err.Error()))
 		a.reply(ctx, msg, "关闭工单失败。")
 		return false
 	}
+	a.recordAction(ctx, msg, adminUser, "ticket.status", "ticket", id, fmt.Sprintf("status=%d", ticket.Closed))
 	a.reply(ctx, msg, fmt.Sprintf("✅ 工单 #%d 已关闭", id))
 	return true
 }
 
-func (a *Admin) resetTraffic(ctx context.Context, msg *models.Message, id int64) bool {
+func (a *Admin) resetTraffic(ctx context.Context, msg *models.Message, adminUser *user.User, id int64) bool {
 	userSub, err := a.findSubscription(ctx, id)
 	if err != nil {
 		a.reply(ctx, msg, "订阅不存在。")
@@ -700,6 +743,7 @@ func (a *Admin) resetTraffic(ctx context.Context, msg *models.Message, id int64)
 		a.reply(ctx, msg, "重置流量失败。")
 		return false
 	}
+	a.recordAction(ctx, msg, adminUser, "subscription.reset_traffic", "user_subscribe", id, fmt.Sprintf("user_id=%d", userSub.UserId))
 	a.reply(ctx, msg, fmt.Sprintf("✅ 订阅 ID:%d 流量已重置", id))
 	return true
 }
@@ -707,7 +751,7 @@ func (a *Admin) resetTraffic(ctx context.Context, msg *models.Message, id int64)
 // toggleSubscription applies a confirmed /toggle. promptedStatus is the
 // status the confirmation prompt was worded for; it is empty for
 // confirmations issued before the prompt recorded it.
-func (a *Admin) toggleSubscription(ctx context.Context, msg *models.Message, id int64, promptedStatus string) bool {
+func (a *Admin) toggleSubscription(ctx context.Context, msg *models.Message, adminUser *user.User, id int64, promptedStatus string) bool {
 	userSub, err := a.findSubscription(ctx, id)
 	if err != nil {
 		a.reply(ctx, msg, "订阅不存在。")
@@ -727,6 +771,7 @@ func (a *Admin) toggleSubscription(ctx context.Context, msg *models.Message, id 
 		a.reply(ctx, msg, "操作失败。")
 		return false
 	}
+	a.recordAction(ctx, msg, adminUser, "subscription.status", "user_subscribe", id, fmt.Sprintf("user_id=%d status=%d", userSub.UserId, target))
 	opLabel := "已暂停"
 	if target == usersub.SubscribeStatusActive {
 		opLabel = "已启用"
@@ -739,7 +784,7 @@ func (a *Admin) toggleSubscription(ctx context.Context, msg *models.Message, id 
 // confirmation prompt announced ("true" enables, "false" disables); it is
 // empty for confirmations issued before the prompt recorded it, which switch
 // the state found now.
-func (a *Admin) toggleBan(ctx context.Context, msg *models.Message, id int64, promptedTarget string) bool {
+func (a *Admin) toggleBan(ctx context.Context, msg *models.Message, adminUser *user.User, id int64, promptedTarget string) bool {
 	u, err := a.deps.Accounts.FindUser(ctx, id)
 	if err != nil {
 		a.reply(ctx, msg, "用户不存在。")
@@ -764,6 +809,7 @@ func (a *Admin) toggleBan(ctx context.Context, msg *models.Message, id int64, pr
 		a.reply(ctx, msg, "操作失败。")
 		return false
 	}
+	a.recordAction(ctx, msg, adminUser, "user.ban", "user", u.Id, fmt.Sprintf("enabled=%t", target))
 	a.reply(ctx, msg, fmt.Sprintf("✅ 用户 (ID:%d) 已%s", u.Id, enabledLabel(target)))
 	return true
 }
@@ -782,31 +828,39 @@ func (a *Admin) findSubscription(ctx context.Context, id int64) (*usersub.Subscr
 // Action token (Redis)
 // ─────────────────────────────────────
 
+// actionKey addresses a pending action of the administrator adminID. The
+// key carries the issuer, so a confirmation or cancellation by anyone else
+// looks for a key that does not exist: the issuer's action is neither
+// consumed, nor cancelled, nor re-stored with a fresh confirmation window.
+func actionKey(adminID int64, actionID string) string {
+	return fmt.Sprintf("%s%d:%s", tgActionPrefix, adminID, actionID)
+}
+
 func (a *Admin) saveAction(ctx context.Context, cmd string, adminID int64, target, extra string) string {
 	actionID := random.KeyNew(8, 1)
-	a.storeAction(ctx, actionID, tgAction{Cmd: cmd, AdminID: adminID, Target: target, Extra: extra})
+	a.storeAction(ctx, adminID, actionID, tgAction{Cmd: cmd, AdminID: adminID, Target: target, Extra: extra})
 	return actionID
 }
 
-// storeAction keeps act redeemable as actionID for one confirmation window.
-// A failed write is only logged: the prompt still goes out, and its
-// confirmation will report itself expired.
-func (a *Admin) storeAction(ctx context.Context, actionID string, act tgAction) {
+// storeAction keeps act redeemable as actionID by adminID for one
+// confirmation window. A failed write is only logged: the prompt still goes
+// out, and its confirmation will report itself expired.
+func (a *Admin) storeAction(ctx context.Context, adminID int64, actionID string, act tgAction) {
 	data, err := json.Marshal(&act)
 	if err == nil {
-		err = a.deps.Actions.Set(ctx, tgActionPrefix+actionID, string(data), tgActionTTL)
+		err = a.deps.Actions.Set(ctx, actionKey(adminID, actionID), string(data), tgActionTTL)
 	}
 	if err != nil {
 		logger.WithContext(ctx).Errorw("save admin action failed", logger.Field("error", err.Error()), logger.Field("cmd", act.Cmd))
 	}
 }
 
-// takeAction consumes the pending action actionID on behalf of adminID. The
-// read and the delete are one Redis command, so concurrent confirmations
-// cannot both receive the action. A confirmation belongs to whoever asked
-// for it: another administrator's action is put back and reads as missing.
+// takeAction consumes the pending action actionID of adminID. The read and
+// the delete are one Redis command, so concurrent confirmations cannot both
+// receive the action; another administrator's action lives under another
+// key and reads as missing.
 func (a *Admin) takeAction(ctx context.Context, actionID string, adminID int64) (tgAction, bool) {
-	val, err := a.deps.Actions.GetDel(ctx, tgActionPrefix+actionID)
+	val, err := a.deps.Actions.GetDel(ctx, actionKey(adminID, actionID))
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
 			logger.WithContext(ctx).Errorw("load action failed", logger.Field("error", err.Error()))
@@ -814,11 +868,7 @@ func (a *Admin) takeAction(ctx context.Context, actionID string, adminID int64) 
 		return tgAction{}, false
 	}
 	var act tgAction
-	if err := json.Unmarshal([]byte(val), &act); err != nil {
-		return tgAction{}, false
-	}
-	if act.AdminID != adminID {
-		a.storeAction(ctx, actionID, act)
+	if err := json.Unmarshal([]byte(val), &act); err != nil || act.AdminID != adminID {
 		return tgAction{}, false
 	}
 	return act, true

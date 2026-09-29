@@ -3,12 +3,14 @@ package marketing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/perfect-panel/server/internal/module/platform/entity/log"
 	"github.com/perfect-panel/server/internal/module/platform/entity/task"
 	dto "github.com/perfect-panel/server/internal/module/support/contract"
 	"github.com/perfect-panel/server/internal/module/support/internal/supporttest"
@@ -34,6 +36,7 @@ type world struct {
 	targets    *supporttest.QuotaTargets
 	queue      *supporttest.Queue
 	stopper    *supporttest.Stopper
+	audit      *supporttest.AuditLog
 }
 
 func newWorld(t *testing.T) *world {
@@ -45,8 +48,9 @@ func newWorld(t *testing.T) *world {
 		targets:    &supporttest.QuotaTargets{IDs: []int64{11, 12}},
 		queue:      &supporttest.Queue{},
 		stopper:    &supporttest.Stopper{},
+		audit:      &supporttest.AuditLog{},
 	}
-	w.svc = NewService(w.env.Tasks, w.recipients, w.targets, w.queue, w.stopper)
+	w.svc = NewService(w.env.Tasks, w.recipients, w.targets, w.queue, w.stopper, w.audit)
 	return w
 }
 
@@ -349,12 +353,73 @@ func TestCampaignListFiltersAndPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	renew, welcome := resp.List[0], resp.List[1]
-	if renew.Recipients != "a@example.com\nb@example.com" || renew.Additional != "c@example.com" || renew.Scope != task.ScopeActive.Int8() || renew.Current != 3 ||
+	if renew.Recipients != "a@example.com\nb@example.com" || renew.RecipientCount != 3 || renew.Additional != "c@example.com" || renew.Scope != task.ScopeActive.Int8() || renew.Current != 3 ||
 		renew.Errors != `[{"error":"unknown user","email":"a@example.com","time":1758000000},{"error":"mailbox full","email":"b@example.com","time":1758000100}]` {
 		t.Fatalf("renew campaign = %+v", renew)
 	}
-	if welcome.Subject != "welcome" || welcome.Errors != "legacy error text" {
+	if welcome.Subject != "welcome" || welcome.RecipientCount != 1 || welcome.Errors != "legacy error text" {
 		t.Fatalf("welcome campaign = %+v", welcome)
+	}
+}
+
+// A campaign's list entry shows a bounded sample of its recipients and how
+// many more there are, with the whole audience as a count: a campaign to a
+// hundred thousand accounts ships no address list with every page.
+func TestCampaignListBoundsTheRecipientList(t *testing.T) {
+	w := newWorld(t)
+	recipients := make([]string, 0, 25)
+	for i := range 25 {
+		recipients = append(recipients, fmt.Sprintf("user%02d@example.com", i))
+	}
+	w.env.EmailTask(t, supporttest.EmailCampaign{Subject: "s", Content: "c", Scope: task.ScopeAll.Int8(), Recipients: recipients, Additional: []string{"x@example.com"}, Total: 26})
+	resp, err := w.svc.GetBatchSendEmailTaskList(context.Background(), nil)
+	if err != nil || len(resp.List) != 1 {
+		t.Fatalf("list = %+v (err %v)", resp, err)
+	}
+	got := resp.List[0]
+	if got.RecipientCount != 26 {
+		t.Fatalf("recipient count = %d, want 26", got.RecipientCount)
+	}
+	lines := strings.Split(got.Recipients, "\n")
+	if len(lines) != maxListedRecipients+1 || lines[0] != "user00@example.com" || lines[maxListedRecipients-1] != "user19@example.com" || lines[maxListedRecipients] != "… and 5 more" {
+		t.Fatalf("recipients = %q, want the first %d and the rest counted", got.Recipients, maxListedRecipients)
+	}
+}
+
+// Creating and stopping a campaign, and creating a quota task, leave an
+// audit trail with the acting administrator and the task, naming no
+// address.
+func TestMarketingActionsAreAudited(t *testing.T) {
+	w := newWorld(t)
+	ctx := supporttest.Context()
+	if err := w.svc.CreateBatchSendEmailTask(ctx, campaign(func(r *dto.CreateBatchSendEmailTaskRequest) { r.Additional = "c@example.com" })); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.svc.StopBatchSendEmailTask(ctx, &dto.StopBatchSendEmailTaskRequest{Id: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.svc.CreateQuotaTask(ctx, quota(func(r *dto.CreateQuotaTaskRequest) { r.Subscribers = []int64{3} })); err != nil {
+		t.Fatal(err)
+	}
+	actions := w.audit.Actions(t)
+	want := []struct {
+		action, object string
+		id             int64
+		detail         string
+	}{
+		{"marketing.campaign.create", "email_task", 1, "recipients=2 additional=1"},
+		{"marketing.campaign.stop", "email_task", 1, ""},
+		{"marketing.quota.create", "quota_task", 2, "subscriptions=2 reset_traffic=false days=7"},
+	}
+	if len(actions) != len(want) {
+		t.Fatalf("audited %d actions, want %d: %+v", len(actions), len(want), actions)
+	}
+	for i, tc := range want {
+		got := actions[i]
+		if got.Action != tc.action || got.Object != tc.object || got.ObjectID != tc.id || !strings.Contains(got.Detail, tc.detail) ||
+			got.ActorID != supporttest.ActorID || got.Source != log.AdminActionSourceHTTP || strings.Contains(got.Detail, "@") {
+			t.Fatalf("action %d = %+v, want %+v without any address", i, got, tc)
+		}
 	}
 }
 
@@ -463,7 +528,7 @@ func TestStoppingCampaigns(t *testing.T) {
 func TestStoppingWithoutWorkerManager(t *testing.T) {
 	logtest.Discard(t)
 	env := supporttest.New(t)
-	svc := NewService(env.Tasks, nil, nil, nil, nil)
+	svc := NewService(env.Tasks, nil, nil, nil, nil, nil)
 	id := env.EmailTask(t, supporttest.EmailCampaign{Subject: "s", Content: "c", Scope: 1})
 	if err := svc.StopBatchSendEmailTask(context.Background(), &dto.StopBatchSendEmailTaskRequest{Id: id}); err != nil {
 		t.Fatal(err)

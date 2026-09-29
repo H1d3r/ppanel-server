@@ -29,7 +29,7 @@ type adminHarness struct {
 	tickets   *fakeTickets
 	subs      *fakeSubscriptions
 	billing   fakeBilling
-	logs      fakeAuditLogs
+	logs      *fakeAuditLogs
 }
 
 // newAdminHarness binds chat 42 to the active administrator user 1.
@@ -42,6 +42,7 @@ func newAdminHarness() *adminHarness {
 		tickets:   newFakeTickets(),
 		subs:      newFakeSubscriptions(),
 		billing:   fakeBilling{balances: map[int64]int64{}},
+		logs:      &fakeAuditLogs{},
 	}
 	h.accounts.users[adminUserID] = &user.User{Id: adminUserID, IsAdmin: &yes, Enable: &yes}
 	h.accounts.addBinding(adminUserID, "telegram", "42")
@@ -172,7 +173,7 @@ func TestAdminBanConfirmationRefusesAfterStateChange(t *testing.T) {
 			if *h.accounts.users[9].Enable != tt.meanwhile {
 				t.Fatal("the stale confirmation switched the account back")
 			}
-			if _, ok := h.actions.values[tgActionPrefix+actionID]; ok {
+			if _, ok := h.actions.values[actionKey(adminUserID, actionID)]; ok {
 				t.Fatal("the refused confirmation is still redeemable")
 			}
 		})
@@ -214,17 +215,30 @@ func TestAdminCannotBanOwnAccount(t *testing.T) {
 }
 
 // A confirmation belongs to the administrator who asked for it, and stays
-// redeemable for them after somebody else tried it.
+// redeemable for them, with the window it had, after somebody else tried to
+// confirm or cancel it: the other administrator's commands address their own
+// actions and find none.
 func TestAdminConfirmationIsBoundToItsIssuer(t *testing.T) {
 	h := newAdminHarness()
 	action, _ := json.Marshal(tgAction{Cmd: "ban", AdminID: 77, Target: "9"})
-	h.actions.values = map[string]string{tgActionPrefix + "foreign": string(action)}
+	foreign := actionKey(77, "foreign")
+	h.actions.values = map[string]string{foreign: string(action)}
+	h.actions.ttls = map[string]time.Duration{foreign: time.Minute}
 
 	if got := h.run("/confirm_foreign"); got != "操作已过期或无效。" {
 		t.Fatalf("reply = %q, want another administrator's confirmation refused", got)
 	}
-	if got := h.actions.values[tgActionPrefix+"foreign"]; got != string(action) {
+	if got := h.run("/cancel_foreign"); !strings.Contains(got, "已取消") {
+		t.Fatalf("reply = %q", got)
+	}
+	if got := h.actions.values[foreign]; got != string(action) {
 		t.Fatalf("stored action = %q, want the other administrator's confirmation kept", got)
+	}
+	if ttl := h.actions.ttls[foreign]; ttl != time.Minute {
+		t.Fatalf("stored action ttl = %v, want its window untouched, not a fresh one", ttl)
+	}
+	if len(h.actions.deleted) != 1 || h.actions.deleted[0] != actionKey(adminUserID, "foreign") {
+		t.Fatalf("deleted = %v, want only the sender's own (missing) action addressed", h.actions.deleted)
 	}
 }
 
@@ -290,7 +304,7 @@ func TestAdminToggleRefusesOtherStatuses(t *testing.T) {
 		// A confirmation issued before this change named no status; it must
 		// not touch the subscription either.
 		action, _ := json.Marshal(tgAction{Cmd: "toggle", AdminID: adminUserID, Target: "5"})
-		h.actions.values = map[string]string{tgActionPrefix + "legacy": string(action)}
+		h.actions.values = map[string]string{actionKey(adminUserID, "legacy"): string(action)}
 		if got := h.run("/confirm_legacy"); !strings.Contains(got, "只有活跃或已暂停的订阅可以启停") {
 			t.Fatalf("status %d: confirmation reply = %q, want a refusal", status, got)
 		}
