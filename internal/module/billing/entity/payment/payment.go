@@ -57,7 +57,11 @@ type StripeConfig struct {
 	PublicKey     string `json:"public_key"`
 	SecretKey     string `json:"secret_key"`
 	WebhookSecret string `json:"webhook_secret"`
-	Payment       string `json:"payment"`
+	// WebhookEndpointID is the Stripe webhook endpoint registered for the
+	// method, so it can be removed when the secret key is rotated to another
+	// account; empty on methods registered before it was recorded.
+	WebhookEndpointID string `json:"webhook_endpoint_id,omitempty"`
+	Payment           string `json:"payment"`
 }
 
 func (l *StripeConfig) Marshal() ([]byte, error) {
