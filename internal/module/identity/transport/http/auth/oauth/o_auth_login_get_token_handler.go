@@ -21,6 +21,7 @@ var _ OAuthLoginGetTokenService = identity.Service(nil)
 // OAuthLoginGetTokenHandler documents OAuth login get token.
 //
 // @Summary OAuth login get token
+// @Description Completes a sign-in with the provider's callback and answers with the session token. A sign-in started with a nonce (/v1/auth/oauth/login) is completed only with the same nonce; one started without is completed only without.
 // @Tags common
 // @Accept json
 // @Produce json

@@ -29,6 +29,10 @@ type SessionAccounts interface {
 	// FindUser returns the account, soft-deleted ones included, so a deleted
 	// account is refused rather than reported as a lookup failure.
 	FindUser(ctx context.Context, id int64) (*user.User, error)
+	// FindAccountStateForAuth reads the account gate (enabled, deleted,
+	// administrator) as stored now, bypassing caches, so a ban, deletion or
+	// demotion refuses the account's sessions at once.
+	FindAccountStateForAuth(ctx context.Context, id int64) (*user.AccountState, error)
 	// FindDeviceForAuth reads the current device state, bypassing caches.
 	FindDeviceForAuth(ctx context.Context, id int64) (*user.Device, error)
 }
@@ -114,6 +118,12 @@ func RequireAdmin(ctx context.Context) error {
 // AuthenticateRequest resolves the session token to its account and returns
 // ctx carrying the account, the session and the actor. A device session also
 // needs its device to be enabled and still the account's.
+//
+// The account gate (enabled, deleted, administrator) is read as stored now,
+// not from the cached account row: that row lives for days and its
+// invalidation is best effort, so a ban, deletion or demotion must not be
+// served from it. The cached row still supplies the rest of the account,
+// with the gate columns overlaid, so handlers see the current flags too.
 func AuthenticateRequest(ctx context.Context, deps AuthDeps, token string) (context.Context, error) {
 	if token == "" {
 		logger.WithContext(ctx).Debug("[AuthMiddleware] Token Empty")
@@ -139,15 +149,26 @@ func AuthenticateRequest(ctx context.Context, deps AuthDeps, token string) (cont
 		}
 	}
 
+	state, err := accounts.FindAccountStateForAuth(ctx, claims.UserID)
+	if err != nil {
+		return ctx, xerr.Wrapf(err, xerr.DatabaseQueryError, "find account state %d", claims.UserID)
+	}
+	if state.DeletedAt.Valid {
+		return ctx, xerr.Errorf(xerr.UserNotExist, "user deleted")
+	}
+	if state.Enable == nil || !*state.Enable {
+		return ctx, xerr.Errorf(xerr.UserDisabled, "user disabled")
+	}
 	userInfo, err := accounts.FindUser(ctx, claims.UserID)
 	if err != nil {
 		return ctx, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user %d", claims.UserID)
 	}
-	if userInfo.DeletedAt.Valid {
-		return ctx, xerr.Errorf(xerr.UserNotExist, "user deleted")
-	}
-	if userInfo.Enable == nil || !*userInfo.Enable {
-		return ctx, xerr.Errorf(xerr.UserDisabled, "user disabled")
+	// The gate columns of the cached row give way to the current ones, so
+	// the administrator guard and the handlers see a demotion or a ban the
+	// cache has not caught up with.
+	userInfo.Enable, userInfo.DeletedAt = state.Enable, state.DeletedAt
+	if state.IsAdmin != nil {
+		userInfo.IsAdmin = state.IsAdmin
 	}
 
 	ctx = context.WithValue(ctx, requestctx.LoginType, claims.LoginType)

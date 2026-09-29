@@ -32,6 +32,9 @@ func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 	if err := s.ensureCodeAllowed(ctx, verifyType, identifier.Mobile); err != nil {
 		return nil, err
 	}
+	if err := s.verifyHuman(ctx, verifyType, req.CfToken); err != nil {
+		return nil, err
+	}
 	// Each code costs the operator money; outside the configured countries a
 	// script could pump premium-rate numbers.
 	if cfg.MobileWhitelistEnabled && !areaCodeAllowed(req.TelephoneAreaCode, cfg.MobileWhitelist) {
@@ -40,6 +43,9 @@ func (s *Service) SendSmsCode(ctx context.Context, req *dto.SendSmsCodeRequest) 
 	phoneNumber, err := identifier.FormatToE164(req.TelephoneAreaCode, req.Telephone)
 	if err != nil {
 		return nil, xerr.Wrapf(err, xerr.TelephoneError, "invalid phone number")
+	}
+	if err := s.takeIPPermit(ctx); err != nil {
+		return nil, err
 	}
 
 	cacheKey := verification.MobileCodeKey(verifyType, phoneNumber)

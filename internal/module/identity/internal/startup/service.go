@@ -14,6 +14,11 @@ import (
 type Deps struct {
 	Users     repository.UserRepo
 	UserAuths repository.UserAuthRepo
+	// Auths lists the configured sign-in methods, for the start-up check of
+	// the methods whose redirects need a site host; optional.
+	Auths repository.AuthRepo
+	// SiteHost snapshots the configured site host; optional.
+	SiteHost func() string
 	// Store carries the identity transaction that counts the accounts and
 	// creates the first administrator together.
 	Store Store

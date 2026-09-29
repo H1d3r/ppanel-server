@@ -6,6 +6,7 @@ package identity
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
@@ -22,6 +23,7 @@ import (
 	"github.com/perfect-panel/server/internal/module/identity/internal/startup"
 	"github.com/perfect-panel/server/internal/module/identity/internal/verifycode"
 	"github.com/perfect-panel/server/internal/repository"
+	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -52,7 +54,9 @@ type Service interface {
 	// account info, credentials, third-party bindings, devices and
 	// notification preferences.
 	QueryUserInfo(ctx context.Context) (*dto.User, error)
-	UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) error
+	// UpdateUserPassword changes the password and reports the third-party
+	// sign-in methods still bound to the account.
+	UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) (*dto.UpdateUserPasswordResponse, error)
 	// Logout ends the calling session.
 	Logout(ctx context.Context) error
 	UpdateUserNotify(ctx context.Context, req *dto.UpdateUserNotifyRequest) error
@@ -130,6 +134,12 @@ type Service interface {
 	// NormalizePhoneNumbers rewrites the phone numbers stored in a legacy
 	// form to E.164 and logs what it changed; it is idempotent.
 	NormalizePhoneNumbers(ctx context.Context) error
+	// WarnUnpinnedOAuthRedirects logs an error when Apple or Telegram
+	// sign-in is enabled while no site host pins their redirects.
+	WarnUnpinnedOAuthRedirects(ctx context.Context) error
+	// ReportLegacyAdministratorPasswords logs an error naming the ids of
+	// the administrators whose password hash is still a legacy format.
+	ReportLegacyAdministratorPasswords(ctx context.Context) error
 }
 
 // UserRegisteredTopic is the integration event every self-service
@@ -177,6 +187,10 @@ type Deps struct {
 	TelegramBotName func() string
 	// NotifyTelegramUnbind sends the best-effort unbind notice.
 	NotifyTelegramUnbind func(ctx context.Context, userID, chatID int64) error
+	// NotifyPasswordChanged tells the account, best effort, that its
+	// password was changed or reset and which third-party sign-in methods
+	// (by type) are still bound to it; optional.
+	NotifyPasswordChanged func(ctx context.Context, userID int64, bindings []string) error
 	// AuthConfig snapshots the runtime-mutable settings consumed by the
 	// authentication flows per request.
 	AuthConfig func() AuthSnapshot
@@ -210,11 +224,19 @@ type (
 )
 
 // NewRepoBuilder exports the module-owned repository implementations for
-// store assembly (ADR-001 step-6 preparation).
+// store assembly (ADR-001 step-6 preparation). The builder runs once per
+// connection and once per transaction; the retrier that redoes failed cache
+// invalidations of the account rows outlives them all, so it is created
+// once, on the first run.
 func NewRepoBuilder() repository.IdentityBuilder {
+	var (
+		once    sync.Once
+		retrier *cache.InvalidationRetrier
+	)
 	return func(c repository.ModuleConn, bridges repository.IdentityBridges) repository.IdentityRepos {
+		once.Do(func() { retrier = cache.NewInvalidationRetrier(c.Redis) })
 		conn := c.Conn()
-		u := repo.NewUserRepo(conn, bridges)
+		u := repo.NewUserRepo(conn, bridges, repo.WithInvalidationRetrier(retrier))
 		return repository.IdentityRepos{
 			Users:     u,
 			UserAuths: u,
@@ -235,10 +257,11 @@ func New(deps Deps) Service {
 		SiteHost: func() string { return deps.AuthConfig().SiteHost },
 	})
 	authSvc := authn.NewService(authn.Deps{
-		Store:  deps.Store,
-		Redis:  deps.Redis,
-		Config: deps.AuthConfig,
-		OAuth:  oauthFlow,
+		Store:                 deps.Store,
+		Redis:                 deps.Redis,
+		Config:                deps.AuthConfig,
+		OAuth:                 oauthFlow,
+		NotifyPasswordChanged: deps.NotifyPasswordChanged,
 	})
 	return &service{
 		accounts: newAccounts(deps),
@@ -270,27 +293,41 @@ func New(deps Deps) Service {
 			Config: deps.VerifyCodeConfig,
 		}),
 		profile: profile.NewService(profile.Deps{
-			Wallet:          deps.Wallet,
-			Users:           deps.Users,
-			UserAuth:        deps.UserAuths,
-			Auth:            deps.Auths,
-			Devices:         deps.Devices,
-			UserCache:       deps.Cache,
-			Logs:            deps.Logs,
-			Redis:           deps.Redis,
-			Store:           deps.Store,
-			Policy:          authSvc.Policy(),
-			OAuth:           oauthFlow,
-			EmailDomains:    deps.EmailDomains,
-			TelegramBotName: deps.TelegramBotName,
-			NotifyUnbind:    deps.NotifyTelegramUnbind,
-			KickDevice:      deps.KickDevice,
+			Wallet:                deps.Wallet,
+			Users:                 deps.Users,
+			UserAuth:              deps.UserAuths,
+			Auth:                  deps.Auths,
+			Devices:               deps.Devices,
+			UserCache:             deps.Cache,
+			Logs:                  deps.Logs,
+			Redis:                 deps.Redis,
+			Store:                 deps.Store,
+			Policy:                authSvc.Policy(),
+			OAuth:                 oauthFlow,
+			EmailDomains:          deps.EmailDomains,
+			TelegramBotName:       deps.TelegramBotName,
+			NotifyUnbind:          deps.NotifyTelegramUnbind,
+			NotifyPasswordChanged: deps.NotifyPasswordChanged,
+			KickDevice:            deps.KickDevice,
 		}),
 		startup: startup.NewService(startup.Deps{
 			Users:     deps.Users,
 			UserAuths: deps.UserAuths,
+			Auths:     deps.Auths,
+			SiteHost:  siteHost(deps.AuthConfig),
 			Store:     deps.Store,
 		}),
+	}
+}
+
+// siteHost snapshots the configured site host from the authentication
+// settings; it reads as empty when the settings are not wired.
+func siteHost(config func() AuthSnapshot) func() string {
+	return func() string {
+		if config == nil {
+			return ""
+		}
+		return config().SiteHost
 	}
 }
 
@@ -372,7 +409,7 @@ func (s *service) QueryUserInfo(ctx context.Context) (*dto.User, error) {
 	return s.profile.QueryUserInfo(ctx)
 }
 
-func (s *service) UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) error {
+func (s *service) UpdateUserPassword(ctx context.Context, req *dto.UpdateUserPasswordRequest) (*dto.UpdateUserPasswordResponse, error) {
 	return s.profile.UpdateUserPassword(ctx, req)
 }
 
@@ -546,6 +583,14 @@ func (s *service) ValidateEmailIdentities(ctx context.Context) error {
 
 func (s *service) NormalizePhoneNumbers(ctx context.Context) error {
 	return s.startup.NormalizePhoneNumbers(ctx)
+}
+
+func (s *service) WarnUnpinnedOAuthRedirects(ctx context.Context) error {
+	return s.startup.WarnUnpinnedOAuthRedirects(ctx)
+}
+
+func (s *service) ReportLegacyAdministratorPasswords(ctx context.Context) error {
+	return s.startup.ReportLegacyAdministratorPasswords(ctx)
 }
 
 // Store is the persistence capability required by this package. It excludes

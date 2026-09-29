@@ -20,7 +20,9 @@ func (s *Service) BindOAuth(ctx context.Context, req *dto.BindOAuthRequest) (*dt
 	if !ok {
 		return nil, xerr.Errorf(xerr.InvalidAccess, "no signed-in user")
 	}
-	uri, err := s.deps.OAuth.AuthURL(ctx, oauthstate.BindScope(current.Id), req.Method, req.Redirect)
+	// Binding runs in a signed-in session, whose state is already tied to
+	// the account; it carries no client nonce.
+	uri, err := s.deps.OAuth.AuthURL(ctx, oauthstate.BindScope(current.Id), req.Method, req.Redirect, "")
 	if err != nil {
 		return nil, err
 	}

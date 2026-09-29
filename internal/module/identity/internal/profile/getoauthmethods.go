@@ -8,7 +8,9 @@ import (
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
-// GetOAuthMethods lists the calling account's identities as stored.
+// GetOAuthMethods lists the calling account's identities, their identifiers
+// masked like the account view's: a device identifier signs the device in,
+// so a web session must not read it back in full.
 func (s *Service) GetOAuthMethods(ctx context.Context) (*dto.GetOAuthMethodsResponse, error) {
 	u, err := currentUser(ctx)
 	if err != nil {
@@ -19,15 +21,7 @@ func (s *Service) GetOAuthMethods(ctx context.Context) (*dto.GetOAuthMethodsResp
 		logger.WithContext(ctx).Errorw("find user auth methods failed:", logger.Field("error", err.Error()))
 		return nil, xerr.Wrapf(err, xerr.DatabaseQueryError, "find user auth methods failed: %v", err.Error())
 	}
-	list := make([]dto.UserAuthMethod, 0, len(methods))
-	for _, method := range methods {
-		list = append(list, dto.UserAuthMethod{
-			AuthType:       method.AuthType,
-			AuthIdentifier: method.AuthIdentifier,
-			Verified:       method.Verified,
-		})
-	}
 	return &dto.GetOAuthMethodsResponse{
-		Methods: list,
+		Methods: maskAuthMethods(methods),
 	}, nil
 }

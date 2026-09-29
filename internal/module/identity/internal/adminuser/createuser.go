@@ -22,6 +22,9 @@ import (
 // number is stored in E.164 like every self-service one, so the account signs
 // in and resets by phone; an identifier another account holds is refused.
 func (s *Service) CreateUser(ctx context.Context, req *dto.CreateUserRequest) error {
+	if err := validateReferralPercentage(req.ReferralPercentage); err != nil {
+		return err
+	}
 	referCode := req.ReferCode
 	if referCode == "" {
 		// The account has no id yet, so the code is derived from the time.

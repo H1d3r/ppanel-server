@@ -15,7 +15,7 @@ import (
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} httpx.ResponseSuccessBean
-// @Router /v1/admin/tool/restart [get]
+// @Router /v1/admin/tool/restart [post]
 func RestartSystemHandler(service platform.Service) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 

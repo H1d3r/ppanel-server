@@ -28,7 +28,7 @@ func (s *Service) BindOAuthCallback(ctx context.Context, req *dto.BindOAuthCallb
 	if !ok {
 		return xerr.Errorf(xerr.InvalidParams, "OAuth callback must be an object")
 	}
-	identity, err := s.deps.OAuth.Identify(ctx, oauthstate.BindScope(current.Id), req.Method, fields)
+	identity, err := s.deps.OAuth.Identify(ctx, oauthstate.BindScope(current.Id), req.Method, fields, "")
 	if err != nil {
 		return err
 	}

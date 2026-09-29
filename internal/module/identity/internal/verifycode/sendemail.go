@@ -43,6 +43,12 @@ func (s *Service) SendEmailCode(ctx context.Context, req *dto.SendCodeRequest) (
 	if err := s.ensureCodeAllowed(ctx, verifyType, identifier.Email); err != nil {
 		return nil, err
 	}
+	if err := s.verifyHuman(ctx, verifyType, req.CfToken); err != nil {
+		return nil, err
+	}
+	if err := s.takeIPPermit(ctx); err != nil {
+		return nil, err
+	}
 	cacheKey := verification.EmailCodeKey(verifyType, email)
 	interval := cfg.VerifyCodeInterval
 	if interval <= 0 {

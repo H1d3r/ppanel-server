@@ -2,6 +2,8 @@ package account
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"time"
 
@@ -38,10 +40,39 @@ end
 return 1
 `)
 
+// Device sign-in guesses are capped the same way, twice over: per identifier,
+// so one device cannot be guessed at, and per client address, so one client
+// cannot enumerate identifiers at line speed. A device identifier is a bearer
+// credential (docs/design/device-authentication.md), so its counter is keyed
+// by its digest, never by the identifier itself.
+const (
+	MaxDeviceLoginAttempts     = MaxPasswordAttempts
+	DeviceLoginAttemptWindow   = PasswordAttemptWindow
+	MaxDeviceLoginIPAttempts   = 60
+	DeviceLoginIPAttemptWindow = time.Hour
+)
+
 // PasswordAttemptKey is the Redis key counting the password attempts against
 // the account userID in the current window.
 func PasswordAttemptKey(userID int64) string {
 	return "auth:password_attempts:" + strconv.FormatInt(userID, 10)
+}
+
+// DeviceLoginAttemptKey is the Redis key counting the device sign-in attempts
+// with identifier in the current window.
+func DeviceLoginAttemptKey(identifier string) string {
+	sum := sha256.Sum256([]byte(identifier))
+	return "auth:device_login_attempts:id:" + hex.EncodeToString(sum[:])
+}
+
+// DeviceLoginIPAttemptKey is the Redis key counting the device sign-in
+// attempts from the client address ip in the current window; an unknown
+// address shares one counter.
+func DeviceLoginIPAttemptKey(ip string) string {
+	if ip == "" {
+		ip = "unknown"
+	}
+	return "auth:device_login_attempts:ip:" + ip
 }
 
 // ReservePasswordAttempt reserves one password check against the account
@@ -49,16 +80,23 @@ func PasswordAttemptKey(userID int64) string {
 // before it compares the password; only ClearPasswordAttempts, after a
 // correct password, gives the attempts back before the window ends.
 func ReservePasswordAttempt(ctx context.Context, client *redis.Client, userID int64) error {
+	return ReserveAttempt(ctx, client, PasswordAttemptKey(userID), MaxPasswordAttempts, PasswordAttemptWindow)
+}
+
+// ReserveAttempt reserves one attempt under key and refuses with
+// TooManyRequests once limit attempts were made within window of the first.
+// The attempt is counted before the check it guards, so concurrent attempts
+// cannot exceed the limit; ClearAttempts gives them back.
+func ReserveAttempt(ctx context.Context, client *redis.Client, key string, limit int64, window time.Duration) error {
 	if client == nil {
 		return nil
 	}
-	allowed, err := reserveAttemptScript.Run(ctx, client, []string{PasswordAttemptKey(userID)},
-		MaxPasswordAttempts, PasswordAttemptWindow.Milliseconds()).Int64()
+	allowed, err := reserveAttemptScript.Run(ctx, client, []string{key}, limit, window.Milliseconds()).Int64()
 	if err != nil {
-		return xerr.Wrapf(err, xerr.ERROR, "reserve password attempt")
+		return xerr.Wrapf(err, xerr.ERROR, "reserve attempt")
 	}
 	if allowed == 0 {
-		return xerr.Errorf(xerr.TooManyRequests, "too many failed password attempts, try again later")
+		return xerr.Errorf(xerr.TooManyRequests, "too many failed attempts, try again later")
 	}
 	return nil
 }
@@ -66,10 +104,16 @@ func ReservePasswordAttempt(ctx context.Context, client *redis.Client, userID in
 // ClearPasswordAttempts forgets the attempts once the owner proves the
 // password.
 func ClearPasswordAttempts(ctx context.Context, client *redis.Client, userID int64) {
+	ClearAttempts(ctx, client, PasswordAttemptKey(userID))
+}
+
+// ClearAttempts forgets the attempts counted under key once the credential
+// they guarded is proven.
+func ClearAttempts(ctx context.Context, client *redis.Client, key string) {
 	if client == nil {
 		return
 	}
-	if err := client.Del(ctx, PasswordAttemptKey(userID)).Err(); err != nil {
-		logger.WithContext(ctx).Errorw("clear password attempts failed", logger.Field("error", err.Error()), logger.Field("user_id", userID))
+	if err := client.Del(ctx, key).Err(); err != nil {
+		logger.WithContext(ctx).Errorw("clear attempts failed", logger.Field("error", err.Error()), logger.Field("key", key))
 	}
 }

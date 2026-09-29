@@ -23,6 +23,7 @@ var _ OAuthLoginService = identity.Service(nil)
 // OAuthLoginHandler documents OAuth login.
 //
 // @Summary OAuth login
+// @Description Starts a sign-in through the provider and answers with its authorization URL. The optional nonce, a random value the client keeps for this sign-in, must be sent again to /v1/auth/oauth/login/token, which then completes only the sign-in this client started. Methods that redirect the browser to the given redirect (apple, telegram) require it to stay on the configured site host, or on the host this request was made to while no site host is configured.
 // @Tags common
 // @Accept json
 // @Produce json

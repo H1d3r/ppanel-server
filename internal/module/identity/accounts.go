@@ -6,6 +6,7 @@ import (
 
 	"github.com/perfect-panel/server/internal/module/identity/entity/auth"
 	"github.com/perfect-panel/server/internal/module/identity/entity/user"
+	"github.com/perfect-panel/server/internal/module/identity/internal/repo"
 	"github.com/perfect-panel/server/internal/repository"
 )
 
@@ -29,6 +30,11 @@ type Accounts interface {
 	// FindAccountState returns the account gate (enabled, deleted) of the
 	// request hot paths, soft-deleted accounts included.
 	FindAccountState(ctx context.Context, id int64) (*user.AccountState, error)
+	// FindAccountStateForAuth returns the account gate request
+	// authentication applies (enabled, deleted, administrator) as stored
+	// now, bypassing the caches, so a ban, deletion or demotion refuses the
+	// account's sessions at once rather than after the cache's lifetime.
+	FindAccountStateForAuth(ctx context.Context, id int64) (*user.AccountState, error)
 	// FindEnabledUserIDs returns the ids among ids of live, enabled accounts.
 	FindEnabledUserIDs(ctx context.Context, ids []int64) ([]int64, error)
 	// CountEnabledUsers counts the live, enabled accounts.
@@ -129,6 +135,28 @@ func (a accounts) FindUsersByIDs(ctx context.Context, ids []int64) ([]*user.User
 
 func (a accounts) FindAccountState(ctx context.Context, id int64) (*user.AccountState, error) {
 	return a.users.FindAccountState(ctx, id)
+}
+
+// authStateReader is the uncached account-gate read the module's own
+// repository implements beyond the shared repository contract.
+type authStateReader interface {
+	FindAccountStateForAuth(ctx context.Context, id int64) (*user.AccountState, error)
+}
+
+// The module's repository provides the uncached read.
+var _ authStateReader = (*repo.UserRepo)(nil)
+
+func (a accounts) FindAccountStateForAuth(ctx context.Context, id int64) (*user.AccountState, error) {
+	if users, ok := a.users.(authStateReader); ok {
+		return users.FindAccountStateForAuth(ctx, id)
+	}
+	// A repository without the uncached read (a test double) falls back to
+	// the full account row.
+	u, err := a.users.FindOne(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &user.AccountState{Id: u.Id, Enable: u.Enable, IsAdmin: u.IsAdmin, UpdatedAt: u.UpdatedAt, DeletedAt: u.DeletedAt}, nil
 }
 
 func (a accounts) FindEnabledUserIDs(ctx context.Context, ids []int64) ([]int64, error) {

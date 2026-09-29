@@ -53,11 +53,11 @@ func TestUpdateUserPasswordRequiresCurrentPasswordAndEndsSessions(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{OldPassword: "guessed", Password: "new-password-1"}); err == nil || users.written != nil {
+	if _, err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{OldPassword: "guessed", Password: "new-password-1"}); err == nil || users.written != nil {
 		t.Fatalf("wrong current password: error = %v, written = %v", err, users.written)
 	}
 
-	if err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{OldPassword: "old-password", Password: "new-password-1"}); err != nil {
+	if _, err := svc.UpdateUserPassword(ctx, &dto.UpdateUserPasswordRequest{OldPassword: "old-password", Password: "new-password-1"}); err != nil {
 		t.Fatalf("UpdateUserPassword() error = %v", err)
 	}
 	if hash, _ := users.written["password"].(string); !password.VerifyPassWord("new-password-1", hash) {
@@ -79,16 +79,20 @@ func TestUpdateUserPasswordGuessesAreCappedLikeSignIn(t *testing.T) {
 		return &dto.UpdateUserPasswordRequest{OldPassword: old, Password: "new-password-1"}
 	}
 
-	for i := 0; i < account.MaxPasswordAttempts; i++ {
-		assertCode(t, svc.UpdateUserPassword(ctx, request("guess")), xerr.UserPasswordError)
+	change := func(old string) error {
+		_, err := svc.UpdateUserPassword(ctx, request(old))
+		return err
 	}
-	assertCode(t, svc.UpdateUserPassword(ctx, request("old-password")), xerr.TooManyRequests)
+	for i := 0; i < account.MaxPasswordAttempts; i++ {
+		assertCode(t, change("guess"), xerr.UserPasswordError)
+	}
+	assertCode(t, change("old-password"), xerr.TooManyRequests)
 	if users.written != nil {
 		t.Fatalf("written = %v, want no password written while locked out", users.written)
 	}
 
 	server.FastForward(account.PasswordAttemptWindow)
-	if err := svc.UpdateUserPassword(ctx, request("old-password")); err != nil {
+	if err := change("old-password"); err != nil {
 		t.Fatalf("UpdateUserPassword() after the window: error = %v", err)
 	}
 	if users.written == nil {
@@ -111,7 +115,8 @@ func (f *rebindFixture) storedPassword(t *testing.T, u *usermodel.User) (hash, a
 
 // setPassword sets the first password of the passwordless account u.
 func (f *rebindFixture) setPassword(u *usermodel.User, currentCode string) error {
-	return f.svc.UpdateUserPassword(usermodel.NewContext(context.Background(), u), &dto.UpdateUserPasswordRequest{Password: "first-password", CurrentCode: currentCode})
+	_, err := f.svc.UpdateUserPassword(usermodel.NewContext(context.Background(), u), &dto.UpdateUserPasswordRequest{Password: "first-password", CurrentCode: currentCode})
+	return err
 }
 
 // A stolen session on a passwordless account must not bootstrap a password
@@ -161,7 +166,8 @@ func TestFirstPasswordNeedsTheCodeSentToABoundAddress(t *testing.T) {
 	if err := f.DB.First(&reloaded, owner.Id).Error; err != nil {
 		t.Fatal(err)
 	}
-	assertCode(t, f.svc.UpdateUserPassword(usermodel.NewContext(context.Background(), &reloaded), &dto.UpdateUserPasswordRequest{Password: "second-password", CurrentCode: "123456"}), xerr.UserPasswordError)
+	_, err := f.svc.UpdateUserPassword(usermodel.NewContext(context.Background(), &reloaded), &dto.UpdateUserPasswordRequest{Password: "second-password", CurrentCode: "123456"})
+	assertCode(t, err, xerr.UserPasswordError)
 }
 
 // An account that signs in only through a provider or a device has neither

@@ -4,14 +4,14 @@ import (
 	"context"
 	"sort"
 
-	"github.com/perfect-panel/server/internal/auth/identifier"
 	"github.com/perfect-panel/server/internal/infra/mapping"
 	dto "github.com/perfect-panel/server/internal/module/identity/contract"
 	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // QueryUserInfo returns the calling account with its wallet. Identifiers
-// other than the email address are masked.
+// other than the email address are masked, the device identifiers included:
+// they sign the devices in.
 func (s *Service) QueryUserInfo(ctx context.Context) (*dto.User, error) {
 	u, err := currentUser(ctx)
 	if err != nil {
@@ -35,15 +35,7 @@ func (s *Service) QueryUserInfo(ctx context.Context) (*dto.User, error) {
 
 	var userMethods []dto.UserAuthMethod
 	for _, method := range resp.AuthMethods {
-		item := method
-		switch method.AuthType {
-		case "mobile":
-			item.AuthIdentifier = identifier.MaskPhoneNumber(method.AuthIdentifier)
-		case "email":
-		default:
-			item.AuthIdentifier = maskOpenID(method.AuthIdentifier)
-		}
-		userMethods = append(userMethods, item)
+		userMethods = append(userMethods, maskAuthMethod(method))
 	}
 
 	// The email binding comes first and the mobile one second; the others
@@ -53,6 +45,7 @@ func (s *Service) QueryUserInfo(ctx context.Context) (*dto.User, error) {
 	})
 
 	resp.AuthMethods = userMethods
+	resp.UserDevices = maskDevices(resp.UserDevices)
 	return resp, nil
 }
 
@@ -67,20 +60,4 @@ func getAuthTypePriority(authType string) int {
 	default:
 		return 100
 	}
-}
-
-// maskOpenID masks a provider identifier, keeping its first and last three
-// characters; one of six characters or fewer is masked entirely.
-func maskOpenID(openID string) string {
-	length := len(openID)
-	if length <= 6 {
-		return "***"
-	}
-
-	maskLength := length - 6
-	mask := make([]byte, maskLength)
-	for i := range mask {
-		mask[i] = '*'
-	}
-	return openID[:3] + string(mask) + openID[length-3:]
 }

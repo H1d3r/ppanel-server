@@ -9,9 +9,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"sync/atomic"
+	"time"
 
+	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
-	"github.com/cloudwego/hertz/pkg/common/config"
+	hertzconfig "github.com/cloudwego/hertz/pkg/common/config"
+	"github.com/perfect-panel/server/internal/config"
 	billingHTTP "github.com/perfect-panel/server/internal/module/billing/transport/http"
 	"github.com/perfect-panel/server/internal/module/notification"
 	notificationHTTP "github.com/perfect-panel/server/internal/module/notification/transport/http"
@@ -33,13 +36,23 @@ type Dependencies struct {
 	Notification     notification.Service
 	TelegramBotToken func() string
 	RequestMetadata  requestmeta.Enricher
+	// TrustedProxies lists the reverse proxies (IP addresses or CIDRs) whose
+	// X-Forwarded-For and X-Real-IP headers name the client. Empty believes
+	// no header: the client address is the connection's remote address.
+	TrustedProxies []string
+	// AllowedOrigins lists the browser origins CORS admits, as
+	// scheme://host[:port]. Empty reflects the request's Origin.
+	AllowedOrigins []string
+	// HTTP bounds the listener; a zero field leaves Hertz's default.
+	HTTP config.HTTPConfig
 }
 
 func New(deps Dependencies, addr string, tlsConfig *tls.Config) *Server {
-	opts := []config.Option{
+	opts := []hertzconfig.Option{
 		server.WithHostPorts(addr),
 		server.WithDisablePrintRoute(true),
 	}
+	opts = append(opts, listenerOptions(deps.HTTP)...)
 	if tlsConfig != nil {
 		opts = append(opts, server.WithTLS(tlsConfig))
 	}
@@ -47,9 +60,45 @@ func New(deps Dependencies, addr string, tlsConfig *tls.Config) *Server {
 	return newServer(deps, opts)
 }
 
-func newServer(deps Dependencies, opts []config.Option) *Server {
+// listenerOptions turns the configured listener bounds into Hertz options.
+// Only the bounds set are passed on, so an unconfigured deployment runs with
+// the defaults it always had; the write timeout in particular stays
+// unbounded unless configured, which the streaming endpoints need.
+func listenerOptions(cfg config.HTTPConfig) []hertzconfig.Option {
+	var opts []hertzconfig.Option
+	if cfg.ReadTimeoutSeconds > 0 {
+		opts = append(opts, server.WithReadTimeout(time.Duration(cfg.ReadTimeoutSeconds)*time.Second))
+	}
+	if cfg.WriteTimeoutSeconds > 0 {
+		opts = append(opts, server.WithWriteTimeout(time.Duration(cfg.WriteTimeoutSeconds)*time.Second))
+	}
+	if cfg.IdleTimeoutSeconds > 0 {
+		opts = append(opts, server.WithIdleTimeout(time.Duration(cfg.IdleTimeoutSeconds)*time.Second))
+	}
+	if cfg.MaxRequestBodyMB > 0 {
+		opts = append(opts, server.WithMaxRequestBodySize(cfg.MaxRequestBodyMB<<20))
+	}
+	return opts
+}
+
+func newServer(deps Dependencies, opts []hertzconfig.Option) *Server {
 	engine := server.Default(opts...)
-	engine.Use(middleware.TraceMiddleware(), middleware.LoggerMiddleware(deps.RequestMetadata), middleware.CorsMiddleware)
+	// The client address every middleware and handler reads (rate limits,
+	// audit logs, device records) believes a forwarding header only from a
+	// configured proxy; a misspelled entry is refused, never widened.
+	trusted, err := ParseTrustedProxies(deps.TrustedProxies)
+	if err != nil {
+		logger.Errorf("trusted proxies: %v; the invalid entries are ignored", err)
+	}
+	resolveClientIP := clientIPFunc(trusted)
+	// The engine hands the resolver to the contexts it pools for the
+	// listener; the middleware installs it on every context served, so a
+	// context built another way (tests, embedded serving) resolves the same.
+	engine.SetClientIPFunc(resolveClientIP)
+	engine.Use(func(c context.Context, ctx *app.RequestContext) {
+		ctx.SetClientIPFunc(resolveClientIP)
+		ctx.Next(c)
+	}, middleware.TraceMiddleware(), middleware.LoggerMiddleware(deps.RequestMetadata), middleware.NewCorsMiddleware(deps.AllowedOrigins))
 
 	routes.RegisterHandlers(engine, deps.Routes)
 	notificationHTTP.RegisterTelegramHandlers(engine, deps.Notification, deps.TelegramBotToken)

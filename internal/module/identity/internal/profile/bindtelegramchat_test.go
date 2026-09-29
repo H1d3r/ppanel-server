@@ -3,7 +3,10 @@ package profile
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
+
+	"github.com/perfect-panel/server/pkg/xerr"
 )
 
 // The chat the bot redeemed an account's bind token in becomes the account's
@@ -30,6 +33,48 @@ func TestBindTelegramChatStoresAVerifiedBinding(t *testing.T) {
 	}
 	if f.Mini.Exists(cached) {
 		t.Fatal("the cached account survived the binding")
+	}
+}
+
+// An account holds one Telegram binding: a second chat is refused, also
+// when two redemptions race, so a leaked deep link opened twice cannot leave
+// two chats signing in to the account.
+func TestBindTelegramChatBindsOneChatPerAccount(t *testing.T) {
+	f := newBindFixture(t)
+	u := f.user(t)
+	ctx := context.Background()
+	if err := f.svc.BindTelegramChat(ctx, u.Id, "1001"); err != nil {
+		t.Fatal(err)
+	}
+	assertCode(t, f.svc.BindTelegramChat(ctx, u.Id, "1002"), xerr.UserExist)
+	if methods := f.Identities(t, u.Id); len(methods) != 1 || methods[0].AuthIdentifier != "1001" {
+		t.Fatalf("bindings = %+v, want the first chat alone", methods)
+	}
+
+	racer := f.user(t)
+	const redemptions = 8
+	outcomes := make([]error, redemptions)
+	var wg sync.WaitGroup
+	for i := range outcomes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			outcomes[i] = f.svc.BindTelegramChat(ctx, racer.Id, fmt.Sprintf("20%02d", i))
+		}(i)
+	}
+	wg.Wait()
+	bound := 0
+	for _, err := range outcomes {
+		if err == nil {
+			bound++
+			continue
+		}
+		if xerr.CodeOf(err) != xerr.UserExist {
+			t.Fatalf("unexpected outcome: %v", err)
+		}
+	}
+	if methods := f.Identities(t, racer.Id); bound != 1 || len(methods) != 1 {
+		t.Fatalf("%d redemptions bound, %d bindings stored; want one of each", bound, len(methods))
 	}
 }
 
